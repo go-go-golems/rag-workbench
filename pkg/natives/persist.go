@@ -100,6 +100,9 @@ func encodeArtifact(vm *goja.Runtime, stringify goja.Callable, v goja.Value) (st
 			case []Chunk:
 				b, err := EncodeChunks(x)
 				return "chunks", b, err
+			case *vecIndex:
+				b, err := EncodeVectors(x)
+				return "vectors", b, err
 			default:
 				return "", nil, fmt.Errorf("no artifact codec for %T", x)
 			}
@@ -137,6 +140,12 @@ func decodeArtifact(vm *goja.Runtime, parse goja.Callable, codec string, data []
 			return nil, err
 		}
 		return chunksArray(vm, chunks), nil
+	case "vectors": // the raw index; index.vector's persist.load binds it (h.restore)
+		ix, err := DecodeVectors(data)
+		if err != nil {
+			return nil, err
+		}
+		return vm.ToValue(ix), nil
 	}
 	return nil, fmt.Errorf("unknown artifact codec %q", codec)
 }

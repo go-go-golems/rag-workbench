@@ -37,6 +37,16 @@ const vectorsJS = `(function (rag, h) {
   const show = v => (v == null ? '' : Array.isArray(v) ? v.join(' › ') : typeof v === 'string' ? v : JSON.stringify(v));
   // Text embedded for a chunk: the 'over' fields joined by blank lines (default: title, heading path, text).
   const embedText = (c, over) => over.map(f => show(getPath(c, f))).filter(Boolean).join('\n\n');
+  const wrapVec = ix => {
+    const o = {
+      kind: 'vector', N: ix.n, model: ix.model,
+      search: (q, k = 20, o = {}) => ix.search(String(q), Number(k), o.only ? [...o.only] : null),
+      searchIn: (docId, q, k = 3) => ix.searchIn(String(docId), String(q), Number(k)),
+      toJSON: () => ({ kind: 'vector', chunks: ix.n, model: ix.model, dims: ix.dims }),
+    };
+    Object.defineProperty(o, '__ix', { value: ix });
+    return o;
+  };
   rag.define('index.vector', {
     id: () => 'index', phase: 'build', in: ['chunks'], out: 'index',
     describe: p => (p.model || 'emb-granite') + ' · cosine · over ' + [].concat(p.over || ['title', 'headingPath', 'text']).join('+'),
@@ -46,13 +56,11 @@ const vectorsJS = `(function (rag, h) {
       const ix = h.build(chunks.map(c => c.id), chunks.map(c => c.docId), chunks.map(c => embedText(c, over)),
         String(p.model || 'emb-granite'), Number(p.dimensions || 0));
       ctx.log('embedded ' + ix.n + ' chunks: ' + ix.cached + ' from cache, ' + ix.fresh + ' new, ' + ix.ms + 'ms');
-      return {
-        kind: 'vector', N: ix.n, model: ix.model,
-        search: (q, k = 20, o = {}) => ix.search(String(q), Number(k), o.only ? [...o.only] : null),
-        searchIn: (docId, q, k = 3) => ix.searchIn(String(docId), String(q), Number(k)),
-        toJSON: () => ({ kind: 'vector', chunks: ix.n, model: ix.model, dims: ix.dims }),
-      };
+      return wrapVec(ix);
     },
+    // artifact store: the Go index travels as its handle (codec "vectors"); restore
+    // binds it to this runtime's embedder for query embedding
+    persist: { save: v => v.__ix, load: raw => wrapVec(h.restore(raw)) },
   });
   rag.define('rerank.model', {
     id: () => 'rerank', phase: 'live', in: ['hits'], out: 'hits', trigger: 'submit',
@@ -173,33 +181,15 @@ func (v *Vectors) Install(vm *goja.Runtime, rag *goja.Object) error {
 		if len(vecs) > 0 {
 			ix.dims = len(vecs[0])
 		}
-		o := vm.NewObject()
-		_ = o.Set("n", len(ids))
-		_ = o.Set("cached", len(ids)-fresh)
-		_ = o.Set("fresh", fresh)
-		_ = o.Set("ms", time.Since(t0).Milliseconds())
-		_ = o.Set("model", model)
-		_ = o.Set("dims", ix.dims)
-		_ = o.Set("search", func(q string, k int, only []int64) ([]map[string]any, error) {
-			var set map[int]bool
-			if only != nil {
-				set = map[int]bool{}
-				for _, i := range only {
-					set[int(i)] = true
-				}
-			}
-			return v.search(ix, q, k, set)
-		})
-		_ = o.Set("searchIn", func(docID, q string, k int) ([]map[string]any, error) {
-			set := map[int]bool{}
-			for i, d := range ix.docIDs {
-				if d == docID {
-					set[i] = true
-				}
-			}
-			return v.search(ix, q, k, set)
-		})
-		return o, nil
+		return v.object(vm, ix, len(ids)-fresh, fresh, time.Since(t0).Milliseconds()), nil
+	})
+	// restore binds a stored index (artifact codec "vectors") to this runtime's embedder
+	_ = h.Set("restore", func(raw goja.Value) (*goja.Object, error) {
+		ix, ok := raw.Export().(*vecIndex)
+		if !ok {
+			return nil, fmt.Errorf("index.vector: stored artifact is not a vector index")
+		}
+		return v.object(vm, ix, len(ix.ids), 0, 0), nil
 	})
 	_ = h.Set("rerank", func(model, query string, docs []string) ([]map[string]any, error) {
 		if v.Embedder == nil {
@@ -227,7 +217,43 @@ func (v *Vectors) Install(vm *goja.Runtime, rag *goja.Object) error {
 	return err
 }
 
+// object is the Go side of an index.vector output: counts, search, searchIn, and the
+// index itself as a hidden handle for the artifact store.
+func (v *Vectors) object(vm *goja.Runtime, ix *vecIndex, cached, fresh int, ms int64) *goja.Object {
+	o := vm.NewObject()
+	_ = o.DefineDataProperty(goHandleKey, vm.ToValue(ix), goja.FLAG_FALSE, goja.FLAG_FALSE, goja.FLAG_FALSE)
+	_ = o.Set("n", len(ix.ids))
+	_ = o.Set("cached", cached)
+	_ = o.Set("fresh", fresh)
+	_ = o.Set("ms", ms)
+	_ = o.Set("model", ix.model)
+	_ = o.Set("dims", ix.dims)
+	_ = o.Set("search", func(q string, k int, only []int64) ([]map[string]any, error) {
+		var set map[int]bool
+		if only != nil {
+			set = map[int]bool{}
+			for _, i := range only {
+				set[int(i)] = true
+			}
+		}
+		return v.search(ix, q, k, set)
+	})
+	_ = o.Set("searchIn", func(docID, q string, k int) ([]map[string]any, error) {
+		set := map[int]bool{}
+		for i, d := range ix.docIDs {
+			if d == docID {
+				set[i] = true
+			}
+		}
+		return v.search(ix, q, k, set)
+	})
+	return o
+}
+
 func (v *Vectors) search(ix *vecIndex, q string, k int, only map[int]bool) ([]map[string]any, error) {
+	if v.Embedder == nil {
+		return nil, fmt.Errorf("index.vector query: no embedding backend to embed the query (run with --embed lunaroute)")
+	}
 	var qv []float32
 	if c, ok := ix.qcache.Load(q); ok {
 		qv = c.([]float32)
