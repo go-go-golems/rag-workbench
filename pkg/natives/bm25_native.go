@@ -14,7 +14,7 @@ type Bm25Native struct{}
 func (Bm25Native) Name() string { return "index.bm25" }
 
 // Field texts are extracted in JS with rag.js's exact rules (getPath, arrays
-// joined with ' ', non-strings JSON.stringify'd, null/'' skipped) in one pass;
+// joined with ' ', non-strings JSON.stringify'd, null/” skipped) in one pass;
 // tokenizing, postings and scoring happen in Go.
 const bm25JS = `(function (rag, h) {
   const DEFAULT_FIELDS = { title: 2, headingPath: 3, text: 1 };

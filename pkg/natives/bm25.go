@@ -225,7 +225,7 @@ type posting struct {
 	tf float64
 }
 
-// NewBm25 builds the index; text(i, f) returns chunk i's text for fields[f] (false = skip, like null/'').
+// NewBm25 builds the index; text(i, f) returns chunk i's text for fields[f] (false = skip, like null/”).
 func NewBm25(n int, id, docID func(i int) string, text func(i, f int) (string, bool), fields []Field, k1, b float64, doStem bool) *Bm25 {
 	ix := &Bm25{Fields: fields, K1: k1, B: b, Stem: doStem, Post: map[string][]posting{}}
 	for i := 0; i < n; i++ {

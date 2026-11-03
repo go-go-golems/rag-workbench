@@ -11,4 +11,5 @@ presets: build
 	./dist/ragwb presets --dir examples/presets --files examples/apps/reports/corpus
 
 lint:
+	@test -z "$$(gofmt -l .)" || (echo "gofmt needed:"; gofmt -l .; exit 1)
 	go vet ./...
