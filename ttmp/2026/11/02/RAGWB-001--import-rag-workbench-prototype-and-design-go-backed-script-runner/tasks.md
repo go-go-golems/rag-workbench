@@ -1,11 +1,15 @@
 # Tasks
 
 ## TODO
-- [ ] Decide engine strategy: rag.js engine + Go-native heavy nodes vs Go engine <!-- t:x2mh -->
-- [ ] Server skeleton: net/http ServeMux + embedded workbench SPA + window.claude shim (port slop-computer runtime/sample) <!-- t:rswf -->
-- [ ] Script store: sqlite scripts + versions + conversations; agent wb.save/load <!-- t:nz4i -->
-- [ ] Runner: go-go-goja runtime with compat-patched rag.js, ctx.sample via geppetto <!-- t:rbbv -->
-- [ ] Native nodes: vault walk/glob/ignore, goja-text markdown+frontmatter, bleve/ragkit bm25, ragkit sqliteexact + geppetto embeddings (index.vector) <!-- t:7b6s -->
-- [ ] RemoteRag host.rag for gui runtime; ad-hoc app serving (ragwb serve script.js) <!-- t:hi2e -->
-- [ ] Headless CLI: ragwb index/eval script.js --root ~/code/wesen/go-go-golems/go-go-parc <!-- t:tekq -->
-- [ ] Fix goja \p{L} incompatibility properly (upstream goja or rewrite tokenizer regexes) <!-- t:k4hx -->
+- [x] D1 engine strategy decided in guide: rag.js engine + Go-native heavy nodes (status proposed) <!-- t:x2mh -->
+- [ ] Upstream goja issue/PR for \p{..} property escapes; drop LN fallback when fixed (feature-detect fix landed in P1) <!-- t:k4hx -->
+- [x] P0 scaffold: go.mod, cmd/ragwb, Makefile, vendored assets, examples <!-- t:k1ny -->
+- [x] P1 ragwb module: rag.js/gui.js/kit.js as goja modules, D6 fix, headless run + presets sweep <!-- t:08l0 -->
+- [ ] P2 jsverbs: ragwb verbs --dir with ragwb runtime; split-file examples/apps/reports <!-- t:1y8c -->
+- [ ] P3 rag.source.dir native: walk, globs, excludes, stat digest, roots allowlist; go-go-parc subset <!-- t:q4fk -->
+- [ ] P4 native parse.markdown/chunk.sections (goldmark) with byte ranges (A2), parity fixtures <!-- t:ls4u -->
+- [ ] P5 workbench server: ported UI + window.claude shim (sample SSE/page tools, db, user) <!-- t:pgim -->
+- [ ] P6 app store: apps dir + history API; agent wb.save/load <!-- t:bhly -->
+- [ ] P7 remote pipeline: /api/rag sessions, RemoteRag, ragwb serve <app> <!-- t:i5j5 -->
+- [ ] P8 persistence + vectors: artifact store by digest, bleve index, embeddings + sqliteexact <!-- t:f6cl -->
+- [ ] P9 server-side LLM nodes: ctx.sample on geppetto <!-- t:jlcq -->

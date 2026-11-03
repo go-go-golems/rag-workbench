@@ -166,3 +166,78 @@ The rag-evaluation-system survey arrived mid-write and changed the guide in two 
 
 ### Technical details
 - Remote: `/ai/2026/11/02/RAGWB-001/RAGWB-001 Intern Guide RAG Workbench on Go.pdf`.
+
+## Step 6: P0 scaffold + P1 `ragwb` module — the prototype grammar as a goja native module
+
+I scaffolded the Go module and CLI, vendored the prototype's `rag.js`, `gui.js` and `kit.js` into `pkg/ragjs/assets/` with two documented local changes, and exposed them as native modules `ragwb`, `ragwb/gui` and `ragwb/kit`. A headless runner executes workbench-form scripts the same way `app.js:175` does. The phase gate is a sweep of all 29 presets plus `pipeline.js`. Every one builds and queries headlessly, and the `reports` preset reproduces the browser's reported 11/12 goldens (hit@5 0.917).
+
+The `verbs` command (jsverbs over an app directory, with our runtime) is written and compiles, but it is **not validated yet**. That happens in Step 7 with the split-file example app.
+
+### Prompt Context
+**User prompt (verbatim):** "when you implement, commit at appropriate intervals and keep a detailed diary as you work (using the diary format from the skill)  diary format is mandatory" (plus "what are the phases of impementation? and open the guide with `md-view view ...`", answered in chat; the guide was opened with `md-view view <guide>`, which started process 2600869). Earlier requests: see Step 4.
+**Assistant interpretation:** Implement guide phases in order, with an investigation-format diary entry and a commit at each validated boundary.
+**Inferred user intent:** A reviewable trail, where each commit corresponds to a phase with evidence.
+**Commit (code):** see the commit made right after this entry ("RAGWB-001 P0/P1: …").
+
+### What I did
+- `go.mod` (`github.com/go-go-golems/rag-workbench`, go 1.26.1), pinned to **published** `go-go-goja v0.10.6` (no `replace`). That pulls glazed v1.3.5 and cobra v1.10.2.
+- `pkg/ragjs/assets/{rag,gui,kit}.js`: vendored by a one-off Python patcher. Upstream sha256 values and the changes are recorded in `pkg/ragjs/assets/PROVENANCE.md`:
+  1. D6: a feature-detected class body `LN` (`'\\p{L}\\p{N}'` when `new RegExp('^[\\p{L}\\p{N}]+$','u').test('é9')`, otherwise explicit ranges covering Latin-1/Latin Extended, Greek, Cyrillic, Hebrew, Arabic, kana, CJK and Hangul). `RE_WORD()`/`RE_NONWORD()` replace the 5 literals in rag.js. gui.js's 2 literals plus the string-built highlight regex (`gui.js:420`) use `rag.util.LN`.
+  2. Engine: `Engine.digests` now calls an optional `def.digest(params, engine)` for any build component, so native sources can fold content digests into their node digest. Before, only `source.files` was special-cased (`rag.js:1254`).
+- `pkg/ragjs/module.go`: compiles each file once per process (`goja.Compile`) inside a wrapper. rag.js gets `(module, exports, globalThis)`, so its UMD takes the CommonJS branch. gui.js and kit.js get `(globalThis)` bound to a private root that holds `rag`/`gui` fetched via `require`. `ragLoader` then calls `rag.configure({log, buildCalls: 'explicit'})` and installs `Options.Natives`.
+- `pkg/ragjs/await.go`: `Eval(ctx, rt, op, fn)` runs on `rt.Owner` and polls promise state with backoff from 100µs to 20ms. It returns `*RejectionError` with the JS stack on rejection.
+- `pkg/runner/runtime.go`: `NewFactory(Config)` = `WithModules(ragjs.Modules(...))` + `UseModuleMiddleware(engine.MiddlewareExclude("exec"))` + optional jsverbs source loader.
+- `pkg/runner/script.go`: the workbench harness (`new Function('rag','gui','log','kit', …)`), build + run + optional evals, and a JSON report (build nodes, top hits, trace, pending deferred LLM nodes, variants, app kind).
+- `cmd/ragwb`: `version`, `run <script.js> [--files dir] [--q] [--k] [--trigger] [--evals]`, `presets --dir`, `verbs --dir` (dir pre-scanned from argv like jsverbs-example).
+- `examples/apps/reports/corpus/`: the 11 reports written from `corpus.json` with their **exact** names. The upload copies have underscores, and chunk ids derive from file names. `examples/presets/`: the 29 presets + `index.json` + `pipeline.js`.
+- Tests `pkg/ragjs/module_test.go`: `TestTokenizeWorksInGoja`, `TestMinimalPresetParity`.
+
+### Why
+- Pinning the published v0.10.6 keeps the build reproducible. The local go-go-goja checkout is 23 commits ahead, but those are OIDC/auth work, irrelevant here.
+- Compiling once with per-runtime evaluation lets presets, verbs and later server sessions each get isolated rag registries (`rag.define` mutates the registry) without recompiling 2k lines.
+
+### What worked
+- `go test ./pkg/ragjs/` → `ok` (3.5 s). The tokenizer degrades correctly: `["rebalanc","law","für","ωmega"]`, and `LN` is the fallback in goja.
+- `node -e 'require("./pkg/ragjs/assets/rag.js").util.LN'` → `"\\p{L}\\p{N}"`, and CJK tokenizes (`日本語`), so the browser path keeps full Unicode.
+- `./dist/ragwb presets --dir examples/presets --files examples/apps/reports/corpus` (exit 0, 2m13s wall). All 30 scripts give `BUILD ok`. Selected rows:
+
+| preset | nodes | pending | query ms | hit@5 | mrr |
+|---|---|---|---|---|---|
+| minimal | 4 | 0 | 1.0 | 1.000 | 0.933 |
+| reports | 8 | 0 | 10.6 | **0.917** | 0.926 |
+| custom-rerank | 5 | 0 | 5.5 | 1.000 | 1.000 |
+| code-blocks | 7 | 0 | 3.6 | 0.583 | 0.583 |
+| doc-cards | 8 | **1** | 6.8 | 0.750 | 0.769 |
+| agentic | 7 | 0 | 0.2 | **0.000** | 0.000 |
+
+### What didn't work
+- First parity test run: `module_test.go:138: top score = 12.5926, want 12.676 (browser parity)`. **The cause was my test, not the engine.** The textbook number (12.6758) uses `kit.reports()` field weights (`title:2, headingPath:3, callout:2, text:1`). My test built the minimal preset's corpus with default weights (`title:2, headingPath:3, text:1`), which scores 12.5926, the same value spike 01 printed (12.59). Fixed by using `kit.reports()` in the parity test, with a comment recording both numbers.
+- No other failures. The LSP showed stale "missing go.sum" diagnostics until `go mod tidy` ran; `go build`/`go test` were authoritative.
+
+### What I learned
+- `agentic` hit@5 = 0 is expected without `sample`: its retrieval happens inside an LLM tool loop at `submit`. The run uses `trigger: change` and has no sampler, so it returns no hits and no errors. Headless reports should flag "LLM nodes skipped" explicitly (TODO).
+- `doc-cards` reports `pending: 1`: its `enrich.llm` node is deferred under `buildCalls: 'explicit'`. That is the prototype's Build-button semantics, preserved.
+- A sweep of 30 presets costs 133 s because each preset rebuilds in a fresh runtime (~4 s each). That is the A5 (persistence) motivation, measured.
+
+### What was tricky to build
+- **Shadowing `globalThis`.** rag.js's UMD tail is `(typeof globalThis !== 'undefined' ? globalThis : this)`. Making `globalThis` a *parameter* of the wrapper function hands the vendored code our private root without touching the real global. Combined with a `module` parameter, rag.js takes the CommonJS branch and gui.js/kit.js publish onto the private root.
+- **Cross-module identity.** `ragwb/gui` must see the *same* rag object as `require("ragwb")` (gui reads `rag.util`, and plans built with one rag must compile with the same registry). The gui/kit loaders call the runtime's own `require()` for their deps, so goja_nodejs's per-runtime module cache guarantees identity.
+- **Field-name mapping.** My first harness called `vm.SetFieldNameMapper(TagFieldNameMapper("json"))` to pass `[]File`. I removed it before running, because it changes struct field naming for every module in that runtime. Files are now passed as `[]map[string]any`.
+
+### What warrants a second pair of eyes
+- `pkg/ragjs/await.go` polls promise state, it doesn't subscribe. That's fine for CLI runs, but a server with many concurrent sessions should resolve via a then-callback that posts to a Go channel.
+- The fallback character ranges (D6) drop letters outside the listed scripts (e.g. Thai, Devanagari) in goja only.
+- `engine.MiddlewareExclude("exec")` still exposes `fs`, `database`, `fetch` and `os` to verb files. Roots confinement for `fs` is P3 work.
+
+### What should be done in the future
+- Validate `ragwb verbs` with a split-file example app (Step 7). Add `rag.source.dir` (P3).
+- Report skipped LLM nodes in `ScriptReport`.
+- File an upstream goja issue for `\p{..}` property escapes.
+
+### Code review instructions
+- Start at `pkg/ragjs/module.go` (`Modules`, `ragLoader`, `rootLoader`), then `pkg/ragjs/assets/PROVENANCE.md` and `git diff --no-index ttmp/…/sources/prototype/rag.js pkg/ragjs/assets/rag.js`.
+- Validate: `go test ./...`; `make presets`.
+
+### Technical details
+- Module names: `ragwb`, `ragwb/gui`, `ragwb/kit` (constants in `pkg/ragjs/module.go`). `ragjs.Source(name)` serves the same bytes to the browser later.
+- `ScriptReport` JSON: `{build:{ok,ms,errors,nodes[{id,type,count,ms,reused,deferred}]}, run:{trigger,signals,ms,calls,errors,top[],trace[],answer}, evals?, variants?, app?{kind,id,title}, pending[]}`.
