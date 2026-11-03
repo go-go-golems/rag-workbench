@@ -246,3 +246,80 @@ The default per-field mode is acceptable. On the reports goldens across all 30 p
 ### Code review instructions
 - `pkg/natives/bleve_bm25.go`, `bm25_native.go` (JS dispatch, `InstallEnv`), `pkg/ragjs/module.go` (`ragRegistrar`), `pkg/rtenv`, `runner.ArtifactNamespace`.
 - Reproduce: `go test ./pkg/natives -run Bleve`; `python3 scripts/01-presets-quality.py`; `go run ./…/scripts/02-vault-quality -chunks <stored chunks .bin> [-combined]`.
+
+## Step 5: file/dir payloads, stored bleve indexes, chunk records — a warm vault search is 0.64 s / 195 MB
+
+This step lands three pieces:
+- **Phase 1:** the artifact store holds files and directories.
+- **Persisted bleve indexes:** built in the store's namespace, moved in, reopened read-only, and opened in place by later runtimes.
+- **Phase 2:** stored chunks become a bbolt record file that the engine reads one chunk at a time, through a JS view that stands in for both the chunks array and `art.chunks`.
+
+With the bleve backend, a warm `parc search` over the whole vault now takes **0.64 s at 195 MB RSS**, down from 2.2 s / 1.4 GB. Chunks open in 0.1 ms and the text index in 0.9 ms. The remaining 0.5 s is the terms index, decoded from JSON (Phase 4).
+
+### Prompt Context
+**User prompt (verbatim):** see Step 4.
+**Commit (code):** `fc295ba` (Phase 1 + persisted bleve), `f463797` (Phase 2).
+
+### What I did
+- **`pkg/artifacts/store.go`:**
+  - `Meta.Kind` ("" blob | `file` | `dir`); `TempDir`, `SaveFile`, `SaveDir` and `Path`.
+  - The payload is named `<key>.<codec>`. If a payload for the key already exists (another process, same digest), it is kept and the duplicate removed. A cross-device rename falls back to a copy.
+  - `Has` checks the file size or that the directory exists. `Load` refuses non-blob payloads.
+  - `List` skips directories with a dot in the name (payload dirs, which contain bleve's own `index_meta.json`) and `.tmp-*` build areas.
+- **`BleveBm25`:**
+  - `path`/`cleanup` instead of `Dir`/`temp`.
+  - `Relocate(move)`: close, move the directory, reopen read-only, so the same Go handle (and the JS object wrapping it) stays valid.
+  - `RWMutex` for searches versus close/relocate.
+- **Index builds:** `Bm25Native.TempRoot` is the store's namespace when there is a store (`runner.NewFactory`), so storing is a rename. Build areas are `.tmp-bm25-*`.
+- **`Persist`** (now an `EnvNative`):
+  - `save`: a bleve handle → `SaveDir(codec "bleve")`; a Go `[]Chunk` handle → `WriteChunkRecords` → `SaveFile(codec "records")`.
+  - `load`: a `dir`/`bleve` payload → `OpenBleveBm25`; a `file`/`records` payload → `OpenChunkRecords` plus a `RecordView`. Both close with the runtime.
+  - Timing details: `bleve · open …`, `records · open … · N chunks · MB`.
+- **`pkg/natives/records.go`:** bbolt buckets `c` (ordinal → JSON of the Go `Chunk`), `i` (id → ordinal), `d` (docId → ids in array order), `m` (version, count). Reads go through `chunkToJS`, so stored chunk objects equal computed ones.
+- **`RecordView`** (JS, installed by Persist): iterates values in batches of 512 (like the array); `get`/`has`/`size` (like the Map); `order(docId)`; `toArray()` (the Go-handle array, so Go natives keep their fast paths); a 4,096-entry insertion-order cache.
+- **rag.js:**
+  - `isView`/`asArray`: build inputs and the bake context get arrays.
+  - `artifacts()`: a single view becomes `art.chunks` and gives the order; several streams go through `unionChunks`, where later streams win per id, as `Map.set` did.
+  - `Session.ctx`: lazy `chunkList`, plus `ctx.docChunks(docId)`, which the agentic outline tool uses instead of filtering every chunk.
+  - Evals: every chunk is read once per run, not per case.
+- **Tests:** `pkg/artifacts` (payload kinds, duplicates, damaged payloads, List); `pkg/runner/bleve_store_test.go` (cold saves a dir payload, warm opens it with identical top 5, no `.tmp-` leftovers; without a store, the temp index is removed on runtime close); `pkg/runner/records_test.go` (warm `art.chunks` is a view, and its size, `get`, order, neighbors, filtered hits and the hash of all chunks equal the cold Map).
+
+### Why
+- Phase 2 is the biggest memory item from step 25 of RAGWB-001: 411 MB of chunk JS objects plus 204 MB of Go `[]Chunk`. Loading a record file costs nothing, and the query reads only the chunks it touches.
+- Directory and file payloads are what makes "open, don't decode" possible at all.
+
+### What worked
+- **Vault, `--index-backend bleve`, `parc search "goja regexp unicode"`:**
+
+| run | total | chunks | ix-text | ix-meta | query | wall / max RSS |
+|---|---|---|---|---|---|---|
+| cold (new namespace) | 28.3 s | build 6.84 s (incl. writing records) | build 15.5 s | build 2.96 s | 4.3 ms | 28.5 s / 4.0 GB |
+| warm | 0.62 s | **open 0.1 ms** | **open 0.7 ms** | decode 0.50 s (41.5 MB JSON) | 4.1 ms | **0.64 s / 196 MB** |
+| warm | 0.63 s | open 0.1 ms | open 0.9 ms | decode 0.51 s | 3.5 ms | 0.65 s / 195 MB |
+
+- On disk: chunk records 260 MB (JSON per record; the gob blob was 136 MB), bleve index 140 MB.
+- `go test ./... -count=1` and `make lint` pass.
+
+### What didn't work
+- `persist.go`, after making it an `EnvNative`: `no new variables on left side of :=` and type errors. The function already had a JS object named `env` (passed to `rag.configure`), and the new `err` from compiling the view collided with `_, err := configure(...)`. I renamed it to `cfg` and used `=`.
+- First draft of `ChunkRecords.Order`: it stored ordinals per document and then parsed whole chunk records just to read their ids. I changed the doc bucket to store the ids directly before running anything.
+
+### What I learned
+- Opening the record file and the bleve index takes under a millisecond each. On the vault, everything that is still slow on a warm run is a decode of JSON or gob, which is the remaining pattern to remove (terms index).
+- JSON records are about twice the size of the gob blob. That costs disk, not time: a query reads about 50 records.
+
+### What was tricky to build
+- **One object for two roles.** The view replaces both the *array* output of the chunks node (iterated by `artifacts()` and passed to build components) and the `art.chunks` *Map* (`get`/`has`/`size`/`values`). Iteration had to follow the array (values), because nothing iterates `art.chunks` as `[id, chunk]` (checked with grep). Build components get `toArray()`, the Go-handle array, so Go natives like `index.bm25` still take their Go path when they recompute.
+- **The bleve handle must survive being moved.** The JS index object created during build is the one the current runtime keeps using after `save`. So `Relocate` swaps the inner `bleve.Index` under a lock instead of returning a new object.
+
+### What warrants a second pair of eyes
+- `unionChunks.size` builds a set of every id across streams. Only plans with stored chunk views plus extra chunk streams (enrich) take that path, and only `.size` triggers it.
+- Docs are still a gob blob, decoded in full when something reads `art.docs` (evals, the serve doc endpoint, link expansion). That was a deliberate scope cut; docs records are the same pattern.
+
+### What should be done in the future
+- Phase 4: a Go-native compact terms index (the last 0.5 s and about 50 MB).
+- Make `bleve` the default; run the RAGWB-001 heap and latency scripts against `ragwb serve`; docs.
+
+### Code review instructions
+- `pkg/artifacts/store.go` (`savePath`, `Has`, `List`), `pkg/natives/persist.go` (save/load branches, `recordsViewJS`), `pkg/natives/records.go`, rag.js (`isView`, `unionChunks`, `artifacts()`, `Session.ctx`, evals).
+- Reproduce: `go test ./pkg/artifacts ./pkg/runner -run 'Payload|Bleve|Records'`; `ragwb --timings --index-backend bleve --root <vault> verbs --dir examples/apps/parc parc search "…"`, twice.
