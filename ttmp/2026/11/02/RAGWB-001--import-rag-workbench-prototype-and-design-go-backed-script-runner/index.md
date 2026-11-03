@@ -26,6 +26,7 @@ Imported the claude.ai "RAG workbench with fluent builder API" session (artifact
 
 Status: analysis done. Spike shows `rag.js` runs unmodified in goja, except that goja doesn't support `\p{L}` regex escapes.
 
+- **Intern guide (start here):** [design-doc/01-intern-guide-rag-workbench-on-go-architecture-apis-and-implementation-plan.md](design-doc/01-intern-guide-rag-workbench-on-go-architecture-apis-and-implementation-plan.md)
 - Analysis: [analysis/01-prototype-analysis-and-go-backend-reuse-map.md](analysis/01-prototype-analysis-and-go-backend-reuse-map.md)
 - Diary: [diary/01-investigation-diary.md](diary/01-investigation-diary.md)
 - Spikes: `scripts/01-goja-smoke`, `scripts/02-goja-regex-probe`

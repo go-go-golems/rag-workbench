@@ -34,6 +34,8 @@ WhenToUse: Before designing or implementing the backend, runner or UI port
 
 # Prototype analysis and Go backend reuse map
 
+> **Superseded in part (2026-11-02):** sections 6–7 (shape and decisions) are refined in the intern guide, `design-doc/01-intern-guide-…`. That guide also covers widget.dsl, jsverbs, and rag-evaluation-system's own `rag` v2 DSL. This document stays as the first-pass evidence record.
+
 ## 1. Goal (restated)
 
 Many small RAG applications for browsing software docs, the Obsidian vault (`go-go-parc`) and notes. Each one is a **JS script** that declares an indexing pipeline, a search/answer plan, evals and a UI written in the `gui` DSL. These scripts are:

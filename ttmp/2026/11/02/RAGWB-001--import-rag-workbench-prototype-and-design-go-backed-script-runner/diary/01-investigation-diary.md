@@ -118,3 +118,51 @@ The spike works end to end. The verbs are discovered, run against the bundled co
 
 ### Technical details
 - jsverbs result mapping: object → 1 row, array → rows, primitive → `value`, Promise awaited; `output: "text"` for writer verbs. Bindings: `bind: "all" | "context" | "<section>"`.
+
+## Step 5: Intern guide written and delivered
+
+I wrote the intern-facing design and implementation guide. Its structure is orientation and vocabulary first, then current state with file references, spike evidence, gaps, the proposed architecture and APIs, eight decision records, pseudocode flows, an API reference, phases P0–P9, a test strategy and risks. I then uploaded it to reMarkable as one PDF.
+
+The rag-evaluation-system survey arrived mid-write and changed the guide in two places. That repo already ships its own `require("rag")` (an authoring-only v2 DSL compiling to `rag-pipeline-ir/v2`), so our module is now `ragwb` (D8). Its widget.dsl is server-driven with whole-page refresh and no search widgets, so the UI decision (D3) keeps `gui` for search experiences and uses widget.dsl for server-driven pages, with a custom-renderer convergence path.
+
+### Prompt Context
+**User prompt (verbatim):** see Step 4 (the "Create a detailed analysis / design / implementation guide…" and "Then as you implement…" messages).
+**Assistant interpretation:** One self-contained guide in the ticket, uploaded to reMarkable; implementation follows.
+**Inferred user intent:** Onboard someone (or a future agent) to the whole system and make the build order unambiguous.
+**Commit (code):** see the commit after this entry.
+
+### What I did
+- `docmgr doc add --doc-type design-doc --title "Intern guide: …"` → `design-doc/01-intern-guide-rag-workbench-on-go-architecture-apis-and-implementation-plan.md` (926 lines).
+- Verified before citing: slop `web/runtime/src/sample.ts:60-115`, `pkg/server/sample.go:122-260` (event names, tool parking, timeout); ragkit `indexbundle/types.go:45-200`; goja-text `chunking/module.go:70-110`; upwork `runtimeidentity` provider and `cmd/tracker/main.go:57-67`; rag-evaluation-system `pkg/gojamodules/rag/module.go:45-85` and `examples/rag-v2/01-product.js`; prototype `rag.js` namespace (`:1974-2036`), `define` (`:1917`), `buildCtx` (`:1375`), `Session.ctx` (`:1570`), index classes (`:361-446`).
+- Replaced `require("rag")` → `require("ragwb")` throughout the guide after D8.
+- `remarquee upload bundle <guide> --name "RAGWB-001 Intern Guide RAG Workbench on Go" --remote-dir /ai/2026/11/02/RAGWB-001 --toc-depth 2 --non-interactive` → `OK: uploaded RAGWB-001 Intern Guide RAG Workbench on Go.pdf -> /ai/2026/11/02/RAGWB-001`.
+- `docmgr doctor --ticket RAGWB-001 --stale-after 30` → all checks passed.
+
+### Why
+- The "adapter or API change?" answer needed a precise index/component contract. I extracted it from the code (`RagIndex`, `define`) rather than paraphrasing it.
+
+### What worked
+- Upload succeeded on the first attempt. That proves cloud delivery only, not sync to the device.
+
+### What didn't work
+- No failures in this step.
+
+### What I learned
+- The engine's extension surface is small: `rag.define` (with `map`/`all`/`run`), the `RagIndex` object contract, and `rag.configure(env)` with `files`/`sample`/`log`. Every native integration can go through those three.
+- xgoja's `runtime-package` artifact plus a hand-written main (upwork) lets Go HTTP commands live next to generated JS commands.
+
+### What was tricky to build
+- Keeping the module rename consistent: one `replace` pass, then a grep confirming that only intentional references to rag-evaluation-system's `require("rag")` remain (3 lines).
+
+### What warrants a second pair of eyes
+- D3 and D8 are judgment calls about two existing org-wide DSLs. They are flagged as proposed, not accepted.
+- §9.8: the gui runtime reads `host.rag.chunk(id)` synchronously. RemoteRag relies on prefetching, which hasn't been verified.
+
+### What should be done in the future
+- Implement P0→P2 now (scaffold, `ragwb` module with the regex fix, jsverbs runner, split-file example), then P3 (directory source) against go-go-parc.
+
+### Code review instructions
+- Read guide §3–§4 for orientation, §9.3 for the API answer, §10 for the decisions, §13 for the phases.
+
+### Technical details
+- Remote: `/ai/2026/11/02/RAGWB-001/RAGWB-001 Intern Guide RAG Workbench on Go.pdf`.
