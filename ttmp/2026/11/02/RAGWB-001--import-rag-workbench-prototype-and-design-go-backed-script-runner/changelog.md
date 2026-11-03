@@ -67,3 +67,11 @@ P5: ragwb workbench serves the ported page with a local window.claude runtime (s
 - /home/manuel/code/wesen/go-go-golems/rag-workbench/pkg/server/sample.go — SSE sample with parked page tools
 - /home/manuel/code/wesen/go-go-golems/rag-workbench/web/workbench/claude.js — window.claude shim
 - ttmp/2026/11/02/RAGWB-001--import-rag-workbench-prototype-and-design-go-backed-script-runner/various/p5-workbench-agent-lunaroute.png — browser evidence of agent session
+
+## 2026-11-03
+
+go-go-goja PR #106 (https://github.com/go-go-golems/go-go-goja/pull/106): bump goja to e1fc788 for \p{..} under /u, plus regression test; rag-workbench follows after v0.10.7 (task k4hx)
+
+### Related Files
+
+- /home/manuel/code/wesen/go-go-golems/go-go-goja/pkg/engine/regexp_test.go — regression test for Unicode property escapes in the shared runtime

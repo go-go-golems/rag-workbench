@@ -772,3 +772,64 @@ The user asked how to update goja properly and when it was fixed. The fix is goj
 
 ### Technical details
 - Pseudo-versions: fix `v0.0.0-20261001121453-e1fc788e4f41`; master on 2026-11-03 `v0.0.0-20261103151521-97b96e1e55f5`; current pin `v0.0.0-20251103141225-af2ceb9156d7`.
+
+## Step 15: go-go-goja PR #106 bumps goja to e1fc788 (upstream-first route A)
+
+Following route A from Step 14, I bumped goja in go-go-goja itself, the shared runtime whose pin every go-go-golems app inherits, and opened go-go-golems/go-go-goja#106 for the user to merge. The change is the version bump plus a regression test, `pkg/engine/regexp_test.go`, which fails on the old goja and passes on the new one. Full tests, lint and both lefthook hooks pass. Nothing in rag-workbench changes yet. That follows once #106 is merged and tagged (v0.10.7), together with the `isLN` change and the canary flip.
+
+### Prompt Context
+**User prompt (verbatim):** "bump in go-go-goja ~/code/wesen/go-go-golems/go-go-goja, open PR, and let me merge"
+**Mid-turn message (verbatim):** "commit at appropriate intervals and keep a detailed diary as you work (using the diary format from the skill) btw (diary format from skill: MANDATORY)"
+**Assistant interpretation:** Make the bump as a reviewable go-go-goja PR (fork branch → go-go-golems main), validated, without merging. Record the work here in investigation format.
+**Inferred user intent:** Fix goja once at the source, keep control of the merge and release, then pick it up in rag-workbench.
+**Commit (code):** go-go-goja `dfe2aae` on `wesen:task/bump-goja-unicode-property-escapes`; PR https://github.com/go-go-golems/go-go-goja/pull/106.
+
+### What I did
+- go-go-goja `main` was even with `origin/main` (c265ae0) after `git fetch`. The only local noise is an untracked `.playwright-mcp/`, which I left alone.
+- Remotes: `origin` = go-go-golems, `wesen` = fork. Recent merged PRs (#98–#102) came from `wesen:` branches, so I used the fork.
+- `git switch -c task/bump-goja-unicode-property-escapes`, then `go get github.com/dop251/goja@e1fc788e4f41 && go mod tidy`. Diff: go.mod 3 lines (goja version, + `dlclark/regexp2/v2 v2.5.2 // indirect`), go.sum 12 lines. `regexp2` v1.11.5 stays (still required elsewhere).
+- New `pkg/engine/regexp_test.go`, written in the style of `nodejs_primitives_test.go` (factory → runtime → `Owner.Call` → `RunString`). Five cases: letters+numbers incl. `ü ß ²`, a negated class, "not a literal p", unknown property → SyntaxError, `\p` without `u` = identity escape.
+- Ran the test against both goja versions (by stashing go.mod/go.sum), then the full suite and lint.
+- Committed (lefthook pre-commit ran), pushed to `wesen` (pre-push ran), and ran `gh pr create -R go-go-golems/go-go-goja --base main --head wesen:task/bump-goja-unicode-property-escapes`.
+
+### Why
+- The pin lives in go-go-goja. Bumping only in rag-workbench would run go-go-goja's code on a goja version its own CI never saw, and leave every other app on the broken regex translation.
+- The regression test belongs in go-go-goja (the engine layer), so a future downgrade or a goja regression shows up there, not as "0 search hits" in some downstream app.
+- e1fc788 rather than master: the smallest jump that contains the fix (67 commits vs. 202).
+
+### What worked
+- `go test ./pkg/engine/ -run TestRegExpUnicodePropertyEscapes -v` on e1fc788: 5/5 PASS.
+- On af2ceb9 (stashed): FAIL in 4/5, e.g. `JSON.stringify("Grüße, x² und 42".match(/[\p{L}\p{N}]+/gu)) = null` and `/^\p{L}$/u.test("p{L}") … = literal`. Only the no-`u` case passes on both, as intended.
+- `go build ./... && go test ./...`: exit 0, 106 packages `ok`.
+- `make lint`: golangci-lint v2.11.2 "0 issues.", glazed-lint vet clean.
+- lefthook pre-commit: ✔️ lint (2.9 s), ✔️ test (68.2 s; `make test` includes `go generate ./...`, and no generated files changed). The pre-push hook also passed.
+- PR: https://github.com/go-go-golems/go-go-goja/pull/106
+
+### What didn't work
+- Nothing failed. `gh pr create` warned "1 uncommitted change", which is the untracked `.playwright-mcp/`, not part of this change.
+
+### What I learned
+- go-go-goja's lefthook runs the full `make lint` + `make test` on both commit and push (about 70 s each). Budget for it when committing there.
+
+### What was tricky to build
+- Nothing tricky. The one design choice was the test layer: through `engine.NewRuntimeFactoryBuilder()` rather than a bare `goja.New()`, so it checks the runtime go-go-goja actually hands out.
+
+### What warrants a second pair of eyes
+- The 67-commit goja jump. The PR body lists the semantic changes (UTF-16 string comparison and `split`, ftoa, typed arrays, `for await`, Go iterators). go-go-goja's suite and rag-workbench's suite pass on it, but other downstream apps haven't been tried.
+- The extra indirect `regexp2/v2`: two regexp2 majors in the build until the other v1 user moves.
+
+### What should be done in the future
+- User: merge #106 and tag go-go-goja v0.10.7.
+- Then in rag-workbench (task k4hx):
+  - `go get github.com/go-go-golems/go-go-goja@v0.10.7 && go mod tidy` (our direct goja line follows);
+  - `isLN` → `unicode.IsLetter||IsNumber`;
+  - flip `TestTokenizeWorksInGoja`;
+  - re-run whole-vault hashed parity.
+
+### Code review instructions
+- go-go-goja PR #106: `go.mod`, `go.sum`, `pkg/engine/regexp_test.go`.
+- Validate: `go test ./pkg/engine/ -run TestRegExpUnicodePropertyEscapes -v`, `go test ./...`, `make lint`.
+
+### Technical details
+- Branch `task/bump-goja-unicode-property-escapes` @ `dfe2aae`, base go-go-golems/go-go-goja `main` @ `c265ae0`.
+- goja `v0.0.0-20251103141225-af2ceb9156d7` → `v0.0.0-20261001121453-e1fc788e4f41`.
