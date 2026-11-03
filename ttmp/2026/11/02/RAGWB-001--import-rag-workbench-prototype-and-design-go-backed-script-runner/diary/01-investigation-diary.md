@@ -1326,3 +1326,66 @@ Validation and server errors show inline. Shift+click or Ctrl+Shift+S opens it a
 
 ### Code review instructions
 - `web/workbench/app.js`: `pathProblem`, `appSeg`, `fileUrl`, and `saveButton` through `wireSaveForm`. `web/workbench/index.html`: `.save-form` CSS and the form markup.
+
+## Step 23: `ragwb --timings`: a warm vault search is 2.1 s of loading and 1.7 ms of query
+
+The user asked for a breakdown of where search time goes. `ragwb --timings` now prints, to stderr, each sequential phase and the details recorded inside it:
+- phases: startup with the jsverbs scan, backends, runtime creation, the verb or script, output;
+- details: compile, every computed build node, every lazy load of a stored output (with store read and decode), the `artifacts()` assembly, and every query node.
+
+For a warm `parc search` over the whole vault, 2.06 of 2.2 s is `artifacts()`. That is mostly decoding 136 MB of chunks into 85,882 JS objects (1.1 s), plus the terms index (0.43 s) and the BM25 index (0.24 s). The query itself takes 1.7 ms. This is the case for P7: a long-running server pays the load once.
+
+### Prompt Context
+**User prompt (verbatim):** "Ok, do it. also, can we get timing results to breakdown which parts of the search takes how long? commit at appropriate intervals and keep a detailed diary as you work (using the diary format from the skill) (diary format: MANDATORY)"
+**Assistant interpretation:** Do P7 (`ragwb serve`), and first add a timing breakdown of a search, by phase and by engine step.
+**Inferred user intent:** Know where the remaining seconds go before choosing what to optimize; serve apps.
+**Commit (code):** `7fb1e2d`.
+
+### What I did
+- **`pkg/timing`:** `Recorder` with `New(start, firstPhase)`, `Phase(next)` (closes the running phase), `Add(kind, name, ms, detail)`, `Print` (phases with their share, then details slowest first), `Entries`, `Line`. Every method is safe on a nil recorder, which means off.
+- **rag.js:**
+  - `timed(kind, name, ms, detail)` calls `env0.timing` inside a try. `env0` is a `let` declared later in the file, so even reading it before module init must not throw.
+  - Events: `compile` (in `compile()`), `build` (computed nodes; detail type · computed, saved), `load` (`Lazy` now takes an `onLoad(ms)` callback and times `force()`), `artifacts` (assembly including the loads it forces), `run` (each query node with status and in→out counts).
+- **Go:**
+  - `ragjs.Options.Timing` → `env.timing`; `runner.Config.Timing` → Options and `natives.Persist.Timing` (`store <type>`: codec · read · decode · MB).
+  - `main` starts the clock at package init (`processStart`) and detects `--timings` in argv early, as for `--dir`.
+  - The verbs invoker marks backends → runtime → `verb <path>` → output; `run` marks script → output.
+  - `--timings` is also registered as a global flag, so cobra accepts it.
+- `pkg/timing/timing_test.go`: phases and details, sort order, nil recorder.
+
+### Why
+- The engine already measured its nodes (`report.nodes[*].ms`, the run trace), but not the lazy loads triggered inside `artifacts()`, which after P8 are where the time is, and nothing outside the engine.
+
+### What worked
+- Cold run (rag.js changed, so a new namespace): `build ix-text 5.81 s`, `parse 2.18 s`, `chunks 1.92 s`, `ix-meta 1.75 s`, `files 348 ms`, total 12.24 s.
+- Warm, two runs (`/usr/bin/time`: 2.25 s / 1.35 GB and 2.29 s / 1.47 GB):
+
+| item | run 1 | run 2 |
+|---|---|---|
+| startup + jsverbs scan | 8.1 ms | 6.6 ms |
+| runtime | 0.4 ms | 0.4 ms |
+| artifacts (incl. loads) | 2.06 s | 2.11 s |
+| load chunks (store: read 70 ms, decode 1.148 s, 136.1 MB) | 1.22 s | 1.17 s |
+| load ix-meta (JSON 41.5 MB) | 427.8 ms | 474.8 ms |
+| load ix-text (bm25 52.1 MB) | 243.2 ms | 324.2 ms |
+| compile | 2.0 ms | 1.2 ms |
+| run text / filter / limit | 1.4 / 0.2 / 0.1 ms | 1.5 / 0.2 / 0.1 ms |
+| output | 0.2 ms | 0.1 ms |
+
+- `go test ./pkg/timing ./pkg/runner ./pkg/ragjs`: ok. `make lint`: ok.
+
+### What didn't work
+- Nothing failed. One wrinkle: the first `--timings` run was cold even though the store had just been filled, because editing rag.js changes the artifact namespace (by design).
+
+### What I learned
+- After P8, startup and query are negligible. The cost of a CLI query is materializing JS objects for 85k chunks: about 1.1 s for decoding alone, plus about 0.17 s for building the `Map`s in `artifacts()`. Further CLI gains would need chunks that aren't materialized up front (for example a Go-backed lazy chunk map). A server avoids the question.
+
+### What warrants a second pair of eyes
+- `timed` swallows exceptions from the hook. A broken hook silently stops reporting rather than failing a run, which is intended.
+
+### What should be done in the future
+- P7 (next step). Optionally, lazy per-chunk objects, if the CLI cold start matters more later.
+
+### Code review instructions
+- `pkg/timing/timing.go`; rag.js `timed`, `Lazy`; `cmd/ragwb/main.go`; the invoker in `cmd/ragwb/cmds/verbs.go`.
+- Validate: `ragwb --timings --root <vault> --store /tmp/s verbs --dir examples/apps/parc parc search "rebalance law"`, run twice.
