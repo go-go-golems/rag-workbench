@@ -924,3 +924,83 @@ CI on go-go-goja PR #106 head `3dfcc78` passed every check, including the two de
   - pass: Analyze, CodeQL, Dependency Review, **Go Vulnerability Check** (1m11s), **GoSec Security Scan** (4m16s), TruffleHog, docker, inspector-validation, lint (4m49s), test (4m51s);
   - skipping: Open GitOps PR.
 - **Revision:** go-go-goja `3dfcc78`. Next: the user merges and tags v0.10.7, then the rag-workbench follow-up (tasks k4hx, de8c).
+
+## Step 18: go-go-goja v0.10.7 released; rag-workbench on goja master, Go ports made UTF-16 and Final_Sigma faithful
+
+After the user merged #106, I released go-go-goja v0.10.7 from `main` and moved rag-workbench onto it (which brings goja master). Once the Go tokenizer used real Unicode classes, a whole-vault tokenize parity run turned up two more porting assumptions that the fallback class had been hiding:
+- lengths counted in runes instead of UTF-16 units;
+- `strings.ToLower` instead of JS `toLowerCase`, which differs on final sigma (Σ → ς at the end of a word) and other full case mappings.
+
+After fixing both, all 804,846 distinct vault lines tokenize identically, and the whole-vault chunk parity is still byte-identical.
+
+### Prompt Context
+**User prompt (verbatim):** "merged #106. checkout main and rebase and `make release` locally"
+**Mid-turn message (verbatim):** "run go mod tidy where appropriate btw, to clear these messages"
+**Assistant interpretation:** In go-go-goja: update `main`, tag and release (`make release` only pushes tags, so `make tag-patch` first). Then finish route A in rag-workbench (task k4hx, de8c), as planned in Steps 14–17.
+**Inferred user intent:** Ship the fix as a version, and have rag-workbench consume it with parity intact.
+**Commit (code):** go-go-goja tag `v0.10.7` @ `e9bc789`; rag-workbench `a523564`.
+
+### What I did
+- go-go-goja:
+  - `git switch main && git pull --rebase origin main`: `e9bc789` (the merge of #106), even with origin.
+  - Read the Makefile: `release` = `git push origin --tags` + a proxy `go list`, so it needs a tag first. I checked that there were no local-only tags (`comm` of local vs `git ls-remote --tags`).
+  - `make tag-patch` (svu → v0.10.7), then `make release`.
+  - Watched the release workflow.
+- rag-workbench:
+  - `go get github.com/go-go-golems/go-go-goja@v0.10.7 && go mod tidy`: goja 97b96e1, goja_nodejs b481721, regexp2/v2 2.11.0, plus the security bumps (go-jose 4.1.8, excelize 2.11.1, mongo-driver 1.17.10, x/*).
+  - `pkg/natives/bm25.go`:
+    - `isLN` → `unicode.IsLetter||IsNumber`. I confirmed regexp2/v2 `syntax/ecma_unicode.go` builds `\p{..}` from `unicode.Categories`.
+    - `Tokenize` uses the `len16(w) < 2` check.
+    - `stem` uses `len16`, and its double-letter rule skips a trailing astral rune.
+  - New `pkg/natives/jslower.go`: `jsLower`, a port of goja `string_unicode.go` `toLower`. ASCII takes a fast path. Other text is split at each Σ, the parts between are lowercased with x/text `cases.Lower(language.Und)` (casers pooled), and each Σ becomes ς or σ by `isFinalSigma`, with goja's `caseIgnorable`/`cased` tables. It replaces `strings.ToLower` at every ported call site: bm25 (tokens, query, metadata keys), `slug`, and the callout variant. `sourcedir.go`'s HTML sniff stays (Go-only).
+  - Tests:
+    - `TestTokenizeUsesUnicodeClassesInGoja` replaces the canary. It asserts `rag.util.LN === '\p{L}\p{N}'`, JS tokens == `natives.Tokenize`, and that `x²` is kept.
+    - `TestJSLowerMatchesGoja`: 23 inputs vs goja `toLowerCase`, asserting ≥5 inputs where `strings.ToLower` differs.
+    - `TestEmptyResultsAreArrays` (task de8c).
+    - `TestTokenizeParity`: `RAGWB_PARITY_INCLUDE` (doublestar), deduplicated lines, `RAGWB_PARITY_TIMEOUT`, and it reports up to 20 mismatches instead of stopping at the first.
+  - `go mod tidy` in rag-workbench, go-go-goja and the two nested ticket-script modules (01, 02): no changes. Removed the binaries `go build` left in the script dirs.
+
+### Why
+- The ports exist for speed (vault build 280 s → 4 s), and they're only trustworthy at byte parity with the goja engine, which is now closer to the browser.
+- I ported goja's lowercase rather than writing a generic Unicode one, because parity is with goja, and goja documents that it applies the ECMAScript ordering (ignorable before cased).
+
+### What worked
+- `make release`: `* [new tag] v0.10.7 -> v0.10.7`. `GOPROXY=proxy.golang.org go list -m …@v0.10.7` → `github.com/go-go-golems/go-go-goja v0.10.7`.
+- The release workflow `41693402745`: success (goreleaser-linux, -darwin, -merge, publish-docs). Release v0.10.7 published 2026-11-03T18:30:46Z, 10 assets.
+- `go test ./...` (rag-workbench): all ok. `make lint`: exit 0.
+- `TestEmptyResultsAreArrays`: pass for JS and Go components. **Mutation check:** making the bm25 native return a nil slice on no hits fails it with `noHits=null emptyQuery=null stopWordsOnly=null synonymsNoHits=null searchInUnknownDoc=null emptyCorpusSearch=null`. I reverted the mutation afterwards (no diff).
+- Whole-vault tokenize parity (`RAGWB_PARITY_INCLUDE='**/*.md'`): "804846 lines tokenized identically", 198.5 s.
+- Whole-vault markdown/chunk parity: "9515079 bytes of chunks identical; build js=282950ms go=4202ms", PASS 859 s.
+
+### What didn't work
+- **Whole-vault tokenize parity, run 1:** stopped at line 360611 ("… comes back as glyphs `𝐾⊆𝑋 be compact` …"). JS had `… glyph 𝐾 𝑋 compact …`, Go dropped `𝐾 𝑋`. Cause: `utf8.RuneCountInString(w) < 2` vs JS `w.length` (U+1D43E is a surrogate pair, length 2). The stem comment even said "operates on BMP-only words, so runes == UTF-16 units", which was true only under the fallback class.
+- **Run 2** (after the length fix): "8 of 1609692 (line, stem) pairs differ". All are Σ: `IΣ` → JS `iς`, Go `iσ`; `TΣ,W` → `tς`/`tσ`; `nΣᵧ` → `nςᵧ`/`nσᵧ`. Cause: goja master's "Implemented proper fix for the final sigma rule" (2026-10-10) vs `strings.ToLower`.
+- The first whole-vault markdown parity run went past the Bash tool's 600 s limit and was moved to the background. It completed normally (859 s).
+- The editor showed many "X is not in your go.mod file (go mod tidy)" diagnostics during the go.mod changes. `go mod tidy -diff` was clean, and builds and tests passed, so they were stale gopls state.
+
+### What I learned
+- goja `toLowerCase` = x/text `cases.Lower(Und)` + its own Σ handling, not `strings.ToLower`. The latter differs on Σ and on full mappings such as İ → i̇ (TestJSLowerMatchesGoja checks both).
+- Whether `nΣᵧ` ends in final sigma depends on checking ignorable before cased: ᵧ (U+1D67) is both case-ignorable (Lm) and cased (Other_Lowercase), and goja treats it as ignorable. Whether V8 agrees is unverified.
+
+### What was tricky to build
+- Matching goja's segmentation: it lowercases the text between Σs separately, so jsLower splits at the same points to give `cases.Lower` the same inputs.
+
+### What warrants a second pair of eyes
+- Browser parity for the Σ/ᵧ edge case (goja vs V8) hasn't been checked. JS↔Go parity is with goja.
+- `jsLower` is slower than `strings.ToLower` on non-ASCII words: it takes a pooled caser per call. The vault build stayed at 4.2 s.
+- I didn't re-run the whole-vault BM25 scores: there is no whole-vault BM25 parity test, only the reports-corpus one. Tokenization (whole vault) and the chunk text feeding it (whole vault) are both verified.
+
+### What should be done in the future
+- Optional: a whole-vault BM25 parity mode, like the tokenize one.
+- The parc dense index embeds chunk text, which is unchanged (chunk sizing is len/4), so the embedding cache stays valid. The BM25 side rebuilds on its own.
+
+### Code review instructions
+- `pkg/natives/jslower.go` (vs goja `string_unicode.go` 837–885), `pkg/natives/bm25.go` (`isLN`, `Tokenize`, `stem`), `pkg/runner/empty_results_test.go`, `pkg/runner/tokenize_parity_test.go`.
+- Validate:
+  - `go test ./...`
+  - `RAGWB_PARITY_INCLUDE='**/*.md' RAGWB_PARITY_TIMEOUT=10m go test ./pkg/runner -run TestTokenizeParity -v -timeout 15m`
+  - `RAGWB_PARITY_INCLUDE='**/*.md' RAGWB_PARITY_TIMEOUT=15m go test ./pkg/runner -run TestMarkdownParityVault -v -timeout 20m`
+
+### Technical details
+- go-go-goja v0.10.7 = `e9bc789` (the merge of #106, on top of c265ae0).
+- The rag-workbench go.mod now requires go-go-goja v0.10.7 and goja `v0.0.0-20261103151521-97b96e1e55f5`, with `golang.org/x/text v0.43.0` as a direct dependency.

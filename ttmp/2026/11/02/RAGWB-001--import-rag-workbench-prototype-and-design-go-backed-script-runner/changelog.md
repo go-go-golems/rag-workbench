@@ -79,3 +79,11 @@ go-go-goja PR #106 (https://github.com/go-go-golems/go-go-goja/pull/106): bump g
 ## 2026-11-03
 
 go-go-goja PR #106 extended: goja/goja_nodejs master, database nil-slice fix, Dependabot #105/#94/#89 + alerts at newest releases, toolchain go1.26.10, gosec ttmp exclusion
+
+## 2026-11-03
+
+go-go-goja v0.10.7 released; rag-workbench on it (goja master): isLN=\p{L}\p{N}, UTF-16 lengths, jsLower (Final_Sigma); whole-vault tokenize + chunk parity identical
+
+### Related Files
+
+- /home/manuel/code/wesen/go-go-golems/rag-workbench/pkg/natives/jslower.go — goja toLowerCase port (cases.Lower + Final_Sigma)

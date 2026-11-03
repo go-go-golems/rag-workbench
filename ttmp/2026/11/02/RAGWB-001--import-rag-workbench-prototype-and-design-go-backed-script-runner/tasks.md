@@ -2,7 +2,7 @@
 
 ## TODO
 - [x] D1 engine strategy decided in guide: rag.js engine + Go-native heavy nodes (status proposed) <!-- t:x2mh -->
-- [ ] goja \p fix: go-go-goja PR #106 (bump to e1fc788) → after merge+v0.10.7: bump go-go-goja here, isLN → unicode.IsLetter||IsNumber, flip TestTokenizeWorksInGoja, re-run whole-vault parity <!-- t:k4hx -->
+- [x] goja \p fix: go-go-goja PR #106 (bump to e1fc788) → after merge+v0.10.7: bump go-go-goja here, isLN → unicode.IsLetter||IsNumber, flip TestTokenizeWorksInGoja, re-run whole-vault parity <!-- t:k4hx -->
 - [x] P0 scaffold: go.mod, cmd/ragwb, Makefile, vendored assets, examples <!-- t:k1ny -->
 - [x] P1 ragwb module: rag.js/gui.js/kit.js as goja modules, D6 fix, headless run + presets sweep <!-- t:08l0 -->
 - [x] P2 jsverbs: ragwb verbs --dir with ragwb runtime; split-file examples/apps/reports <!-- t:1y8c -->
@@ -13,4 +13,4 @@
 - [ ] P7 remote pipeline: /api/rag sessions, RemoteRag, ragwb serve <app> <!-- t:i5j5 -->
 - [ ] P8 persistence + vectors: artifact store by digest, bleve index, embeddings + sqliteexact <!-- t:f6cl -->
 - [x] P9 server-side LLM nodes: ctx.sample on geppetto <!-- t:jlcq -->
-- [ ] After go-go-goja v0.10.7: nil-slice audit (goja 6ace4dd nil slice → null) — add an empty-result test for natives (BM25 no hits, empty source.dir) <!-- t:de8c -->
+- [x] After go-go-goja v0.10.7: nil-slice audit (goja 6ace4dd nil slice → null) — add an empty-result test for natives (BM25 no hits, empty source.dir) <!-- t:de8c -->
