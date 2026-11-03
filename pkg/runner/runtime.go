@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/dop251/goja_nodejs/require"
 	"github.com/go-go-golems/go-go-goja/pkg/engine"
@@ -50,6 +51,9 @@ type Config struct {
 	Artifacts *artifacts.Store
 	// Timing records engine and store timings (ragwb --timings, the serve API). Nil = off.
 	Timing *timing.Recorder
+	// SourceDigestTTL lets source.dir reuse its file-tree digest for this long (see
+	// natives.SourceDir.DigestTTL). 0 re-walks on every lookup.
+	SourceDigestTTL time.Duration
 }
 
 // ArtifactNamespace names the artifact namespace for this binary: the rag.js
@@ -77,7 +81,7 @@ func NewFactory(cfg Config) (*engine.RuntimeFactory, error) {
 	if logf == nil && cfg.Verbose {
 		logf = func(line string) { fmt.Fprintln(os.Stderr, "rag:", line) }
 	}
-	nat := []ragjs.Native{&natives.SourceDir{Roots: cfg.Roots, Base: cfg.Base}}
+	nat := []ragjs.Native{&natives.SourceDir{Roots: cfg.Roots, Base: cfg.Base, DigestTTL: cfg.SourceDigestTTL}}
 	if !cfg.JSComponents {
 		nat = append(nat, natives.Markdown{}, natives.Bm25Native{})
 	}

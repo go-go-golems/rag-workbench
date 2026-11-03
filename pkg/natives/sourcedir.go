@@ -12,6 +12,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/bmatcuk/doublestar/v4"
 	"github.com/dop251/goja"
@@ -33,6 +35,18 @@ type SourceDir struct {
 	// working directory). Module __dirname is virtual under jsverbs' overlay
 	// loader, so scripts should write root: "corpus", not __dirname + "/corpus".
 	Base string
+	// DigestTTL reuses a computed digest for this long instead of re-walking the
+	// tree on every artifacts() lookup (each query asks). 0 = always re-walk (CLI
+	// runs); `ragwb serve` sets it so a keystroke does not stat the whole vault.
+	DigestTTL time.Duration
+
+	mu      sync.Mutex
+	digests map[string]cachedDigest
+}
+
+type cachedDigest struct {
+	at     time.Time
+	digest string
 }
 
 // DefaultExclude is always applied in addition to the caller's excludes.
@@ -220,10 +234,31 @@ func (s *SourceDir) Digest(p map[string]any) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	if s.DigestTTL <= 0 {
+		return s.digest(dp)
+	}
+	key := fmt.Sprintf("%s\x00%v\x00%v\x00%d\x00%v", dp.root, dp.include, dp.exclude, dp.maxBytes, dp.skipHTML)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if c, ok := s.digests[key]; ok && time.Since(c.at) < s.DigestTTL {
+		return c.digest, nil
+	}
+	d, err := s.digest(dp)
+	if err != nil {
+		return "", err
+	}
+	if s.digests == nil {
+		s.digests = map[string]cachedDigest{}
+	}
+	s.digests[key] = cachedDigest{time.Now(), d}
+	return d, nil
+}
+
+func (s *SourceDir) digest(dp dirParams) (string, error) {
 	h := sha256.New()
 	fmt.Fprintf(h, "%s\x00%v\x00%v\x00%d\x00%v\n", dp.root, dp.include, dp.exclude, dp.maxBytes, dp.skipHTML)
 	lines := []string{}
-	err = matches(dp, func(rel, _ string, info fs.FileInfo) error {
+	err := matches(dp, func(rel, _ string, info fs.FileInfo) error {
 		lines = append(lines, fmt.Sprintf("%s\x00%d\x00%d", rel, info.Size(), info.ModTime().UnixNano()))
 		return nil
 	})

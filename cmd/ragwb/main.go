@@ -36,7 +36,7 @@ func main() {
 		Run:   func(cmd *cobra.Command, args []string) { fmt.Fprintln(cmd.OutOrStdout(), version) },
 	})
 	cmds.AddGlobalFlags(root)
-	root.AddCommand(cmds.NewRunCommand(), cmds.NewPresetsCommand(), cmds.NewWorkbenchCommand())
+	root.AddCommand(cmds.NewRunCommand(), cmds.NewPresetsCommand(), cmds.NewWorkbenchCommand(), cmds.NewServeCommand())
 	apps, err := cmds.NewAppsCommand()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)

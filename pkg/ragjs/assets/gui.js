@@ -241,7 +241,12 @@
     state(obj) { this.ir.state = { ...this.ir.state, ...JSON.parse(JSON.stringify(obj)) }; return this; }
     derive(key, f) { this.ir.derived[key] = lam(f); return this; }
     watch(key, f) { this.ir.watchers.push({ key, fn: lam(f) }); return this; }
-    use(target) { this.ir.uses = { plan: target ? target.id || (target.ir && target.ir.id) || String(target) : null }; return this; }
+    use(target) {
+      this.ir.uses = { plan: target ? target.id || (target.ir && target.ir.id) || String(target) : null };
+      // keep the plan itself (not in the IR): `ragwb serve` builds the plan an app module exports only via its app
+      Object.defineProperty(this, 'plan', { value: target && typeof target === 'object' ? target : null, enumerable: false, configurable: true, writable: true });
+      return this;
+    }
     view(b) {
       const list = [];
       b(new View(this, list));

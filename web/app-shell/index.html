@@ -1,0 +1,29 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>ragwb app</title>
+<link rel="stylesheet" href="/gui.css">
+<style>
+  body { min-height: 100%; display: flex; flex-direction: column; padding-block: 0; }
+  .sh-h { display: flex; align-items: baseline; gap: 14px; padding: 14px 0 10px; border-bottom: 1px solid var(--ink); margin-bottom: 16px; }
+  .sh-h b { font: 700 15px var(--display); letter-spacing: .02em; }
+  .sh-h .meta { margin-left: auto; }
+  #app { flex: 1; min-width: 0; }
+  .sh-f { position: sticky; bottom: 0; background: var(--paper); border-top: 1px solid var(--hair-soft); padding: 6px 0 8px; margin-top: 16px; display: flex; gap: 14px; flex-wrap: wrap; }
+  .sh-f b { color: var(--ink); font-weight: 600; }
+  .sh-err { border: 1px solid var(--bad); background: var(--bad-w); color: var(--bad); padding: 10px 12px; font: 12px/1.5 var(--mono); white-space: pre-wrap; }
+  .toast { position: fixed; top: 12px; left: 50%; transform: translateX(-50%); background: var(--ink); color: var(--on-ink); font: 600 11px var(--mono); padding: 8px 12px; border-left: 4px solid var(--sig); z-index: 40; pointer-events: none; }
+</style>
+</head>
+<body>
+<header class="sh-h"><b id="sh-title">…</b><span class="meta" id="sh-meta"></span></header>
+<main id="app"></main>
+<footer class="sh-f meta" id="sh-timing" aria-live="polite"></footer>
+<script src="/rag.js"></script>
+<script src="/gui.js"></script>
+<script src="/kit.js"></script>
+<script src="/app-shell.js"></script>
+</body>
+</html>
