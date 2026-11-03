@@ -14,6 +14,7 @@ import (
 
 	"github.com/go-go-golems/rag-workbench/pkg/llm"
 	"github.com/go-go-golems/rag-workbench/pkg/ragjs"
+	"github.com/go-go-golems/rag-workbench/pkg/store"
 	"github.com/go-go-golems/rag-workbench/web"
 )
 
@@ -21,8 +22,9 @@ import (
 type Config struct {
 	LLM        llm.Backend // nil disables sample (the page shows its own message)
 	Docs       *DocStore
-	PresetsDir string // presets/index.json + *.js
-	CorpusDir  string // *.md served as corpus.json {files:[{name,text}]}
+	PresetsDir string      // presets/index.json + *.js
+	CorpusDir  string      // *.md served as corpus.json {files:[{name,text}]}
+	Apps       *store.Apps // saved scripts (nil disables /api/apps)
 }
 
 type Server struct {
@@ -50,8 +52,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /_rt/sample/{call}/tools/{use}", s.handleSampleTool)
 	mux.HandleFunc("POST /_rt/sample/{call}/cancel", s.handleSampleCancel)
 	mux.HandleFunc("POST /_rt/db/{op}", s.handleDB)
+	s.appsRoutes(mux)
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, map[string]any{"ok": true, "llm": s.LLM != nil})
+		writeJSON(w, map[string]any{"ok": true, "llm": s.LLM != nil, "apps": s.Apps != nil})
 	})
 	return mux
 }

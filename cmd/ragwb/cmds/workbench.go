@@ -14,11 +14,12 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/go-go-golems/rag-workbench/pkg/server"
+	"github.com/go-go-golems/rag-workbench/pkg/store"
 )
 
 // NewWorkbenchCommand serves the RAG workbench page with a local window.claude runtime.
 func NewWorkbenchCommand() *cobra.Command {
-	var addr, presets, corpus, dbPath string
+	var addr, presets, corpus, dbPath, appsDir string
 	cmd := &cobra.Command{
 		Use:   "workbench",
 		Short: "Serve the RAG workbench (editor, presets, inspector, agent) with a local window.claude runtime",
@@ -39,7 +40,15 @@ func NewWorkbenchCommand() *cobra.Command {
 				return err
 			}
 			defer docs.Close()
-			s := server.New(server.Config{LLM: backend, Docs: docs, PresetsDir: presets, CorpusDir: corpus})
+			if appsDir == "" {
+				appsDir = DefaultAppsDir()
+			}
+			apps, err := store.OpenApps(appsDir, dbPath)
+			if err != nil {
+				return err
+			}
+			defer apps.Close()
+			s := server.New(server.Config{LLM: backend, Docs: docs, PresetsDir: presets, CorpusDir: corpus, Apps: apps})
 			ln, err := net.Listen("tcp", addr)
 			if err != nil {
 				return err
@@ -49,7 +58,7 @@ func NewWorkbenchCommand() *cobra.Command {
 			if backend != nil {
 				llmName = fmt.Sprintf("%T", backend)
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "ragwb workbench on http://%s  (llm: %s, db: %s)\n", ln.Addr(), llmName, dbPath)
+			fmt.Fprintf(cmd.OutOrStdout(), "ragwb workbench on http://%s  (llm: %s, db: %s, apps: %s)\n", ln.Addr(), llmName, dbPath, apps.Dir)
 			ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt)
 			defer stop()
 			go func() {
@@ -67,6 +76,7 @@ func NewWorkbenchCommand() *cobra.Command {
 	cmd.Flags().StringVar(&addr, "addr", "127.0.0.1:8790", "Listen address (keep it on loopback: there is no auth)")
 	cmd.Flags().StringVar(&presets, "presets", "examples/presets", "Directory with presets/index.json and preset scripts")
 	cmd.Flags().StringVar(&corpus, "corpus", "examples/apps/reports/corpus", "Directory of .md files served as the bundled corpus")
+	cmd.Flags().StringVar(&appsDir, "apps", "", "Apps directory for saved scripts (default ~/.ragwb/apps); each app is a directory ragwb verbs/run can execute")
 	cmd.Flags().StringVar(&dbPath, "db", "", "SQLite document store for the page's db capability (default ~/.ragwb/ragwb.db)")
 	return cmd
 }
