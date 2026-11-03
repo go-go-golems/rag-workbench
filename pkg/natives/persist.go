@@ -8,6 +8,7 @@ import (
 	"github.com/dop251/goja"
 
 	"github.com/go-go-golems/rag-workbench/pkg/artifacts"
+	"github.com/go-go-golems/rag-workbench/pkg/timing"
 )
 
 // Version names the behavior of the Go components. Bump it whenever a native
@@ -24,7 +25,10 @@ const Version = "2026-11-03.1"
 //
 // Plain data goes through the VM's own JSON.stringify/parse, so stored docs and
 // chunks are exactly what JSON round-trips (the engine's JSON codec).
-type Persist struct{ Store *artifacts.Store }
+type Persist struct {
+	Store  *artifacts.Store
+	Timing *timing.Recorder // optional: per-load read/decode times
+}
 
 func (Persist) Name() string { return "artifacts" }
 
@@ -72,6 +76,8 @@ func (p Persist) Install(vm *goja.Runtime, rag *goja.Object) error {
 			var v goja.Value
 			if v, err = decodeArtifact(vm, parse, m.Codec, data); err == nil {
 				debugf("load %s %s: read %v, decode %v, %d bytes", m.Type, m.Codec, t1.Sub(t0), time.Since(t1), len(data))
+				p.Timing.Add("store", m.Type, float64(time.Since(t0).Microseconds())/1000,
+					fmt.Sprintf("%s · read %v · decode %v · %.1f MB", m.Codec, t1.Sub(t0).Round(time.Millisecond), time.Since(t1).Round(time.Millisecond), float64(len(data))/(1<<20)))
 				return v
 			}
 		}

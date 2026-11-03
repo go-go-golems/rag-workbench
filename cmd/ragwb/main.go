@@ -5,15 +5,25 @@ package main
 import (
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/spf13/cobra"
 
 	"github.com/go-go-golems/rag-workbench/cmd/ragwb/cmds"
+	"github.com/go-go-golems/rag-workbench/pkg/timing"
 )
 
 var version = "dev"
 
+// processStart is as early as Go code can observe; --timings measures from here.
+var processStart = time.Now()
+
 func main() {
+	for _, a := range os.Args[1:] {
+		if a == "--timings" {
+			timing.Default = timing.New(processStart, "startup (Go init, CLI, jsverbs scan)")
+		}
+	}
 	root := &cobra.Command{
 		Use:           "ragwb",
 		Short:         "RAG workbench: JS pipelines, queries and apps on a Go runtime",
@@ -48,7 +58,9 @@ func main() {
 	}
 	root.AddCommand(verbs)
 
-	if err := root.Execute(); err != nil {
+	err = root.Execute()
+	timing.Default.Print(os.Stderr)
+	if err != nil {
 		fmt.Fprintln(os.Stderr, "ragwb:", err)
 		os.Exit(1)
 	}

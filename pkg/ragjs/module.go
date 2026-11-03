@@ -91,6 +91,8 @@ type Options struct {
 	// BuildCalls lets LLM-costing build nodes (enrich.llm, doc cards) run during
 	// build; otherwise they are deferred like the workbench's explicit Build button.
 	BuildCalls bool
+	// Timing receives the engine's timing events (compile, build, load, artifacts, run).
+	Timing func(kind, name string, ms float64, detail string)
 }
 
 // Native installs Go-backed functionality into a freshly created rag object.
@@ -202,6 +204,9 @@ func configureHost(vm *goja.Runtime, rag *goja.Object, opts Options) error {
 		_ = env.Set("buildCalls", "auto")
 	} else {
 		_ = env.Set("buildCalls", "explicit")
+	}
+	if opts.Timing != nil {
+		_ = env.Set("timing", opts.Timing)
 	}
 	if opts.Sample != nil {
 		sample, err := newSample(vm, opts.Sample)

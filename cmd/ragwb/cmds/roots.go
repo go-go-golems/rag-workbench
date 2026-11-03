@@ -34,6 +34,7 @@ func AddGlobalFlags(root *cobra.Command) {
 	f.StringVar(&embedName, "embed", "none", "Embeddings/rerank backend for index.vector and rerank.model: none, lunaroute (cache: ~/.ragwb/cache/embeddings.db)")
 	f.BoolVar(&buildCalls, "build-calls", false, "Let LLM-costing build nodes (enrich.llm, doc cards) run instead of deferring them")
 	addStoreFlags(f)
+	f.Bool("timings", false, "Print where the time went (startup, runtime, build/load/query per node, output) to stderr")
 }
 
 // LLM returns the backend selected by --llm (nil for "none").

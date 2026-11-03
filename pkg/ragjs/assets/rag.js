@@ -1124,6 +1124,7 @@
     let ir = finalize(raw);
     if (raw.ops && raw.ops.length) ir = applyOps(ir, raw.ops);
     Object.defineProperty(ir, 'compileMs', { value: now() - t0, enumerable: false, configurable: true });
+    timed('compile', ir.id, ir.compileMs, ir.nodes.length + ' nodes');
     return ir;
   }
 
@@ -1250,9 +1251,21 @@
   // The store key adds the component's source
   // text, so editing a rag.define'd component never reuses its old outputs.
   class Lazy {
-    constructor(load) { this.load = load; this.done = false; this.v = undefined; }
-    force() { if (!this.done) { this.v = this.load(); this.done = true; this.load = null; } return this.v; }
+    constructor(load, onLoad) { this.load = load; this.onLoad = onLoad; this.done = false; this.v = undefined; }
+    force() {
+      if (!this.done) {
+        const t0 = now();
+        this.v = this.load(); this.done = true; this.load = null;
+        if (this.onLoad) this.onLoad(now() - t0);
+      }
+      return this.v;
+    }
   }
+  // Timing hook (env.timing(kind, name, ms, detail)): ragwb --timings and the serve API
+  // report compile, build nodes, artifact loads, artifacts() and query nodes.
+  const timed = (kind, name, ms, detail) => {
+    try { if (env0.timing) env0.timing(kind, String(name), +(+ms).toFixed(2), detail || ''); } catch (_) { /* timing (or env0 before init) never breaks a run */ }
+  };
   class Outputs extends Map {
     get(k) { const v = super.get(k); return v instanceof Lazy ? v.force() : v; }
   }
@@ -1335,7 +1348,7 @@
         if (codec && !this.memo.has(d) && !opts.force) {
           const sk = storeKey(d, REG.get(n.t)), hit = store.has(sk);
           if (hit) {
-            const lz = new Lazy(() => codec.load(store.load(sk), n.p));
+            const lz = new Lazy(() => codec.load(store.load(sk), n.p), ms => timed('load', n.id, ms, n.t));
             this.memo.set(d, { get value() { return lz.force(); }, count: hit.count, lazy: lz });
             st.stored = true;
           }
@@ -1411,6 +1424,7 @@
           break;
         }
         st.ms = +(now() - t1).toFixed(1);
+        timed('build', n.id, st.ms, n.t + ' · computed' + (st.saved ? ', saved' : ''));
         this.emit({ type: 'node-built', node: n.id, stats: st });
       }
       // bake params of live nodes
@@ -1468,6 +1482,7 @@
       if (missing.length) return null;
       const key = [...dg.values()].map(d => d + (this.memo.has(d) ? '' : '~')).join(',');
       if (this._art && this._art.key === key) return this._art;
+      const tArt = now();
       const byId = new Outputs(); // stored outputs stay unloaded until read (sources usually never are)
       for (const [id, d] of dg) { const m = got(d); byId.set(id, m.lazy && !m.lazy.done ? m.lazy : m.value); }
       const chunks = new Map(), order = new Map(), indexes = new Map(), docNodes = [];
@@ -1502,6 +1517,7 @@
         return links;
       };
       this._art = { key, byId, chunks, order, indexes, synonyms, get docs() { return docsMap(); }, get links() { return linksMap(); } };
+      timed('artifacts', ir.id, now() - tArt, `${chunks.size} chunks · ${indexes.size} indexes (incl. loads)`);
       return this._art;
     }
     session(irOrGetter) { return new Session(this, typeof irOrGetter === 'function' ? irOrGetter : () => irOrGetter); }
@@ -1605,6 +1621,7 @@
           if (e && e.code === 'cancelled') { trace.push(entry); break; }
         }
         entry.ms = +(now() - t1).toFixed(1);
+        timed('run', n.id, entry.ms, `${n.t} · ${entry.status} · ${entry.in}→${entry.out}`);
         entry.calls = counter.calls - c0;
         if (notes.length) entry.notes = notes;
         trace.push(entry);

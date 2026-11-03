@@ -18,6 +18,7 @@ import (
 
 	"github.com/go-go-golems/rag-workbench/pkg/runner"
 	"github.com/go-go-golems/rag-workbench/pkg/store"
+	"github.com/go-go-golems/rag-workbench/pkg/timing"
 )
 
 // appDir resolves a saved app name to its directory.
@@ -82,6 +83,8 @@ func NewVerbsCommand(dir string) (*cobra.Command, error) {
 		return nil, err
 	}
 	invoker := func(ctx context.Context, reg *jsverbs.Registry, verb *jsverbs.VerbSpec, parsed *values.Values) (interface{}, error) {
+		rec := timing.Default
+		rec.Phase("backends (llm, embed, store)")
 		backend, err := LLM()
 		if err != nil {
 			return nil, err
@@ -94,7 +97,8 @@ func NewVerbsCommand(dir string) (*cobra.Command, error) {
 		if err != nil {
 			return nil, err
 		}
-		factory, err := runner.NewFactory(runner.Config{SourceLoader: reg.RequireLoader(), Roots: Roots(dir), Base: dir, JSComponents: JSComponents(), LLM: backend, BuildCalls: BuildCalls(), Embedder: embedder, EmbedCache: embedCache, Artifacts: store})
+		rec.Phase("runtime (goja + modules)")
+		factory, err := runner.NewFactory(runner.Config{SourceLoader: reg.RequireLoader(), Roots: Roots(dir), Base: dir, JSComponents: JSComponents(), LLM: backend, BuildCalls: BuildCalls(), Embedder: embedder, EmbedCache: embedCache, Artifacts: store, Timing: rec})
 		if err != nil {
 			return nil, err
 		}
@@ -103,7 +107,10 @@ func NewVerbsCommand(dir string) (*cobra.Command, error) {
 			return nil, err
 		}
 		defer func() { _ = rt.Close(context.Background()) }()
-		return reg.InvokeInRuntime(ctx, rt, verb, parsed)
+		rec.Phase("verb " + verb.FullPath() + " (require, build, query)")
+		res, err := reg.InvokeInRuntime(ctx, rt, verb, parsed)
+		rec.Phase("output (rows)")
+		return res, err
 	}
 	commands, err := registry.CommandsWithInvoker(invoker)
 	if err != nil {

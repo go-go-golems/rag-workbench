@@ -15,6 +15,7 @@ import (
 	"github.com/go-go-golems/rag-workbench/pkg/llm"
 	"github.com/go-go-golems/rag-workbench/pkg/natives"
 	"github.com/go-go-golems/rag-workbench/pkg/ragjs"
+	"github.com/go-go-golems/rag-workbench/pkg/timing"
 )
 
 // Config is shared by every runtime the CLI creates.
@@ -47,6 +48,8 @@ type Config struct {
 	// later run over an unchanged corpus loads them instead of rebuilding. Open it with
 	// ArtifactNamespace(JSComponents). Nil keeps everything in memory.
 	Artifacts *artifacts.Store
+	// Timing records engine and store timings (ragwb --timings, the serve API). Nil = off.
+	Timing *timing.Recorder
 }
 
 // ArtifactNamespace names the artifact namespace for this binary: the rag.js
@@ -81,10 +84,14 @@ func NewFactory(cfg Config) (*engine.RuntimeFactory, error) {
 	nat = append(nat, &natives.Vectors{Embedder: cfg.Embedder, Cache: cfg.EmbedCache})
 	nat = append(nat, cfg.Natives...)
 	if cfg.Artifacts != nil {
-		nat = append(nat, natives.Persist{Store: cfg.Artifacts})
+		nat = append(nat, natives.Persist{Store: cfg.Artifacts, Timing: cfg.Timing})
+	}
+	var timingFn func(kind, name string, ms float64, detail string)
+	if cfg.Timing.Enabled() {
+		timingFn = cfg.Timing.Add
 	}
 	b := engine.NewRuntimeFactoryBuilder().
-		WithModules(ragjs.Modules(ragjs.Options{Log: logf, Natives: nat, Sample: cfg.LLM, BuildCalls: cfg.BuildCalls})...).
+		WithModules(ragjs.Modules(ragjs.Options{Log: logf, Natives: nat, Sample: cfg.LLM, BuildCalls: cfg.BuildCalls, Timing: timingFn})...).
 		UseModuleMiddleware(engine.MiddlewareExclude(excludedModules...))
 	if cfg.SourceLoader != nil {
 		b = b.WithRequireOptions(require.WithLoader(cfg.SourceLoader))
