@@ -716,3 +716,59 @@ The user asked whether "goja silently ignores `\p{L}`" is a goja bug. It is, tho
 
 ### Technical details
 - Upstream PR: https://github.com/dop251/goja/pull/745 (files: `parser/regexp.go`, `regexp_test.go`).
+
+## Step 14: How to bump goja, and what the bump changes (trial in scratch worktrees)
+
+The user asked how to update goja properly and when it was fixed. The fix is goja commit e1fc788 (PR #745), merged 2026-10-01 12:14:53 UTC, pseudo-version `v0.0.0-20261001121453-e1fc788e4f41`. goja has no tags, so every pin is a commit pseudo-version. Our pin is not really ours: it comes from go-go-goja v0.10.6, the newest tag, whose `main` still requires af2ceb9 (2025-11-03). Both rag-workbench and go-go-goja v0.10.6 build and pass their full test suites on the new goja. The only rag-workbench failure is the D6 canary test, which fails by design.
+
+### Prompt Context
+**User prompt (verbatim):** "how do we update goja in our dependencies properly ? when was it fixed?"
+**Assistant interpretation:** Give the fix date and commit, and a correct dependency-update procedure, tested before recommending it.
+**Inferred user intent:** Pick up the upstream fix without breaking go-go-goja or the JS↔Go parity work.
+**Commit (code):** see the commit right after this entry ("RAGWB-001: goja bump trial …").
+
+### What I did
+- `go mod graph`: rag-workbench requires goja af2ceb9 directly, and go-go-goja v0.10.6 requires the same commit. goja_nodejs f7acab6 requires an older goja (MVS picks the highest).
+- `go list -m -versions github.com/go-go-golems/go-go-goja` → latest is v0.10.6. The local go-go-goja `main` (v0.10.6-23-gc265ae0) still pins af2ceb9.
+- `gh api repos/dop251/goja/compare/af2ceb9156d7...e1fc788e4f41`: 67 commits. From e1fc788 to master (97b96e1, 2026-11-03): 135 more.
+- rag-workbench in a scratch worktree, both candidates: `go get github.com/dop251/goja@<commit> && go mod tidy && go build ./... && go test ./...`.
+- go-go-goja v0.10.6 in a scratch worktree: the same with e1fc788.
+- `scripts/04-ln-class-diff`: counts runes in the vault where `isLN` (the fallback) and `unicode.IsLetter||IsNumber` (what `\p{L}\p{N}` means) disagree.
+- Removed both scratch worktrees afterwards.
+
+### What worked
+- rag-workbench @ e1fc788 (regexp2 v1.11.5 → **regexp2/v2 v2.5.2**): build OK. All packages pass except `pkg/ragjs TestTokenizeWorksInGoja`: "goja unexpectedly supports \p{L}; the fallback can be removed (D6)", the intended canary. `pkg/runner` parity passes (48.6 s).
+- rag-workbench @ 97b96e1 (master; regexp2/v2 v2.11.0, x/text 0.37 → 0.43): the same result.
+- go-go-goja v0.10.6 @ e1fc788: build OK, `go test ./...` all ok (75 s).
+- ln-diff over the vault: 2,374 `.md` files, **54 distinct runes, 122 files** where the classes disagree, all "`\p` only": `²` 236×/48 files, `₁` 134×, `₂` 119×, `³` 60×, `₀` 59×, `ᵢ`, `𝜆`, `ᵀ`, `ℝ`, `⅓`, ….
+
+### What didn't work
+- Nothing failed. The fixture-based parity tests pass after the bump only because the fixtures contain none of these characters, so they don't prove whole-vault parity.
+
+### What I learned
+- Chunk sizing uses `Math.ceil(len/4)` (`rag.js` `tokens`, `chunk.go` `tokens`), not the LN regex. The bump changes BM25 tokens (`rag.js:178`), the RE_NONWORD term matching (`rag.js:408/466`) and gui.js highlighting, but not chunk boundaries. The embedding cache stays valid.
+- Other commits between af2ceb9 and e1fc788 touch semantics our ports mirror:
+  - string comparison by UTF-16 code units (2026-07-23);
+  - `split` on UTF-16 (#718);
+  - the ftoa shortest-mode fix (#720);
+  - `-` next to a class escape (#698);
+  - regexp2 v2.
+  All of these move goja toward browser behavior. Whole-vault hashed parity is the check.
+
+### What was tricky to build
+- Nothing to build. The decision is where to bump: go-go-goja owns the pin for every downstream app, and a bump only in rag-workbench makes go-go-goja run against a goja its own CI never tested.
+
+### What warrants a second pair of eyes
+- The Go ports' string ordering: if any port sorts with Go `<` (byte/code-point order), it can now differ from goja (UTF-16 order) for BMP U+E000–U+FFFF vs astral characters (e.g. U+FE0F vs emoji).
+
+### What should be done in the future
+- Task k4hx. Route A: go-go-goja PR bumping goja, tag v0.10.7, then bump go-go-goja here. Route B: a local stopgap, `go get github.com/dop251/goja@e1fc788e4f41` here. In the same rag-workbench commit as either route:
+  - change `isLN` to `unicode.IsLetter(r) || unicode.IsNumber(r)`;
+  - flip the canary test;
+  - re-run whole-vault hashed parity.
+
+### Code review instructions
+- `scripts/04-ln-class-diff/main.go`: `go run ./ttmp/…/scripts/04-ln-class-diff ~/code/wesen/go-go-golems/go-go-parc`.
+
+### Technical details
+- Pseudo-versions: fix `v0.0.0-20261001121453-e1fc788e4f41`; master on 2026-11-03 `v0.0.0-20261103151521-97b96e1e55f5`; current pin `v0.0.0-20251103141225-af2ceb9156d7`.
