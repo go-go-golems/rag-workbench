@@ -105,3 +105,13 @@ P8 done: build outputs persisted by digest (+component source) with lazy loading
 
 - /home/manuel/code/wesen/go-go-golems/rag-workbench/pkg/artifacts/store.go — artifact store
 - /home/manuel/code/wesen/go-go-golems/rag-workbench/pkg/natives/persist.go — env.artifacts bridge and codecs
+
+## 2026-11-03
+
+P7: ragwb serve — apps open once in a long-lived runtime (app.js {app} or *.wb.js), /api/rag sessions with packed chunk bodies, RemoteRag app shell, per-run timing split; source.dir digest TTL. Vault: warm open 2.2 s, median query round trip 14.7 ms (commit 62df485)
+
+### Related Files
+
+- /home/manuel/code/wesen/go-go-golems/rag-workbench/pkg/runner/serve.go — serve harness and ServedApp
+- /home/manuel/code/wesen/go-go-golems/rag-workbench/pkg/server/rag.go — /api/rag routes
+- /home/manuel/code/wesen/go-go-golems/rag-workbench/web/app-shell/shell.js — RemoteRag host

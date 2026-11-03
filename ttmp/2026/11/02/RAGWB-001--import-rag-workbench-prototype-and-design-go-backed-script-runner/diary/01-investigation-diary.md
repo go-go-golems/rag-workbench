@@ -1389,3 +1389,103 @@ For a warm `parc search` over the whole vault, 2.06 of 2.2 s is `artifacts()`. T
 ### Code review instructions
 - `pkg/timing/timing.go`; rag.js `timed`, `Lazy`; `cmd/ragwb/main.go`; the invoker in `cmd/ragwb/cmds/verbs.go`.
 - Validate: `ragwb --timings --root <vault> --store /tmp/s verbs --dir examples/apps/parc parc search "rebalance law"`, run twice.
+
+## Step 24: P7 `ragwb serve`: the vault searches in a browser at a 14.7 ms median round trip
+
+This step implements P7. `ragwb serve <app>...` opens each app once in a long-lived goja runtime: it builds or loads the plan and loads the artifacts, then keeps the rag `Session`. A page at `/apps/<name>/` mounts the app's gui with a `host.rag` that calls that session over HTTP (the guide's "RemoteRag", §9.8).
+
+On the whole parc vault (85,882 chunks), a warm open takes 2.2 s. After that, 16 typed queries had a median round trip of 14.7 ms and a maximum of 45 ms, against the P7 target of < 100 ms. The first measurement was 43 ms. The timing split added in step 23 showed why: the source digest re-walked the vault twice per query.
+
+### Prompt Context
+**User prompt (verbatim):** see Step 23. "Ok, do it" is P7; the timing part was step 23.
+**Assistant interpretation:** Build `/api/rag` sessions, RemoteRag and `ragwb serve <app>`, measure typing latency on the vault, and show per-query timings.
+**Inferred user intent:** Small RAG apps over the vault that answer as fast as one types, without paying the 2 s load per query.
+**Commit (code):** `62df485`.
+
+### What I did
+- **What gets served (`runner.OpenApp`):**
+  - An app directory whose `app.js` exports `{ app }` (`examples/apps/reports/app.js` already anticipated "served by `ragwb serve`"), or a `*.wb.js` workbench script returning `{ plan, app? }`.
+  - The app's gui IR only records the plan *id* (`uses.plan`), so `gui.app(...).use(plan)` now also keeps the plan object as a non-enumerable `plan` property, kept out of the IR. A script without an app gets `kit.searchApp(plan)`.
+  - Added `examples/apps/parc/app.js` (lexical vault plan, facets type/tags/status, no answer panel).
+- **Serve harness (JS in the kept runtime):**
+  - It evaluates the app, compiles and builds the plan, then calls `eng.artifacts(ir)` at open so the 2 s of loads happen before the first keystroke. It installs `globalThis.__serve = { run, chunk, doc }`.
+  - `run` returns the plain result fields: `result.toJSON` is the compact log form, so it can't be used. It also returns **the bodies of every chunk any output mentions** (including answer evidence), plus `{prev, next}` for the first 40 hits and the bodies of those neighbors.
+- **`pkg/server/rag.go` (`RagServer`):**
+  - `GET /api/rag`, `GET /api/rag/{app}` (ir, gui IR, build, stats), `POST /api/rag/{app}/run` (`?stream=1` gives NDJSON text frames and then the result), `GET …/chunk?id=`, `…/doc?id=` (metadata, no text), `…/timings` (recorder entries), `/apps/{app}/`, `/app-shell.js`, `/gui.css`.
+  - Every run response gets `timing: {engineMs, packMs, evalMs, totalMs, bytes, chunks}`, appended to the JS JSON without re-marshalling, and the server logs one line per query.
+- **`web/app-shell`:**
+  - `host.rag` serves `chunk`, `neighbors` and `doc` synchronously from the cache.
+  - A miss returns null, fetches in the background and re-renders. Known-missing ids are remembered, so a bad id can't loop.
+  - Results are decorated with `chunk`, `top` and `explain` (`rag.explain` runs in the page).
+  - The footer shows the per-run split and the median round trip.
+- **`web.GuiCSS`:** cuts the gui stylesheet from the workbench page's `<style>`: the base section up to `/* app frame */`, plus `/* generative UI */` up to `/* agent */`. Both pages share one source, and a test pins the markers.
+- **`ragwb serve` command:**
+  - It accepts an argument as a path or as an app name in `$RAGWB_APPS`. One factory and timing recorder per app; `--timings` prints the open breakdown.
+  - Flags: `--watch`, `--files`, `--quiet`, `--open-timeout`.
+- **`natives.SourceDir.DigestTTL`** (`runner.Config.SourceDigestTTL`): serve snapshots the source tree at open; `--watch 5s` re-checks at most every 5 s.
+- **Tests:**
+  - `pkg/runner/serve_test.go`: module form, script form with default app, packed neighbors, chunk miss.
+  - `pkg/server/rag_test.go`: every route, a filter signal, the NDJSON stream, assets.
+  - `web/embed_test.go`; `pkg/natives/sourcedir_ttl_test.go`.
+
+### Why
+- §9.8 named the tricky part: the gui calls `host.rag.chunk(id)` synchronously while rendering. Packing bodies into each run response makes the common path synchronous. The background-fetch path covers the rest, such as walking ← → beyond the prefetched neighbors.
+- Step 23 showed that a CLI query is 2.06 s of loading and 1.7 ms of query, so a process that keeps the loaded artifacts is the way to make apps interactive.
+
+### What worked
+- **Reports app** (`ragwb serve examples/apps/reports`): first open 0.28 s (build 206 ms), second open 0.05 s with 5/5 nodes from the store. Query server time 13 ms; round trip 23 ms in the browser. Screenshot: `various/p7-serve-reports.png`.
+- **Vault, warm open** (`ragwb --timings --root ~/…/go-go-parc serve examples/apps/parc`): 2.15 s and 1.4 GB RSS. Of that, artifacts 2.09 s: chunks 1.22 s (decode 1.17 s, 136 MB), ix-meta 446 ms, ix-text 285 ms.
+- **Vault queries** (`scripts/05-serve-latency-bench.py`, 16 queries: typed prefixes of "obsidian vault search" plus five full queries and two zero-hit ones):
+
+| | before the TTL | after |
+|---|---|---|
+| engine (Session.run) | 5–28 ms | 7–40 ms |
+| pack | ~16.5 ms | ~0.9 ms |
+| eval (whole runtime call) | 38–62 ms | 8–43 ms |
+| round trip median / max | 43.3 / 64.3 ms | **14.7 / 45.5 ms** |
+| payload | 80–127 KB for 10 hits (35–50 chunk bodies) | same |
+
+- **Browser on the vault:**
+  - Typing "goja unicode regexp" one character per 60 ms ran 2 queries (the gui's 140 ms debounce), not 19.
+  - Clicking the `go` tag facet re-ran with `filters: {tags:["go"]}` and returned 6 results in a 21 ms round trip.
+  - Screenshot: `various/p7-serve-parc.png`.
+- **LLM path** (`--llm lunaroute --files examples/apps/reports/corpus serve answer-first.wb.js`, the preset copied as a `.wb.js`):
+  - Enter gave an answer citing E1 in 6.5 s; clicking the citation opened the section.
+  - A curl of `?stream=1` returned one text frame, then the result. LunaRoute delivers the text in one piece, so there is nothing to stream; the plumbing is the same either way.
+- `go test ./... -count=1`: ok. `make lint`: ok.
+
+### What didn't work
+- **Walking "next →" stopped after one step.** A prefetched neighbor arrives with its body but without its own `{prev, next}`. `neighbors(id)` only fetched when the *body* was missing, so it returned `{prev:null,next:null}` and the button was disabled. Fix: a missing neighbors entry fetches `/chunk?id=` too. After the fix, 6 × next and 2 × prev walked `5-9-the-rebalance-law` → … → `6-the-react-shell-cutover-4` and back.
+- **The first vault queries spent 16 ms in `pack` with 0 hits.**
+  - `pack` calls `eng.artifacts(ir)`, and so does `Session.run`, before its own clock starts.
+  - `artifacts()` calls `digests(ir)`, and `source.dir`'s digest hook (`SourceDir.Digest`) walks and stats all of the vault's files: about 16 ms, twice per query.
+  - Fix: `DigestTTL`, effectively forever by default in serve.
+- **The first vault open rebuilt everything** (0/5 from the store, 17.8 s, 3.9 GB RSS). The vault had changed since step 23, so the source digest changed. This is the store working as intended.
+- **Killing the old server** with `kill $(pgrep -f "serve --addr 127.0.0.1:8793")` killed the calling shell (exit 144): `pgrep -f` matched its own command line. This is the same trap as before; I kill by the recorded pid now.
+- **Test bug:** `TestRagServerRoutes` built `…/chunk?id=<id>` without escaping. Chunk ids contain `#`, which the URL treats as a fragment, so the server got an empty id. The test now uses `url.QueryEscape`. The shell already used `encodeURIComponent`.
+
+### What I learned
+- With artifacts resident, the remaining per-query cost is mostly fixed overhead around the engine, not retrieval. Checking whether the source changed (16 ms) cost more than retrieving from 85k chunks (≈7 ms).
+- Sending chunk bodies with each run costs about 100 KB per keystroke on the vault. That is fine on loopback; on a network, the shell could send the ids it already has.
+
+### What was tricky to build
+- **Where the plan comes from.** `gui.AppSpec.use(plan)` stores only the id, because the IR has to be JSON. Exporting both `app` and `plan` would have worked but duplicates intent. A non-enumerable back-reference keeps the IR unchanged (and so the digest), while `app.plan` works in the harness.
+- **NDJSON streaming from the runtime.** The `onText` callback runs on the runtime's owner goroutine while the handler goroutine waits in `ragjs.Eval`. A mutex serializes the writes, and the final write happens under the same lock. Frames are throttled to 50 ms; the text is cumulative, so dropped frames lose nothing.
+- **Splicing `timing` into the response** without re-marshalling the 100+ KB of JSON: trim the closing `}` and append. For a stream, the result line becomes `{"type":"result",…}` in the same way.
+
+### What warrants a second pair of eyes
+- Runs on one app share one runtime. JS never runs concurrently, but a slow LLM run and a typing run interleave through promise awaits, and an aborted fetch does not cancel the server-side run (no `signal` is passed into the JS run).
+- `host.rag.chunks(f)` and `docs()` return only what the page has seen, not the corpus. User lambdas that scan all chunks behave differently in the shell than in the workbench.
+- `/api/rag` has no auth. It is meant for loopback (the default `--addr 127.0.0.1:8791`).
+
+### What should be done in the future
+- `--watch` rebuilds inside the query that notices the change. On the vault that is a long rebuild in one request. A background rebuild with a swap would be better.
+- The `dag` component needs `host.renderDag`, which the shell doesn't provide, so it renders empty. The trace table works.
+- Optional: `ragwb workbench --serve <app>` to mount the same routes in the workbench server.
+
+### Code review instructions
+- Start with `pkg/runner/serve.go` (`serveHarness`, `OpenApp`), then `pkg/server/rag.go` (`handleRun`), then `web/app-shell/shell.js` (`fetchMiss`, `decorate`, `run`).
+- Validate:
+  - `go test ./pkg/runner ./pkg/server ./web -run 'Serve|RagServer|GuiCSS'`
+  - `ragwb serve examples/apps/reports`, then open http://127.0.0.1:8791/
+  - for the vault: `ragwb --root ~/code/wesen/go-go-golems/go-go-parc serve examples/apps/parc`
