@@ -2,7 +2,7 @@
 
 ## TODO
 - [x] D1 engine strategy decided in guide: rag.js engine + Go-native heavy nodes (status proposed) <!-- t:x2mh -->
-- [ ] Upstream goja issue/PR for \p{..} property escapes; drop LN fallback when fixed (feature-detect fix landed in P1) <!-- t:k4hx -->
+- [ ] Bump goja past e1fc788 (upstream PR #745 fixed \p{..} under /u); switch natives isLN to unicode.IsLetter||IsNumber in the same change; re-run parity <!-- t:k4hx -->
 - [x] P0 scaffold: go.mod, cmd/ragwb, Makefile, vendored assets, examples <!-- t:k1ny -->
 - [x] P1 ragwb module: rag.js/gui.js/kit.js as goja modules, D6 fix, headless run + presets sweep <!-- t:08l0 -->
 - [x] P2 jsverbs: ragwb verbs --dir with ragwb runtime; split-file examples/apps/reports <!-- t:1y8c -->

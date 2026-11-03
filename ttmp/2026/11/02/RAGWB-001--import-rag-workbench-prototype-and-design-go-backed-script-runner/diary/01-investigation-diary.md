@@ -667,3 +667,52 @@ The ported workbench now runs from `ragwb workbench`: the claude.ai page (unchan
 
 ### Technical details
 - SSE event payloads: `call {id}`, `text {text, delta}`, `tool {use, name, input}`, `result {text, truncated, modelTierApplied, json?}`, `error {code, message, text?}`.
+
+## Step 13: Is the `\p{L}` behavior a goja bug? Yes, and it is fixed upstream after our pin
+
+The user asked whether "goja silently ignores `\p{L}`" is a goja bug. It is, though "ignores" was the wrong word. goja translates JS regex syntax to RE2 in `parser/regexp.go` `scanEscape`, which had no case for `\p`/`\P`. Its default branch treats `p` as an identity escape and drops the backslash, so `[\p{L}\p{N}_]` becomes the literal class `[p{L}{N}_]`. That is correct Annex B behavior without the `u` flag, but with `u` the spec requires a property escape or a SyntaxError. goja did neither and accepted `\p{NotAProperty}`. The fix, goja PR #745 (merged 2026-10-01, commit e1fc788), hands `\p`/`\P` under `u` to regexp2. Our pin, `v0.0.0-20251103141225-af2ceb9156d7`, predates it. On goja master every probe gives the spec answer.
+
+### Prompt Context
+**User prompt (verbatim):** "goja silently ignores \p{L} in regexes, which made every search return 0 hits. All 29 presets plus pipeline.js run headless. Scores match the browser: the textbook's 12.6758, and the reports preset finds 11 of 12 golden questions, as in the original session.  --- ^-- is this a bug in goja?"
+**Assistant interpretation:** Decide whether the D6 regex problem is a goja defect or expected behavior, with evidence.
+**Inferred user intent:** Know whether to work around it permanently, report it upstream, or upgrade.
+**Commit (code):** see the commit right after this entry ("RAGWB-001: goja \p probe …").
+
+### What I did
+- Read `scanEscape` in the pinned goja (`parser/regexp.go` lines 252–420). There is no `p`/`P` case; the default branch "Unescape[s] the character for re2" via `self.pass()`.
+- Found `"regexp-unicode-property-escapes"` in the `featuresBlackList` in `tc39_test.go`: a known, skipped test262 feature at our pin.
+- Rewrote `scripts/02-goja-regex-probe/main.go` as a focused probe: 7 expressions (the tokenizer case, literal-`p` evidence, `.source`, an unknown property under `u`, Annex B `\p` without `u`).
+- Searched upstream: `gh pr list -R dop251/goja --state all --search property` → #745 "Pass Unicode property escapes on to regexp2 in unicode mode", MERGED. #715 (a different approach) was closed.
+- Ran the same probe against goja master in a scratch module (`go get github.com/dop251/goja@master` → `v0.0.0-20261103151521-97b96e1e55f5`).
+
+### What worked
+| probe | pinned (af2ceb9) | master (97b96e1) |
+|---|---|---|
+| `"rebalance law".match(/[\p{L}\p{N}_]+/gu)` | `null` | `["rebalance","law"]` |
+| `"apple {LN} pie".match(/[\p{L}\p{N}_]+/gu)` | `["pp","{LN}","p"]` | `["apple","LN","pie"]` |
+| `"p{L}".match(/^\p{L}$/u)` | `["p{L}"]` | `null` |
+| `"é".match(/^\p{L}$/u)` | `null` | `["é"]` |
+| `new RegExp("\\p{NotAProperty}","u")` | accepted | throws SyntaxError |
+| `"pp".match(/\p/g)` (no `u`) | `["p","p"]` | `["p","p"]` (correct, Annex B) |
+
+### What didn't work
+- `gh search issues --repo dop251/goja "property escapes"` and several variants returned nothing. `gh pr list --search property` found the PR.
+
+### What I learned
+- The bug was easy to miss because the same translation is correct without `u` and silently wrong with it. The second probe row shows the mechanism directly: it matches the characters `p`, `{`, `L`, `N`, `}`.
+- Per the PR, valid names regexp2 doesn't support yet (e.g. `\p{Script=Latin}`) now throw instead of matching nothing (dlclark/regexp2#113). rag.js only uses `\p{L}` and `\p{N}`.
+
+### What was tricky to build
+- Nothing to build. The trap is the parity coupling below.
+
+### What warrants a second pair of eyes
+- **Bumping goja changes tokenization.** rag.js feature-detects `\p` (D6), so after a bump it switches to the real Unicode classes. But the Go port's `isLN` (`pkg/natives/bm25.go:28`) mirrors the *fallback* ranges, so JS↔Go parity would break on any letter or number outside them (e.g. Latin Extended Additional, Devanagari, Thai, `²`). The bump must switch `isLN` to `unicode.IsLetter(r) || unicode.IsNumber(r)` in the same change. That also matches the browser, which always had `\p`.
+
+### What should be done in the future
+- Task k4hx: no upstream report needed. Bump goja past e1fc788, check go-go-goja v0.10.6 still builds against it, change `isLN`, and re-run the parity suite, including whole-vault hashed parity. The D6 detection can stay as a harmless guard.
+
+### Code review instructions
+- `scripts/02-goja-regex-probe/main.go`; run `go run .` in that directory (pinned goja). To compare against master, copy it into a scratch module and `go get github.com/dop251/goja@master`.
+
+### Technical details
+- Upstream PR: https://github.com/dop251/goja/pull/745 (files: `parser/regexp.go`, `regexp_test.go`).
