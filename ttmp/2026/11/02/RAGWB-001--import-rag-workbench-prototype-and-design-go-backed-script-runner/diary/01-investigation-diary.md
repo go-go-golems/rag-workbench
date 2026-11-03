@@ -458,3 +458,70 @@ There was one mistake with consequences. While locating the key I printed a reda
 ### Technical details
 - Rerank request: `{model, query, documents[], top_n, return_documents}`. A long query reduces each document's share of the 8192-token pair limit.
 - Embeddings: unknown fields are rejected, so send only `model`, `input`, and optionally `dimensions` / `encoding_format`.
+
+## Step 10: P9 — the claude.ai `sample` contract on LunaRoute; LLM nodes, tool loops and build-time enrichment run headless
+
+I implemented `pkg/llm`: the sample contract types, a LunaRoute/OpenAI-compatible client with a bounded tool loop, embeddings and rerank clients, and a deterministic fake. I then bridged it into the `ragwb` module as `env.sample`, so rag.js's own `ctx.sample`/`ctx.sample.json` work unchanged. Every LLM component in the prototype now runs from the CLI against real models:
+
+- the reports preset's rewrite → rerank.llm → answer (3 calls, 11 s, correctly cited);
+- the agentic preset's tool loop (the model calls the JS `search`/`read` tools, 10 s, correct root cause with two citations);
+- doc-cards' build-time `enrich.llm` (11 summaries in 21.8 s with `--build-calls`).
+
+All 30 presets also run with `--trigger submit` on the fake backend without errors.
+
+### Prompt Context
+**User prompt (verbatim):** see Step 9 (LunaRoute for embeddings/rerank/LLM, the key via Pi).
+**Assistant interpretation:** Make LLM nodes executable headless against LunaRoute, keeping the claude.ai `sample` semantics the prototype is written against.
+**Inferred user intent:** Test the real LLM behavior of pipelines, not just lexical retrieval.
+**Commit (code):** see the commit right after this entry ("RAGWB-001 P9: …").
+
+### What I did
+- One more probe before coding: can GLM's reasoning be switched off for the `quick` tier? `thinking: {type: "disabled"}`, `chat_template_kwargs: {enable_thinking: false}` and `reasoning_effort: "none"` are all **accepted but ignored**: each still spent all 60 tokens on `reasoning_content` and returned empty content (`finish_reason: length`). A model comparison for a 12-character JSON reply: `muse-spark-open` 0.58 s (16 reasoning tokens), `deepseek-4.1-flash` 3.15 s (no reasoning), `glm-5.3-flash` 2.37 s (131 reasoning tokens), `glm-5.3` 20.8 s. `clef-flash` → HTTP 400 `CAPABILITY_UNSUPPORTED` (a System One decision model).
+  - Tier defaults (overridable with `--llm-quick/--llm-default/--llm-complex`): quick `muse-spark-open`, default `glm-5.3-flash`, complex `glm-5.3`. `max_tokens` budgets 2048 / 8192 / 16384, because reasoning shares the budget.
+- `pkg/llm/llm.go`: `Turn`, `Tool`, `ToolCall`, `ToolResult`, `Request`, `Result{text, truncated, modelTierApplied, modelApplied}`, `Failure{code, message, text}`. `NormalizeTurns` (user first and last, same-role merge, no system role). `ParseJSON` (whole reply → code fence → first `{`/`[` … last `}`/`]`). `MaxInputBytes` = 256 KiB.
+- `pkg/llm/lunaroute.go`: `LoadLunaRouteKey` (`$LUNAROUTE_API_KEY`, then Pi `models.json`, never logged). `Client.Sample` (OpenAI chat with tools; rounds separated by a blank line for `onText`; the last round is forced to answer without tools; `finish_reason: length` → `truncated`; empty content → `empty_completion` with a note when reasoning ate the budget). `Embed` (batches of 64, empty strings replaced by a space since the API rejects them, reordered by `index`). `Rerank` (Cohere v2). HTTP errors are mapped to sample codes, and the key is scrubbed from bodies.
+- `pkg/llm/fake.go`: deterministic answers. It calls the first offered tool once, and JSON-ish prompts get JSON.
+- `pkg/ragjs/sample.go`: the JS half normalizes input, wraps tools (`Promise.resolve().then(execute)`, so throwing tools become `{value, isError}` tool results), and parses JSON with `JSON.parse`. The Go half runs `backend.Sample` on a goroutine and settles the promise with `runtimebridge.Lookup(vm).PostWithLifetimeContext`. Tool calls are posted to the loop, their (possibly async) results are awaited through `then`, and they're handed back on a channel. `onText` is posted fire-and-forget.
+- `ragjs.Options{Sample, BuildCalls}` → `rag.configure({sample, buildCalls})`. `runner.Config{LLM, BuildCalls}`. CLI: `--llm none|fake|lunaroute`, `--llm-quick|default|complex`, `--build-calls`.
+- Tests: `pkg/ragjs/sample_test.go` (through rag's own `engine.sampler`: string, turns, fenced `sample.json`, tool input passed through, throwing tool tolerated, `invalid_request` as a plain object, `onText`). `pkg/llm/llm_test.go` (ParseJSON, NormalizeTurns, plus opt-in live tests under `RAGWB_LIVE_LLM=1`).
+
+### Why
+- I kept the sample contract rather than exposing geppetto/OpenAI directly to scripts. rag.js's LLM nodes and the workbench agent are written against it. The same Go `Backend` will serve the browser's `/_rt/sample` in P5, slop-computer style.
+- I chose a direct HTTP client over geppetto for this slice: LunaRoute is OpenAI-compatible, the tool loop is about 60 lines, and the probes pinned down the exact response shape. Geppetto profiles/engines can implement `llm.Backend` later. This deviates from guide §9.6 and is recorded here as a proposed amendment.
+
+### What worked
+- `go test ./pkg/ragjs -run Sample` → pass. `RAGWB_LIVE_LLM=1 go test ./pkg/llm -run Live -v`: tool loop `rounds=2 usage={PromptTokens:362 CompletionTokens:66 ReasoningTokens:52} text="vermilion"` (1.4 s). Embeddings 768-d, cos(related) 0.945 vs cos(unrelated) 0.744. Rerank `[{Index:1 Score:0.256} {Index:0 Score:1.6e-05}]`.
+- `ragwb --llm lunaroute run examples/presets/reports.js --files examples/apps/reports/corpus --trigger submit --q "What does the rebalance law say?"` → calls 3, 11.3 s wall. Trace: rewrite 1657 ms (1→4 queries), text/meta/failures_2 retrieval, fuse 3→41, rerank 4771 ms (41→1), neighbors, pack, answer 2247 ms. The answer explains `preservesPlacements`/`planRebalance` with `[E1]` citations.
+- `ragwb --llm lunaroute run examples/presets/agentic.js … --q "Why did the browser ECS service restart in a loop after the shared-image deploy?"` → 10.3 s. The answer identifies the Go typed-nil verifier, citing [E1] and [E2].
+- `ragwb --llm lunaroute --build-calls run examples/presets/doc-cards.js … --q "customer segmentation"` → `enrich_llm` 11 items in 21,806 ms, `pending: []`. Top 3 hits come from the TTC customer clustering report.
+- `ragwb --llm fake presets --trigger submit` → 30/30 ok, no errors.
+- `make lint` and `go test ./...` → all ok.
+
+### What didn't work
+- The thinking-off controls (above) have no effect on LunaRoute's GLM. Worked around with tier budgets and model choice.
+- No other failures in this step.
+
+### What I learned
+- The agentic trace still reports `calls 1` for a multi-round tool loop. That's the prototype's known accounting gap: `engine.sampler` counts one call per `sample()`. `llm.Result.Rounds` and `Usage` now exist on the Go side but aren't surfaced to rag's counter yet.
+- `doc-cards` with `--build-calls` produced correct results immediately. The prototype's "stale index after Build" bug is a workbench-session effect (deferred, then built later in the same engine), which a fresh headless build doesn't hit.
+
+### What was tricky to build
+- **Promises across goroutines.** Native loaders only receive `vm`. `runtimebridge.Lookup(vm)` provides the owner services, and every touch of the VM from the HTTP goroutine (settle, `onText`, tool calls) goes through `PostWithLifetimeContext`. Tool results can themselves be promises (an async `execute`), so the posted closure calls the returned value's `then` with Go callbacks that write to a buffered channel. The goroutine then selects on that channel and on `ctx.Done()`.
+- **Thrown vs. failed.** The prototype's agentic tools *throw* to tell the model about bad ids and budget limits. Those must become tool results the model can read. Only transport and backend errors reject the `sample()` promise.
+
+### What warrants a second pair of eyes
+- If the runtime closes while an HTTP call is in flight, the settle `Post` fails silently. That's fine for the CLI, but the server should cancel in-flight calls on session close.
+- No response caching yet. The claude.ai platform caches identical calls for 5 min by default, and rag.js passes `cache: {gcTime}` for `enrich.llm`. Repeated headless builds therefore re-spend calls. An item cache (`env.cache`, an engine hook) or a request cache belongs with P8 persistence.
+- The tier models are my choice from one tiny probe each. Answer quality per tier hasn't been evaluated.
+
+### What should be done in the future
+- Surface `Rounds`/`Usage` in run reports. Add a request cache.
+- P8: `embed` + `index.vector` + `rerank.model` components on `emb-granite` / `bge-rr-v2-m3`, with persistence.
+- Amend guide §9.6 / D4 to record the direct-HTTP Backend (geppetto optional).
+
+### Code review instructions
+- `pkg/ragjs/sample.go` (JS half: `sampleJS`; Go half: `newSample` → `exec`, settle goroutine), `pkg/llm/lunaroute.go` (`Sample` loop, `post` error mapping), `pkg/llm/llm.go` (`ParseJSON`).
+- Validate: `go test ./...`; `RAGWB_LIVE_LLM=1 go test ./pkg/llm -run Live -v`; `./dist/ragwb --llm lunaroute run examples/presets/reports.js --files examples/apps/reports/corpus --trigger submit --q "What does the rebalance law say?"`.
+
+### Technical details
+- The JS-visible contract: `sample(input, {modelTier, model, onText({text, delta}), tools[{name, description, inputSchema, execute(input, {signal})}], signal})` → `{text, truncated, modelTierApplied, modelApplied?}`. `sample.json(...)` → the parsed value or `{code: 'invalid_json', text}`. `sample.limits()` → `{tools: {maxCount: 16}}`.

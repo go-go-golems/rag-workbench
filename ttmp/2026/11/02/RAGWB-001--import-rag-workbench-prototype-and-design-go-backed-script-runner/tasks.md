@@ -12,4 +12,4 @@
 - [ ] P6 app store: apps dir + history API; agent wb.save/load <!-- t:bhly -->
 - [ ] P7 remote pipeline: /api/rag sessions, RemoteRag, ragwb serve <app> <!-- t:i5j5 -->
 - [ ] P8 persistence + vectors: artifact store by digest, bleve index, embeddings + sqliteexact <!-- t:f6cl -->
-- [ ] P9 server-side LLM nodes: ctx.sample on geppetto <!-- t:jlcq -->
+- [x] P9 server-side LLM nodes: ctx.sample on geppetto <!-- t:jlcq -->

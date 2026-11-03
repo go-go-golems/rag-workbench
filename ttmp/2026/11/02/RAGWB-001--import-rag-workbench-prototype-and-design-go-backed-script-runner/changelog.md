@@ -39,3 +39,12 @@ P4: Go ports of parse.markdown, chunk.sections, index.bm25 under original type n
 - /home/manuel/code/wesen/go-go-golems/rag-workbench/pkg/natives/bm25.go — Go port of tokenize/stem/Bm25Index
 - /home/manuel/code/wesen/go-go-golems/rag-workbench/pkg/natives/markdown.go — Go port of parseMarkdown with ranges
 - /home/manuel/code/wesen/go-go-golems/rag-workbench/pkg/runner/bm25_parity_test.go — JS-vs-Go parity tests
+
+## 2026-11-02
+
+P9: llm package (sample contract, LunaRoute client with tool loop, embeddings, rerank, fake) bridged as rag env.sample; reports/agentic/doc-cards LLM presets run headless against LunaRoute; --llm/--build-calls flags
+
+### Related Files
+
+- /home/manuel/code/wesen/go-go-golems/rag-workbench/pkg/llm/lunaroute.go — LunaRoute chat/embeddings/rerank client
+- /home/manuel/code/wesen/go-go-golems/rag-workbench/pkg/ragjs/sample.go — sample contract bridge (promises across goroutines)

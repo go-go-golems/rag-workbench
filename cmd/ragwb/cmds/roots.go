@@ -1,14 +1,20 @@
 package cmds
 
 import (
+	"fmt"
 	"os"
 
 	"github.com/spf13/cobra"
+
+	"github.com/go-go-golems/rag-workbench/pkg/llm"
 )
 
 var (
 	extraRoots   []string
 	jsComponents bool
+	llmName      string
+	llmTiers     = llm.DefaultTiers()
+	buildCalls   bool
 )
 
 // AddGlobalFlags registers persistent flags shared by run, presets and verbs.
@@ -16,7 +22,34 @@ func AddGlobalFlags(root *cobra.Command) {
 	AddRootsFlag(root)
 	root.PersistentFlags().BoolVar(&jsComponents, "js-components", false,
 		"Use rag.js's own parse.markdown, chunk.sections and index.bm25 instead of the Go ports (parity debugging)")
+	f := root.PersistentFlags()
+	f.StringVar(&llmName, "llm", "none", "LLM backend for LLM nodes: none, fake, lunaroute (key: $LUNAROUTE_API_KEY or Pi's ~/.pi/agent/models.json)")
+	f.StringVar(&llmTiers.Quick, "llm-quick", llmTiers.Quick, "Model for modelTier 'quick'")
+	f.StringVar(&llmTiers.Default, "llm-default", llmTiers.Default, "Model for modelTier 'default'")
+	f.StringVar(&llmTiers.Complex, "llm-complex", llmTiers.Complex, "Model for modelTier 'complex'")
+	f.BoolVar(&buildCalls, "build-calls", false, "Let LLM-costing build nodes (enrich.llm, doc cards) run instead of deferring them")
 }
+
+// LLM returns the backend selected by --llm (nil for "none").
+func LLM() (llm.Backend, error) {
+	switch llmName {
+	case "", "none":
+		return nil, nil
+	case "fake":
+		return &llm.Fake{}, nil
+	case "lunaroute":
+		c, err := llm.NewLunaRoute()
+		if err != nil {
+			return nil, err
+		}
+		c.Tiers = llmTiers
+		return c, nil
+	}
+	return nil, fmt.Errorf("unknown --llm %q (none, fake, lunaroute)", llmName)
+}
+
+// BuildCalls reports --build-calls.
+func BuildCalls() bool { return buildCalls }
 
 // JSComponents reports the --js-components flag.
 func JSComponents() bool { return jsComponents }

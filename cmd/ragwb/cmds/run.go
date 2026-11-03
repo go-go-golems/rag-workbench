@@ -66,7 +66,11 @@ func NewRunCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			factory, err := runner.NewFactory(runner.Config{Verbose: f.verbose, Roots: Roots(), JSComponents: JSComponents()})
+			backend, err := LLM()
+			if err != nil {
+				return err
+			}
+			factory, err := runner.NewFactory(runner.Config{Verbose: f.verbose, Roots: Roots(), JSComponents: JSComponents(), LLM: backend, BuildCalls: BuildCalls()})
 			if err != nil {
 				return err
 			}
@@ -98,7 +102,11 @@ func NewPresetsCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			factory, err := runner.NewFactory(runner.Config{Verbose: f.verbose, Roots: Roots(), JSComponents: JSComponents()})
+			backend, err := LLM()
+			if err != nil {
+				return err
+			}
+			factory, err := runner.NewFactory(runner.Config{Verbose: f.verbose, Roots: Roots(), JSComponents: JSComponents(), LLM: backend, BuildCalls: BuildCalls()})
 			if err != nil {
 				return err
 			}

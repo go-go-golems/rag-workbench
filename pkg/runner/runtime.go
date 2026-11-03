@@ -9,6 +9,7 @@ import (
 	"github.com/dop251/goja_nodejs/require"
 	"github.com/go-go-golems/go-go-goja/pkg/engine"
 
+	"github.com/go-go-golems/rag-workbench/pkg/llm"
 	"github.com/go-go-golems/rag-workbench/pkg/natives"
 	"github.com/go-go-golems/rag-workbench/pkg/ragjs"
 )
@@ -31,6 +32,10 @@ type Config struct {
 	JSComponents bool
 	// Natives are extra Go-backed components installed into every ragwb module instance.
 	Natives []ragjs.Native
+	// LLM backs ctx.sample for LLM nodes (nil = LLM nodes unavailable).
+	LLM llm.Backend
+	// BuildCalls allows LLM-costing build nodes to run during build.
+	BuildCalls bool
 }
 
 // excludedModules are default go-go-goja modules scripts must not get.
@@ -49,7 +54,7 @@ func NewFactory(cfg Config) (*engine.RuntimeFactory, error) {
 	}
 	nat = append(nat, cfg.Natives...)
 	b := engine.NewRuntimeFactoryBuilder().
-		WithModules(ragjs.Modules(ragjs.Options{Log: logf, Natives: nat})...).
+		WithModules(ragjs.Modules(ragjs.Options{Log: logf, Natives: nat, Sample: cfg.LLM, BuildCalls: cfg.BuildCalls})...).
 		UseModuleMiddleware(engine.MiddlewareExclude(excludedModules...))
 	if cfg.SourceLoader != nil {
 		b = b.WithRequireOptions(require.WithLoader(cfg.SourceLoader))

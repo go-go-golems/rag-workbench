@@ -66,7 +66,11 @@ func NewVerbsCommand(dir string) (*cobra.Command, error) {
 		return nil, err
 	}
 	invoker := func(ctx context.Context, reg *jsverbs.Registry, verb *jsverbs.VerbSpec, parsed *values.Values) (interface{}, error) {
-		factory, err := runner.NewFactory(runner.Config{SourceLoader: reg.RequireLoader(), Roots: Roots(dir), Base: dir, JSComponents: JSComponents()})
+		backend, err := LLM()
+		if err != nil {
+			return nil, err
+		}
+		factory, err := runner.NewFactory(runner.Config{SourceLoader: reg.RequireLoader(), Roots: Roots(dir), Base: dir, JSComponents: JSComponents(), LLM: backend, BuildCalls: BuildCalls()})
 		if err != nil {
 			return nil, err
 		}

@@ -14,6 +14,8 @@ import (
 
 	"github.com/dop251/goja"
 	"github.com/go-go-golems/go-go-goja/pkg/engine"
+
+	"github.com/go-go-golems/rag-workbench/pkg/llm"
 )
 
 //go:embed assets/rag.js assets/gui.js assets/kit.js
@@ -83,6 +85,12 @@ type Options struct {
 	// Natives are installed into the rag object right after it is created, before
 	// any script sees it. Use them to register Go-backed components via rag.define.
 	Natives []Native
+	// Sample, when set, backs rag's LLM nodes (ctx.sample / ctx.sample.json) with
+	// the claude.ai sample contract. Nil leaves LLM nodes failing with sampling_unavailable.
+	Sample llm.Backend
+	// BuildCalls lets LLM-costing build nodes (enrich.llm, doc cards) run during
+	// build; otherwise they are deferred like the workbench's explicit Build button.
+	BuildCalls bool
 }
 
 // Native installs Go-backed functionality into a freshly created rag object.
@@ -167,8 +175,7 @@ func mustFunc(vm *goja.Runtime, p *goja.Program) goja.Callable {
 }
 
 // configureHost calls rag.configure({log, buildCalls}) with Go-backed hooks.
-// LLM sampling (env.sample) is not installed yet: LLM nodes fail with
-// rag's own "sampling_unavailable" error until the llm bridge lands (phase P9).
+// env.sample is installed only when opts.Sample is set.
 func configureHost(vm *goja.Runtime, rag *goja.Object, opts Options) error {
 	configure, ok := goja.AssertFunction(rag.Get("configure"))
 	if !ok {
@@ -191,7 +198,18 @@ func configureHost(vm *goja.Runtime, rag *goja.Object, opts Options) error {
 		return goja.Undefined()
 	})
 	// Headless runs never spend LLM calls during build unless asked explicitly.
-	_ = env.Set("buildCalls", "explicit")
+	if opts.BuildCalls {
+		_ = env.Set("buildCalls", "auto")
+	} else {
+		_ = env.Set("buildCalls", "explicit")
+	}
+	if opts.Sample != nil {
+		sample, err := newSample(vm, opts.Sample)
+		if err != nil {
+			return err
+		}
+		_ = env.Set("sample", sample)
+	}
 	_, err := configure(rag, env)
 	return err
 }
