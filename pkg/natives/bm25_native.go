@@ -14,13 +14,14 @@ import (
 // prototype's type name. Two backends share one component definition, chosen
 // per index by p.backend, else by Backend:
 //
+//   - "bleve" (default): BleveBm25, a disk-backed bleve index (RAGWB-002);
+//     rankings may differ from rag.js within the quality gate (diary step 4)
 //   - "memory": Bm25, an exact port of rag.js's Bm25Index (postings in memory)
-//   - "bleve":  BleveBm25, a disk-backed bleve index (RAGWB-002); rankings may differ
 //
 // The returned index object has the JS class's surface (kind, N, fields,
 // search, searchIn, toJSON) plus backend.
 type Bm25Native struct {
-	// Backend is the default when a plan does not set p.backend: "memory" (default) or "bleve".
+	// Backend is the default when a plan does not set p.backend: "bleve" (default) or "memory".
 	Backend string
 	// TempRoot holds bleve indexes that are not (yet) stored artifacts ("" = os.TempDir()).
 	TempRoot string
@@ -103,7 +104,7 @@ func textAt(texts [][]any) func(i, f int) (string, bool) {
 func (n Bm25Native) InstallEnv(vm *goja.Runtime, rag *goja.Object, env rtenv.Env) error {
 	backend := n.Backend
 	if backend == "" {
-		backend = "memory"
+		backend = "bleve"
 	}
 	addCloser := env.AddCloser
 	if addCloser == nil {

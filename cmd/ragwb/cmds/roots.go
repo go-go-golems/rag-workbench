@@ -27,8 +27,8 @@ func AddGlobalFlags(root *cobra.Command) {
 	root.PersistentFlags().BoolVar(&jsComponents, "js-components", false,
 		"Use rag.js's own parse.markdown, chunk.sections and index.bm25 instead of the Go ports (parity debugging)")
 	f := root.PersistentFlags()
-	f.StringVar(&indexBackend, "index-backend", "memory",
-		"Default backend of index.bm25 when a plan does not set one: memory (exact rag.js port) or bleve (disk-backed; rankings may differ)")
+	f.StringVar(&indexBackend, "index-backend", "bleve",
+		"Default backend of index.bm25 when a plan does not set one: bleve (disk-backed, opens in ms) or memory (exact port of the browser engine's BM25)")
 	f.StringVar(&llmName, "llm", "none", "LLM backend for LLM nodes: none, fake, lunaroute (key: $LUNAROUTE_API_KEY or Pi's ~/.pi/agent/models.json)")
 	f.StringVar(&llmTiers.Quick, "llm-quick", llmTiers.Quick, "Model for modelTier 'quick'")
 	f.StringVar(&llmTiers.Default, "llm-default", llmTiers.Default, "Model for modelTier 'default'")

@@ -24,7 +24,7 @@ func TestEmptyResultsAreArrays(t *testing.T) {
 	dumps := map[bool]string{}
 	for _, jsComponents := range []bool{true, false} {
 		t.Run(fmt.Sprintf("jsComponents=%v", jsComponents), func(t *testing.T) {
-			factory, err := NewFactory(Config{Roots: []string{root}, JSComponents: jsComponents})
+			factory, err := NewFactory(Config{Roots: []string{root}, JSComponents: jsComponents, IndexBackend: "memory"})
 			if err != nil {
 				t.Fatal(err)
 			}

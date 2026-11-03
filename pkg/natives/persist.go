@@ -17,7 +17,7 @@ import (
 // component's output changes for the same input (a port fix, a new field), so
 // persisted artifacts from the old version are not reused (it is part of the
 // artifact namespace, see runner.ArtifactNamespace).
-const Version = "2026-11-03.1"
+const Version = "2026-11-04.1" // RAGWB-002: records, bleve and terms codecs
 
 // Persist installs rag's env.artifacts hook backed by an artifact store:
 //
@@ -191,6 +191,9 @@ func encodeArtifact(vm *goja.Runtime, stringify goja.Callable, v goja.Value) (st
 			case *vecIndex:
 				b, err := EncodeVectors(x)
 				return "vectors", b, err
+			case *Terms:
+				b, err := EncodeTerms(x)
+				return "terms", b, err
 			default:
 				return "", nil, fmt.Errorf("no artifact codec for %T", x)
 			}
@@ -228,6 +231,12 @@ func decodeArtifact(vm *goja.Runtime, parse goja.Callable, codec string, data []
 			return nil, err
 		}
 		return chunksArray(vm, chunks), nil
+	case "terms":
+		t, err := DecodeTerms(data)
+		if err != nil {
+			return nil, err
+		}
+		return termsObject(vm, t), nil
 	case "vectors": // the raw index; index.vector's persist.load binds it (h.restore)
 		ix, err := DecodeVectors(data)
 		if err != nil {
