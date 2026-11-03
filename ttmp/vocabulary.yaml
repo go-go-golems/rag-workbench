@@ -11,6 +11,8 @@ topics:
       description: goja / go-go-goja JS runtime
     - slug: ui-dsl
       description: Script-driven UI DSL
+    - slug: search
+      description: Search indexes, retrieval backends and query execution
 docTypes:
     - slug: design-doc
       description: Structured rationale and architecture notes
