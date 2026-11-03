@@ -19,3 +19,7 @@ Guide uploaded to reMarkable: /ai/2026/11/03/RAGWB-002/RAGWB-002 Disk-backed Ret
 ## 2026-11-03
 
 Guide v2 (two browser pages section) uploaded: /ai/2026/11/03/RAGWB-002/RAGWB-002 Disk-backed Retrieval Intern Guide v2.pdf
+
+## 2026-11-03
+
+D2 changed per user: bleve's own BM25 scoring (rankings may change) behind a quality gate vs the memory backend; D3 now one pre-tokenized field per weighted field with boosts; guide §6.4, plan, risks, tests updated

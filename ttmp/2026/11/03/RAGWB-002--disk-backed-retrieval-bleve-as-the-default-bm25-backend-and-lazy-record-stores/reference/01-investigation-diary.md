@@ -129,3 +129,27 @@ The user asked what "the browser page" is, and whether `ragwb serve` runs querie
 ### What I did
 - Guide: new §3.2 with a table (started by, files, where `rag.js` builds and queries, corpus, server role, affected by RAGWB-002); reworded the executive summary, §2.3 and §6.7; §3.3–3.5 renumbered.
 - Uploaded as "RAGWB-002 Disk-backed Retrieval Intern Guide v2" next to the original, without `--force`.
+
+## Step 3: rankings may change — D2 switched to bleve's own scoring behind a quality gate
+
+The user said rankings may change with bleve, "as long as it's not completely wrong". That removes the constraint behind D2 (exact parity through our own scorer over bleve's low-level postings). The guide now uses bleve's public query API: a disjunction of term queries built from our query terms, over one pre-tokenized field per weighted plan field, with field weight × query weight as boosts. An explicit quality gate against the memory backend replaces the parity requirement.
+
+### Prompt Context
+**User prompt (verbatim):** "ranking can change btw when adding bleve, as long as it's not completely wrong. Address code review comments."
+**Assistant interpretation:** Relax the design's ranking constraint. (The review comments are on PR #1 and are recorded in the RAGWB-001 diary, step 27.)
+**Commit (code):** — (documents only).
+
+### What I did
+- **Rewrote:** §6.4.2 (indexing: `f.<field>` pre-tokenized fields, no weighted repetition), §6.4.3 (search pseudocode: `TermQuery` per term × field with boosts, `DocIDQuery` for `only`, a `docId` term for `searchIn`; `why` from term locations, exact with `explain`) and the score-difference list.
+- **D2** is now "bleve scores; rankings may change within a quality gate" (accepted, user decision). **D3** is "our tokens, one field per weighted field".
+- **Phase 3 step 1** is now a quality spike that sets the thresholds. The proposed gate:
+  - goldens hit@5 and MRR within 0.05 of the memory backend;
+  - no preset's HIT@5 drops by more than 0.1;
+  - vault median top-10 overlap ≥ 0.5, with queries below 0.2 inspected by hand.
+- **Risks:** "norm precision" is replaced by "ranking drift", with the levers to pull if the gate fails. The test strategy gains a Quality row; the parity tests stay, pinned to the memory backend.
+
+### What I learned
+- The relaxation simplifies more than scoring. Fractional field weights now work (as boosts), so the fallback to the memory backend is gone. Field-length precision is no longer a concern. The low-level `IndexReader`/`ExternalID` API is no longer needed.
+
+### What should be done in the future
+- Re-upload the guide as v3 if the user wants the reMarkable copy current.

@@ -54,7 +54,7 @@ Today a query in a Go runtime first loads **everything** into memory: every chun
 A probe that put the same chunks into a persistent **bleve** index (step 26) opened in **0.9 ms**, used **91 MB RSS** for the whole query process, and answered in 4–32 ms.
 
 This guide designs the change that makes that the normal path. There are three parts:
-1. **bleve becomes the default backend of `index.bm25` in every Go runtime.** We use bleve only as an on-disk postings store and keep our own BM25F scoring, so rankings stay the same as today's engine (and the browser's), up to float rounding.
+1. **bleve becomes the default backend of `index.bm25` in every Go runtime.** Chunks are indexed with *our* tokenizer, and queries are built from *our* query terms, but bleve does the BM25 scoring. Rankings may differ somewhat from the in-memory engine (and the browser's). That is accepted as long as they are not wrong, and a quality gate against the in-memory backend checks it (D2).
 2. **Docs and chunks are stored in an on-disk record store** (a `bbolt` file, which bleve already depends on). The engine reads one record when it needs it, instead of decoding all of them at load.
 3. **The artifact store learns file and directory payloads,** so indexes and record stores are kept by digest, as everything else already is.
 
@@ -76,7 +76,7 @@ A query then reads about 50 chunks. The cost is proportional to the corpus, not 
 
 ### 2.2 In scope
 
-- A bleve-backed implementation of `index.bm25` that is the default in Go runtimes, with the same JS contract and the same rankings.
+- A bleve-backed implementation of `index.bm25` that is the default in Go runtimes, with the same JS contract and rankings that pass a quality gate (not necessarily identical).
 - An on-disk record store for `docs` and `chunks` outputs, and a lazy `Map`-like view of it in JS.
 - Engine changes so nothing on the query path iterates all chunks.
 - File and directory payloads in the artifact store; read-only opening; closing handles with the runtime.
@@ -109,7 +109,7 @@ A query then reads about 50 chunks. The cost is proportional to the corpus, not 
    web/app-shell)                                   └─ Persist: env.artifacts → artifacts.Store (pkg/artifacts) on disk
 ```
 
-The **same `rag.js`** is served to the browser (`GET /rag.js`) and loaded into every goja runtime (`pkg/ragjs/module.go`). That is why "parity" — byte-identical results between the JS and Go implementations — matters throughout this codebase. A plan tuned in the workbench page must rank the same way when run from the CLI or a served app.
+The **same `rag.js`** is served to the browser (`GET /rag.js`) and loaded into every goja runtime (`pkg/ragjs/module.go`). That is why "parity" — byte-identical results between the JS and Go implementations — matters throughout this codebase. A plan tuned in the workbench page must rank the same way when run from the CLI or a served app. RAGWB-002 deliberately relaxes this for one component: the bleve BM25 backend may rank somewhat differently, within a quality gate (D2). The in-memory backend keeps exact parity.
 
 ### 3.2 Two browser pages, two execution models
 
@@ -274,7 +274,7 @@ In `Engine.build` (`rag.js:1340-1362`), for each build node:
 |---|---|---|
 | Open cost independent of corpus size | Decode everything (2.1 s vault) | Indexes and records must be opened, not decoded |
 | Memory proportional to the query | 838 MB live for one session | Postings and records must be read from disk on demand |
-| Same rankings as the browser | Exact (Go and JS BM25 parity tests) | bleve's own scoring would break this (§7, D2) |
+| Rankings comparable to the browser | Exact (Go and JS BM25 parity tests) | bleve's scoring differs (per-field BM25, coordination factor); a quality gate replaces exact parity for this backend (§7, D2) |
 | Several processes using one stored corpus | Each loads its own copy | Indexes must open read-only, concurrently |
 | Query path never touches all chunks | `chunkList` per node, evals `R` per case | Engine fixes (§6.5) |
 | Stored outputs larger than a blob | The store holds one `.bin` per output | File and directory payloads (§6.2) |
@@ -381,95 +381,93 @@ class RecordView {                       // h = Go *Records handle
 
 A new native, `natives.BleveBm25`, redefines `index.bm25` exactly like `Bm25Native` does today. It honors the same JS contract (§4.1), with `kind: 'bm25'`. `retrieve`, `expand.links`, the inspector and evals don't change.
 
-#### 6.4.2 Indexing: one pre-tokenized BM25F field
+#### 6.4.2 Indexing: our tokens, one bleve field per weighted field
 
 Each chunk becomes one bleve document with:
-- `bm25f` (indexed, not stored): the space-joined tokens of every weighted field, **each field's tokens repeated `weight` times**, all produced by `natives.Tokenize(text, stem)`;
-- `docId` (keyword, indexed, not stored): for `searchIn`;
+- one indexed (not stored) field per weighted plan field, named `f.<field>` (e.g. `f.title`, `f.headingPath`, `f.text`). Its value is the space-joined tokens of that field, produced by `natives.Tokenize(text, stem)`, the same tokenizer and stemmer as the in-memory engine;
+- `docId` (keyword, indexed, not stored), for `searchIn`;
 - the document id = the chunk id.
 
-The `bm25f` field uses a whitespace-only analyzer: no lowercasing and no stemming, because the tokens are already normalized. So:
-- the term dictionary holds **exactly our terms**;
-- a term's frequency in a chunk is the weighted tf of `bm25.go`;
-- the field length is the weighted length.
+The `f.*` fields use a whitespace-only analyzer, because the tokens are already normalized.
 
-This is what makes exact scoring possible (D2, D3).
+**Why pre-tokenize, if rankings may change anyway?**
+- Index and query use exactly the terms the rest of the engine uses: Unicode letter classes, our stemmer, and synonym expansion through `queryTerms`. Differences from the in-memory engine then come only from *scoring*, which is what the quality gate measures.
+- bleve's `en` analyzer (porter stemmer, stop words) would change *which* chunks match at all, and would make synonyms and `why` terms inconsistent with the rest of the engine.
 
 ```go
 // pkg/natives/bleve_bm25.go (sketch)
 func BuildBleveBm25(dir string, n int, chunk func(i int) (id, docID string, texts []string), fields []Field, stem bool) (*BleveBm25, error) {
     m := bleve.NewIndexMapping()
+    m.ScoringModel = "bm25"                                       // bleve's BM25 (k1 1.2, b 0.75), not TF-IDF
     doc := bleve.NewDocumentMapping()
-    f := bleve.NewTextFieldMapping(); f.Analyzer = "ragwb-pretokenized"; f.Store = false; f.IncludeTermVectors = false
-    doc.AddFieldMappingsAt("bm25f", f)
+    for _, f := range fields {
+        fm := bleve.NewTextFieldMapping(); fm.Analyzer = "ragwb-pretokenized"; fm.Store = false
+        doc.AddFieldMappingsAt("f."+f.Name, fm)
+    }
     kw := bleve.NewKeywordFieldMapping(); kw.Store = false
     doc.AddFieldMappingsAt("docId", kw)
     m.DefaultMapping = doc
-    m.ScoringModel = "bm25"                                    // makes bleve keep the norms BM25 needs
     idx, err := bleve.New(dir, m)
-    batch := idx.NewBatch(); var sumLen float64
+    if err != nil { return nil, err }
+    batch := idx.NewBatch()
     for i := 0; i < n; i++ {
         id, docID, texts := chunk(i)
-        var sb strings.Builder; var length float64
-        for fi, fd := range fields {
-            if texts[fi] == "" { continue }
-            toks := Tokenize(texts[fi], stem)
-            length += float64(len(toks)) * fd.Weight
-            for r := 0; r < int(fd.Weight); r++ { for _, t := range toks { sb.WriteString(t); sb.WriteByte(' ') } }
+        d := map[string]any{"docId": docID}
+        for fi, f := range fields {
+            if texts[fi] != "" { d["f."+f.Name] = strings.Join(Tokenize(texts[fi], stem), " ") }
         }
-        sumLen += length
-        batch.Index(id, map[string]any{"bm25f": sb.String(), "docId": docID})
-        if batch.Size() >= 2000 { idx.Batch(batch); batch = idx.NewBatch() }
+        batch.Index(id, d)
+        if batch.Size() >= 2000 { if err := idx.Batch(batch); err != nil { return nil, err }; batch = idx.NewBatch() }
     }
-    idx.Batch(batch)
-    idx.SetInternal([]byte("ragwb.meta"), json(meta{N: n, Avg: sumLen / n, K1, B, Stem, Fields}))
-    return &BleveBm25{idx: idx, ...}, nil
+    if err := idx.Batch(batch); err != nil { return nil, err }
+    idx.SetInternal([]byte("ragwb.meta"), mustJSON(meta{N: n, Stem: stem, Fields: fields}))
+    return &BleveBm25{idx: idx, meta: ...}, nil
 }
 ```
 
-**Weights.** Only integer weights repeat exactly. All built-in defaults are integers:
-- `title 2, headingPath 3, text 1` (rag.js);
-- `title 3, headingPath 2, text 1` (parc);
-- `callout 2` (reports).
+`ragwb-pretokenized` is bleve's whitespace tokenizer with no token filters, registered once with `registry.RegisterAnalyzer` (`bleve/v2@v2.6.0/registry/analyzer.go:23`).
 
-A plan with a fractional weight (e.g. `0.5`) **falls back to the in-memory backend** for that index, logged once. This keeps the "same rankings" guarantee instead of silently approximating.
-
-#### 6.4.3 Searching: our scorer over bleve's postings
-
-We do **not** run a bleve `MatchQuery`. bleve's disjunction scorer multiplies by a coordination factor `matched/total` (`bleve/v2@v2.6.0/search/scorer/scorer_disjunction.go:65-66`), and per-field scoring differs from BM25F, so rankings would change (D2). Instead we read postings through bleve's index reader and apply `bm25.go`'s formula:
+#### 6.4.3 Searching: a bleve query built from our query terms
 
 ```go
-func (b *BleveBm25) Search(q string, k int, syn []Synonym, only map[string]bool) []Hit {
-    terms := queryTerms(q, syn, b.meta.Stem)          // refactor bm25.go:273 into a free function; same (term, weight) list
-    r, _ := b.idx.Advanced(); rd, _ := r.Reader(); defer rd.Close()
-    acc := map[string]*accum{}                           // keyed by bleve internal doc id
+func (b *BleveBm25) Search(q string, k int, syn []Synonym, only []string, explain bool) []Hit {
+    terms := queryTerms(q, syn, b.meta.Stem)               // refactor of bm25.go:273: (term, weight) pairs, synonyms at 0.5
+    if len(terms) == 0 { return nil }
+    dq := bleve.NewDisjunctionQuery()
     for _, qt := range terms {
-        tfr, _ := rd.TermFieldReader(ctx, []byte(qt.t), "bm25f", true /*freq*/, true /*norm*/, false)
-        df := float64(tfr.Count()); if df == 0 { tfr.Close(); continue }
-        idf := math.Log(1 + (float64(b.meta.N)-df+0.5)/(df+0.5))
-        for d, _ := tfr.Next(nil); d != nil; d, _ = tfr.Next(nil) {
-            length := b.lengthOf(d)                       // see "lengths" below
-            tf := float64(d.Freq)
-            s := qt.w * idf * tf * (K1 + 1) / (tf + K1*(1-B+B*length/b.meta.Avg))
-            accumulate(acc, d.ID, qt.t, s)               // also keeps per-term contributions for `why`
+        for _, f := range b.meta.Fields {
+            tq := bleve.NewTermQuery(qt.t)
+            tq.SetField("f." + f.Name)
+            tq.SetBoost(f.Weight * qt.w)                     // field weight × query-term weight; fractions are fine
+            dq.AddQuery(tq)
         }
-        tfr.Close()
     }
-    top := topK(acc, k)                                   // heap; ties broken by id like bm25.go
-    for i := range top { top[i].ID, _ = rd.ExternalID(top[i].internal) }  // external ids for the top k only
-    if only != nil { /* filter by id before topK, see note */ }
-    return roundLikeJS(top)                               // score 4 dp, why top-5 at 2 dp, as bm25.go does
+    var query query.Query = dq
+    if only != nil { query = bleve.NewConjunctionQuery(bleve.NewDocIDQuery(only), dq) }
+    req := bleve.NewSearchRequestOptions(query, k, 0, explain)
+    if !explain { req.IncludeLocations = true }               // cheap: which query terms matched each hit
+    res, err := b.idx.Search(req)
+    ...
+    return hitsFrom(res, explain)                            // {id, score (4 dp), why}
+}
+
+func (b *BleveBm25) SearchIn(docID, q string, k int, syn []Synonym) []Hit {
+    // same disjunction, AND a term query docId:<docID>
 }
 ```
 
-**Lengths.**
-- bleve stores a field norm, `1/sqrt(length)`, in reduced precision. Recovering `length = 1/norm²` is exact for short fields and off in the last bits for long ones.
-- Exact parity needs the exact weighted length. We store it ourselves as a numeric doc value `len` and read it with a doc-value visitor, or keep an internal-id → length table built at open. 85,882 float64 is 0.7 MB.
-- **Phase 3 step 1 is a spike that measures norm-derived lengths against `bm25.go`.** If 4-decimal scores already match on the reports corpus and a vault sample, the simpler norm path wins.
+**`why`.** The in-memory index reports each matched term's partial score (top 5). Computing that for every candidate needs bleve's `Explain`, which costs time on every scored document. So:
+- by default, `why` maps each matched query term to the sum of its clause scores, derived from term locations: matched terms are exact, values are approximate;
+- with `explain: true` (the inspector, `rag.explain`, evals' explain), `Explain` is turned on and `why` holds the exact per-term contributions summed across fields.
 
-**Why the postings read is cheap.** bleve's scorch segments are memory-mapped. Reading the postings of 2–5 terms touches only those postings. The only per-query allocation is the accumulator for matching documents: about 30k entries for a very common term (the probe's worst query, "go-go-goja module authoring", matched 30,319 documents).
+The trace and `rag.explain` work in both cases.
 
-`searchIn(docId, q, k)` uses the same scorer restricted to the chunks of one document. We get them from the chunk record store's `Order(docId)` (or a `docId` term query) and pass them as `only`.
+**How the scores differ from the in-memory engine.** These are expected and accepted (D2):
+- bleve scores each field separately and sums the field scores. Ours is BM25F: weighted term frequencies are summed into one virtual document before saturation.
+- bleve multiplies a disjunction's score by `matched clauses / total clauses` (`scorer_disjunction.go:65-66`), which favors chunks that match more query terms in more fields.
+- The numerator constant differs (`k1` vs `k1+1`), a uniform factor that doesn't change rankings.
+
+The quality gate (§10, Phase 3) checks that the result is still sensible.
 
 #### 6.4.4 Lifecycle: build, persist, open
 
@@ -493,7 +491,7 @@ close:         every opened index/records handle is registered with the runtime'
   - `--js-components` implies `memory` (it keeps rag.js's own components).
 - **Per-plan override:** `rag.bm25({ backend: 'memory' })`. The Go component reads `p.backend`; rag.js's own `index.bm25` ignores it, and the browser always runs in memory. Because it is a param, it enters the digest, so differently configured outputs never collide.
 - **Stored-output separation:** `ArtifactNamespace` already hashes the component mode (`"go"`/`"js"`). It becomes `"go+bleve"`/`"go"`/`"js"`, and `natives.Version` is bumped. Old stores are untouched and can be pruned (`ragwb store prune`).
-- **Defaults stay safe because rankings are equal** (D2). The parity tests (`pkg/runner/bm25_parity_test.go`) run against both backends.
+- **Defaults are gated on quality, not parity** (D2). The exact parity tests (`pkg/runner/bm25_parity_test.go`) stay, pinned to the memory backend. The bleve backend gets quality tests against it (§12).
 
 ### 6.5 Engine changes in rag.js
 
@@ -565,37 +563,42 @@ Semantics are ported exactly (`RE_NONWORD`, the `1/ln(2 + n/10)` weight, the tie
   - Build time for the BM25 node rises: the probe took 21 s with three analyzed, stored fields, against 8.45 s for the current Go BM25. It must be measured with the single pre-tokenized field.
 - **Status:** accepted (user directive), pending Phase 5 numbers.
 
-### Decision D2: bleve stores postings; ragwb keeps its BM25F scorer
+### Decision D2: bleve scores; rankings may change within a quality gate
 
-- **Context:** The engine guarantees the same rankings in the browser, CLI and served apps. bleve's query scoring differs in three ways:
-  - per-field scoring (not BM25F);
-  - a coordination factor on disjunctions (`scorer_disjunction.go:65-66`);
-  - a constant `k1` vs `k1+1` numerator (`scorer_term.go:148`, harmless for ranking).
+- **Context:** The memory backend reproduces rag.js exactly, so the browser, CLI and served apps rank identically. bleve's BM25 differs in three ways:
+  - per-field scoring;
+  - a coordination factor on disjunctions;
+  - a constant numerator factor.
+
+  The user decided that rankings may change with bleve, as long as they are not wrong.
 - **Options considered:**
-  - (a) bleve `MatchQuery` scoring, with ranking changes accepted behind an eval gate;
-  - (b) our scorer over bleve's `TermFieldReader` postings;
-  - (c) a custom format (see D1).
-- **Decision:** (b).
-- **Rationale:** It keeps the parity guarantee, so making the backend the default is safe. Plans tuned in the browser keep working. Goldens and eval baselines stay valid.
+  - (a) bleve's own scoring, with a quality gate;
+  - (b) our BM25F scorer over bleve's low-level postings (`TermFieldReader`), for exact parity;
+  - (c) a custom memory-mapped format (see D1).
+- **Decision:** (a).
+- **Rationale:**
+  - It uses only bleve's public query API: no low-level reader, no external-ID mapping, no field-length precision issues.
+  - Fractional field weights work as query boosts.
+  - It leaves bleve's native query features within reach (prefix, phrase, facets: §11).
+  - Ranking quality is protected by measurement instead of by construction.
 - **Consequences:**
-  - We use bleve's lower-level reader API (`index.IndexReader`, `TermFieldReader`, `ExternalID`), not just the high-level query API.
-  - bleve's native query features become an *additional* index type later (§11), not this one.
-  - Exact lengths may need a doc value (§6.4.3).
-- **Status:** proposed; Phase 3 step 1 validates it.
+  - A plan tuned in the browser page may rank somewhat differently when served. The memory backend (`--index-backend memory`, `rag.bm25({ backend: 'memory' })`) gives exact parity where it matters.
+  - Eval baselines recorded under the memory backend are compared, not reused.
+  - Scores are bleve's scale: don't compare absolute scores across backends.
+- **Status:** accepted (user decision, 2026-11-03).
 
-### Decision D3: pre-tokenized single field with weighted repetition
+### Decision D3: index our tokens, one bleve field per weighted field
 
-- **Context:** Our tokenizer and stemmer are ports of rag.js and must stay the source of truth. bleve's `en` analyzer (porter stemmer plus stop words) produces different terms.
+- **Context:** Our tokenizer, stemmer and synonym expansion are ports of rag.js and the source of truth for *which* terms exist. bleve's `en` analyzer (porter stemmer plus stop words) produces different terms.
 - **Options considered:**
   - (a) a bleve custom analyzer wrapping `natives.Tokenize`;
-  - (b) tokenize in Go before indexing, then index space-joined tokens with a whitespace analyzer;
+  - (b) tokenize in Go before indexing and index space-joined tokens with a whitespace analyzer;
   - (c) bleve's `en` analyzer.
-- **Decision:** (b).
+- **Decision:** (b), with one field per weighted plan field and weights applied as query boosts.
 - **Rationale:**
-  - It is the smallest surface: no registry plugin.
-  - The term dictionary is exactly our tokens.
-  - Repeating each field's tokens `weight` times reproduces BM25F's weighted tf and length with stock bleve.
-- **Consequences:** Fractional weights cannot be represented, so they fall back to memory with a log line. The index can't be queried meaningfully with bleve's analyzers; that is acceptable, since it is ours.
+  - It is the smallest surface: no tokenizer plugin.
+  - Matching stays identical to the in-memory engine, so only scoring differs and the quality gate measures exactly that.
+- **Consequences:** The index is only meaningful when queried with our tokens. That is acceptable, since only `BleveBm25` queries it. Exposing it to `require("bleve")` scripts later would need the same pre-tokenization on their side.
 - **Status:** proposed.
 
 ### Decision D4: the backend is a param plus a runtime default, not a new component type
@@ -681,7 +684,7 @@ POST /api/rag/parc/run {signals:{q}}
 | `kind` | `'bm25'` | |
 | `N` | number | chunks indexed |
 | `fields` | `{name: weight}` | |
-| `search` | `(q, k=20, {synonyms, only}) → Hit[]` | `Hit = {id, score (4 dp), why: {term: score (2 dp)}}`, top-5 why |
+| `search` | `(q, k=20, {synonyms, only, explain}) → Hit[]` | `Hit = {id, score (4 dp), why: {term: score (2 dp)}}`, top-5 why. bleve backend: `why` values are approximate unless `explain: true` (§6.4.3); scores are on bleve's scale |
 | `searchIn` | `(docId, q, k=3, {synonyms}) → Hit[]` | |
 | `toJSON` | `() → {kind, chunks, terms, avgLen, fields, backend}` | `backend` is new; shown in the inspector |
 | `__ix` | Go handle | non-enumerable; the persist codec uses it |
@@ -740,11 +743,12 @@ Each phase ends with a commit, a diary step (investigation format) and the liste
 - Measure with `scripts/06-serve-heap` (RAGWB-001): live heap after open should drop by about 600 MB.
 
 **Phase 3: bleve BM25 backend** (`pkg/natives/bleve_bm25.go`).
-- Step 1, spike: build the reports and vault indexes; compare `Search` against `bm25.go` on 200 queries (norm-derived vs exact lengths). Decide on lengths.
+- Step 1, quality spike: build the reports and vault indexes and compare `Search` against the memory backend. Use the reports goldens (hit@5, MRR) and about 200 vault queries (top-10 overlap, plus a manual look at the worst overlaps). This sets the thresholds of the quality gate.
 - Step 2: build, persist, read-only open, closers, `searchIn`, synonyms, `only`, `why`.
 - Step 3: make it the default; namespace and `Version` bump.
 - Tests:
-  - `bm25_parity_test.go` for both backends (same ids and 4-dp scores; ties allowed to reorder only among equal scores);
+  - the quality gate: on the reports goldens, hit@5 and MRR no more than 0.05 below the memory backend; on the presets sweep, no preset's HIT@5 drops by more than 0.1; on the vault sample, median top-10 overlap ≥ 0.5 with every query below 0.2 inspected by hand. The thresholds are revisited after the Step 1 spike;
+  - `bm25_parity_test.go` stays exact, pinned to the memory backend;
   - two processes opening one stored index read-only;
   - `--no-store` temp dir cleanup.
 
@@ -760,7 +764,7 @@ Each phase ends with a commit, a diary step (investigation format) and the liste
 ## 11. Risks, alternatives and open questions
 
 - **Build time.** BM25 indexing in bleve may be 2× slower than the in-memory build. Mitigations: larger batches, `unsafe_batch` (scorch), building in a temp dir with persister settings tuned. Measure in Phase 3.
-- **Norm precision.** If norm-derived lengths change 4-dp scores, store exact lengths (§6.4.3).
+- **Ranking drift.** bleve's per-field scoring and coordination factor can promote chunks that match many query terms weakly. If the gate fails, the first levers are: field boosts (weights currently tuned for BM25F); a `MatchQuery` with operator `or` per field instead of per-term clauses; and, as a last resort, D2 option (b), our scorer over bleve's postings.
 - **Per-query allocation for common terms.** The accumulator for 30k matching docs allocates per query. A pooled slice keyed by a dense ordinal (stored as a doc value) avoids map growth. Measure first.
 - **`JSON.parse` per record.** If `filter.where` over many hits shows up in timings, add a `chunkMeta(id)` fast path or a larger LRU.
 - **Read-only concurrency.** Must be verified with two processes. If scorch takes an exclusive lock even read-only, the fallback is to copy-on-open (hardlink the segment files into a per-process dir).
@@ -776,7 +780,8 @@ Each phase ends with a commit, a diary step (investigation format) and the liste
 | Level | What | Where |
 |---|---|---|
 | Unit | store payloads, record store, scorer formula, query terms | `pkg/artifacts`, `pkg/natives` |
-| Parity | bleve vs in-memory BM25 vs rag.js on reports; vault sample when `RAGWB_PARITY_VAULT` is set | `pkg/runner/bm25_parity_test.go` |
+| Parity | in-memory BM25 vs rag.js stays exact (memory backend) | `pkg/runner/bm25_parity_test.go` |
+| Quality | bleve vs memory backend: goldens hit@5/MRR, presets HIT@5, vault top-10 overlap when `RAGWB_QUALITY_VAULT` is set | `pkg/runner/bm25_quality_test.go` (new) |
 | Engine | warm = cold dumps; views vs Maps; evals R counts unchanged | `pkg/runner/artifacts_test.go`, `pkg/ragjs` |
 | Integration | `ragwb serve` routes on the reports app (existing `rag_test.go`) with the bleve default | `pkg/server` |
 | Concurrency | two processes, one stored index, read-only | new test with `exec.Command` of a helper |

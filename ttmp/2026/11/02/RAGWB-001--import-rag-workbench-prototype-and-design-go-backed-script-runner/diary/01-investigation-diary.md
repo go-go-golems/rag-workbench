@@ -1600,3 +1600,48 @@ Opening that index takes 0.9 ms, and a query process peaks at 91 MB RSS. The sam
 
 ### Code review instructions
 - `scripts/07-bleve-vault-probe/{probe,compat}/main.go`; run per its README.
+
+## Step 27: PR #1 review — component source in digests, session memo tied to artifacts
+
+The PR was opened on go-go-golems/rag-workbench (#1). Codex's automated review left two P2 findings in rag.js; both were real, and both reproduced in tests before any fix.
+- **Finding 1:** editing a custom component's body did not invalidate the nodes downstream of it.
+- **Finding 2:** a session kept serving memoized live outputs after the artifacts changed.
+
+Both are fixed in `ff1c7b8`, with tests that fail on the old rag.js. I replied in both review threads.
+
+### Prompt Context
+**User prompt (verbatim):** "ranking can change btw when adding bleve, as long as it's not completely wrong. Address code review comments."
+**Assistant interpretation:** Fix the PR review findings (this step). The ranking remark changes the RAGWB-002 design (its diary, step 3).
+**Inferred user intent:** Get PR #1 into a mergeable state.
+**Commit (code):** `ff1c7b8`.
+
+### What I did
+- `gh api repos/go-go-golems/rag-workbench/pulls/1/comments`: two findings.
+  - `rag.js:1304`: "Propagate component implementation changes into downstream digests".
+  - `rag.js:1586`: "Invalidate session memoization when build artifacts change". The reviewer reproduced it with an apples→bananas corpus swap.
+- **Reproduced both first,** in the new `pkg/ragjs/invalidation_test.go`:
+  - `TestComponentSourceChangeInvalidatesDownstream` redefines `chunk.tagged` with a new body. Before the fix the chunk and index digests were unchanged (`dde3e89d263825→dde3e89d263825`).
+  - `TestSessionMemoFollowsArtifacts` replaces the corpus under a live session. Before the fix: "the existing session returned [fruit#intro] (status cached) from the old index".
+- Extended `TestArtifactsKeyIncludesComponentSource` (store path, across runtimes) to also search after editing the chunker. With the old rag.js it got `"two,two|0"`: new chunks, but the stored index of the old ones.
+- **Fixes** (`pkg/ragjs/assets/rag.js`):
+  - `Engine.digests`: `hash([n.t, n.p, inputs, extra, ...(def.src ? [def.src] : [])])`. A `rag.define`d component's source joins its digest and so flows downstream. Built-in components have no `src`, so their digests are unchanged.
+  - `Session.run`: `if (this.artKey !== art.key) { this.memo.clear(); this.artKey = art.key; }` after obtaining the artifacts. Live memo keys are now `hash([n.t, n.p, n.trigger, def.src || ''])`.
+- Replied in both threads (discussion_r4461314820, discussion_r4461315153) and pushed `ff1c7b8` to the PR branch.
+
+### What worked
+- All three tests fail on the old rag.js and pass with the fix; I checked the store test by swapping the old rag.js in and out.
+- `go test ./... -count=1`, `make lint` and `ragwb --no-store presets --files examples/apps/reports/corpus` (30 presets, all `ok`) pass.
+
+### What didn't work
+- My first edit of `artifacts_test.go` went through a Python string replace and asserted on text with 5-tab indentation; the file uses 4. Nothing changed, and the "before/after" runs I made at that point both passed on the unmodified test. That was not evidence. I redid the edit with the Edit tool and reran the before/after check properly: `"two,two|0"` fails, the fix passes.
+- `git stash push pkg/ragjs/assets/rag.js` / `pop` around that first check restored the fix correctly (`grep -c` confirmed it). Afterwards I swapped files explicitly via `git show HEAD:…` and a scratch copy, which is easier to verify.
+
+### What I learned
+- P8 keyed stored outputs by `hash([digest, def.src])`. That protected the node's own output but not its consumers, because the consumers' digests are built from the *digest*, not the store key. Identity belongs in the digest itself.
+- The session memo's validity check (same inputs by reference, same signal reads) assumed fixed artifacts. Inputs that come from signals are identical across a rebuild, so the memo needs the artifact identity explicitly.
+
+### What warrants a second pair of eyes
+- `def.src` for Go natives defined via `rag.define` is the JS wrapper's source (e.g. `bm25JS`), not the Go code. Go behavior changes are still covered by `natives.Version` in the artifact namespace, not by digests.
+
+### Code review instructions
+- `git show ff1c7b8`; run `go test ./pkg/ragjs -run 'Invalidates|MemoFollows'` and `go test ./pkg/runner -run KeyIncludesComponentSource`.
