@@ -316,7 +316,7 @@ func ParseMarkdown(name, text string, frontmatter bool) *Doc {
 						parts = append(parts, x)
 					}
 				}
-				sec.Blocks = append(sec.Blocks, Block{Kind: "callout", Variant: strings.ToLower(c[1]), Text: strings.Join(parts, "\n"), Range: lineRange(start, i)})
+				sec.Blocks = append(sec.Blocks, Block{Kind: "callout", Variant: jsLower(c[1]), Text: strings.Join(parts, "\n"), Range: lineRange(start, i)})
 			} else {
 				sec.Blocks = append(sec.Blocks, Block{Kind: "quote", Text: strings.Join(q, "\n"), Range: lineRange(start, i)})
 			}

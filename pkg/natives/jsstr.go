@@ -70,7 +70,7 @@ func clip(s string, n int) string {
 
 // slug is rag.js slug(): lowercase, drop quotes, non-alnum runs → '-', trim '-', 64 chars, 'x' if empty.
 func slug(s string) string {
-	s = strings.ToLower(s)
+	s = jsLower(s)
 	var b strings.Builder
 	dash := false
 	for _, r := range s {

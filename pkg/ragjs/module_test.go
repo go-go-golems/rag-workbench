@@ -5,12 +5,16 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/dop251/goja"
 	"github.com/go-go-golems/go-go-goja/pkg/engine"
+
+	"github.com/go-go-golems/rag-workbench/pkg/natives"
 )
 
 const corpusDir = "../../examples/apps/reports/corpus"
@@ -76,8 +80,12 @@ func evalJSON(t *testing.T, rt *engine.Runtime, globals map[string]any, script s
 	}
 }
 
-// The unicode class must degrade to explicit ranges in goja, and tokenization must work.
-func TestTokenizeWorksInGoja(t *testing.T) {
+// goja (≥ e1fc788, via go-go-goja ≥ v0.10.7) supports \p{..} under /u, so rag.js
+// takes the [\p{L}\p{N}] word class like the browser (D6), and the Go port
+// (natives.Tokenize) must tokenize identically, including letters and numbers
+// outside the old fallback ranges (x², ℝ, ₁, Devanagari).
+func TestTokenizeUsesUnicodeClassesInGoja(t *testing.T) {
+	const text = "Rebalance law für Ωmega x² ℝ³ Δx₁ नमस्ते"
 	rt := newRuntime(t, Options{})
 	var got struct {
 		Tokens []string `json:"tokens"`
@@ -85,19 +93,17 @@ func TestTokenizeWorksInGoja(t *testing.T) {
 	}
 	evalJSON(t, rt, nil, `(async () => {
 		const rag = require("ragwb");
-		return JSON.stringify({ tokens: rag.util.tokenize("Rebalance law für Ωmega"), native: rag.util.LN === '\\p{L}\\p{N}' });
+		return JSON.stringify({ tokens: rag.util.tokenize(`+"`"+text+"`"+`), native: rag.util.LN === '\\p{L}\\p{N}' });
 	})()`, &got)
-	if got.Native {
-		t.Fatalf("goja unexpectedly supports \\p{L}; the fallback can be removed (D6)")
+	if !got.Native {
+		t.Fatalf("rag.util.LN is the fallback class: goja lost \\p{L} support (needs goja ≥ e1fc788)")
 	}
-	want := []string{"rebalanc", "law", "für", "ωmega"}
-	if len(got.Tokens) != len(want) {
-		t.Fatalf("tokens = %v, want %v", got.Tokens, want)
+	want := natives.Tokenize(text, true)
+	if strings.Join(got.Tokens, "|") != strings.Join(want, "|") {
+		t.Fatalf("JS tokens = %q, Go natives.Tokenize = %q", got.Tokens, want)
 	}
-	for i := range want {
-		if got.Tokens[i] != want[i] {
-			t.Fatalf("tokens = %v, want %v", got.Tokens, want)
-		}
+	if !slices.Contains(got.Tokens, "x²") {
+		t.Fatalf("tokens = %q, want x² kept whole by \\p{N}", got.Tokens)
 	}
 }
 

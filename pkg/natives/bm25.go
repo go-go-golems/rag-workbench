@@ -5,13 +5,14 @@ import (
 	"math/big"
 	"sort"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 )
 
 // A Go port of rag.js tokenize/stem/Bm25Index ("text" and "indexes"
 // sections). Scores, tie order and rounding equal the goja-hosted JS
-// implementation (see bm25_parity_test.go); the word class is the goja
-// fallback class (rag.util.LN without \p support, decision D6).
+// implementation (see bm25_parity_test.go); the word class is rag.util.LN,
+// which is [\p{L}\p{N}] on goja ≥ e1fc788 (go-go-goja ≥ v0.10.7) and in browsers.
 
 var stopWords = func() map[string]bool {
 	m := map[string]bool{}
@@ -24,21 +25,13 @@ var stopWords = func() map[string]bool {
 	return m
 }()
 
-// isLN mirrors the fallback LN class: A-Za-z0-9 ª µ º À-Ö Ø-ö ø-ɏ Greek Cyrillic Hebrew Arabic kana CJK Hangul.
+// isLN is [\p{L}\p{N}]: goja hands \p under /u to regexp2/v2, which builds
+// the class from unicode.Categories, the same tables IsLetter/IsNumber use.
 func isLN(r rune) bool {
-	switch {
-	case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
-		return true
-	case r == 0xAA, r == 0xB5, r == 0xBA:
-		return true
-	case r >= 0xC0 && r <= 0xD6, r >= 0xD8 && r <= 0xF6, r >= 0xF8 && r <= 0x24F:
-		return true
-	case r >= 0x370 && r <= 0x3FF, r >= 0x400 && r <= 0x4FF, r >= 0x590 && r <= 0x5FF, r >= 0x600 && r <= 0x6FF:
-		return true
-	case r >= 0x3040 && r <= 0x30FF, r >= 0x3400 && r <= 0x4DBF, r >= 0x4E00 && r <= 0x9FFF, r >= 0xAC00 && r <= 0xD7AF:
-		return true
+	if r < utf8.RuneSelf {
+		return r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9'
 	}
-	return false
+	return unicode.IsLetter(r) || unicode.IsNumber(r)
 }
 
 func hasASCIIDigit(s string) bool { return strings.ContainsAny(s, "0123456789") }
@@ -70,9 +63,11 @@ func splitIdent(s string) []string {
 	return out
 }
 
-// stem ports rag.js stem(w) (operates on BMP-only words, so runes == UTF-16 units).
+// stem ports rag.js stem(w). Lengths are JS lengths (UTF-16 units): with the
+// [\p{L}\p{N}] class, words can hold astral letters such as 𝐾 (two units).
+// Every cut removes ASCII or BMP runes (one unit each), so cutting runes is safe.
 func stem(w string) string {
-	n := func() int { return utf8.RuneCountInString(w) }
+	n := func() int { return len16(w) }
 	if n() <= 3 || hasASCIIDigit(w) {
 		return w
 	}
@@ -99,7 +94,9 @@ func stem(w string) string {
 	case strings.HasSuffix(w, "ly") && n() > 5:
 		cut(2)
 	}
-	if r := []rune(w); len(r) >= 2 && r[len(r)-1] == r[len(r)-2] && !strings.ContainsRune("aeiouls", r[len(r)-1]) {
+	// /([^aeiouls])\1$/ without the u flag compares the last two UTF-16 units; for a
+	// trailing astral rune those are its two surrogate halves, which never match.
+	if r := []rune(w); len(r) >= 2 && r[len(r)-1] < 0x10000 && r[len(r)-1] == r[len(r)-2] && !strings.ContainsRune("aeiouls", r[len(r)-1]) {
 		cut(1)
 	}
 	if strings.HasSuffix(w, "e") && n() > 4 {
@@ -119,8 +116,8 @@ func Tokenize(text string, doStem bool) []string {
 			words = append(append([]string{}, parts...), strings.Join(parts, ""))
 		}
 		for _, w := range words {
-			w = strings.ToLower(w)
-			if utf8.RuneCountInString(w) < 2 && !hasASCIIDigit(w) {
+			w = jsLower(w)
+			if len16(w) < 2 && !hasASCIIDigit(w) { // JS w.length: an astral letter alone counts 2
 				continue
 			}
 			if stopWords[w] {
@@ -150,7 +147,7 @@ func Tokenize(text string, doStem bool) []string {
 	return out
 }
 
-// nonWordToSpace is s.replace(RE_NONWORD, ' ') with the fallback class.
+// nonWordToSpace is s.replace(RE_NONWORD, ' ').
 func nonWordToSpace(s string) string {
 	var b strings.Builder
 	in := false
@@ -284,9 +281,9 @@ func (ix *Bm25) queryTerms(q string, syn []Synonym) []queryTerm {
 		}
 	}
 	if len(syn) > 0 {
-		lq := " " + nonWordToSpace(strings.ToLower(q)) + " "
+		lq := " " + nonWordToSpace(jsLower(q)) + " "
 		for _, s := range syn {
-			kk := " " + jsTrim(nonWordToSpace(strings.ToLower(s.Key))) + " "
+			kk := " " + jsTrim(nonWordToSpace(jsLower(s.Key))) + " "
 			if jsTrim(kk) == "" || !strings.Contains(lq, kk) {
 				continue
 			}
