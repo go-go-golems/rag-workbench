@@ -1,2 +1,3 @@
 dist/
 .ragwb/
+.playwright-mcp/

@@ -104,3 +104,13 @@ func TestLiveEmbedAndRerank(t *testing.T) {
 	}
 	t.Logf("cos(rel)=%.3f cos(unrel)=%.3f rerank=%+v", cos(vs[0], vs[1]), cos(vs[0], vs[2]), rr)
 }
+
+func TestStripToolMarkup(t *testing.T) {
+	in := "path ranks are null here; let me check res.trace.<tool_call>eval<arg_key>code</arg_key><arg_value>const q = 1"
+	if got := stripToolMarkup(in); got != "path ranks are null here; let me check res.trace." {
+		t.Fatalf("got %q", got)
+	}
+	if got := stripToolMarkup("plain answer"); got != "plain answer" {
+		t.Fatalf("got %q", got)
+	}
+}

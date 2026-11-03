@@ -26,6 +26,21 @@ func DefaultTiers() TierModels {
 	return TierModels{Quick: "muse-spark-open", Default: "glm-5.3-flash", Complex: "glm-5.3"}
 }
 
+// DefaultMaxRounds bounds tool loops. The workbench agent works in many small
+// eval steps (a real session used 6 before answering), so allow ten.
+const DefaultMaxRounds = 10
+
+// stripToolMarkup removes tool-call syntax some models (GLM) emit as plain text
+// when they want a tool but none is offered: everything from the first marker on.
+func stripToolMarkup(s string) string {
+	for _, m := range []string{"<tool_call>", "<|tool_call|>", "<function_call>"} {
+		if i := strings.Index(s, m); i >= 0 {
+			s = strings.TrimRight(s[:i], " \n\t")
+		}
+	}
+	return s
+}
+
 // tierBudget is max_tokens per tier, sized so reasoning doesn't starve the answer.
 var tierBudget = map[string]int{"quick": 2048, "default": 8192, "complex": 16384}
 
@@ -79,7 +94,7 @@ func NewLunaRoute() (*Client, error) {
 	if v := os.Getenv("LUNAROUTE_BASE_URL"); v != "" {
 		base = strings.TrimSuffix(v, "/")
 	}
-	return &Client{BaseURL: base, Key: key, Header: "LUNAROUTE-API-KEY", HTTP: &http.Client{Timeout: 6 * time.Minute}, Tiers: DefaultTiers(), MaxRounds: 6}, nil
+	return &Client{BaseURL: base, Key: key, Header: "LUNAROUTE-API-KEY", HTTP: &http.Client{Timeout: 6 * time.Minute}, Tiers: DefaultTiers(), MaxRounds: DefaultMaxRounds}, nil
 }
 
 func (c *Client) post(ctx context.Context, path string, body any, out any) error {
@@ -224,8 +239,12 @@ func (c *Client) Sample(ctx context.Context, req Request, onText OnText, exec Ex
 	var all strings.Builder
 	maxRounds := max(1, c.MaxRounds)
 	for round := 1; ; round++ {
-		body := map[string]any{"model": model, "messages": msgs, "max_tokens": maxTokens}
 		lastRound := round >= maxRounds
+		if lastRound && len(tools) > 0 && round > 1 {
+			// Forced answer: without this, GLM emits its native tool-call markup as text.
+			msgs = append(msgs, oaMessage{Role: "user", Content: "(The tool budget for this answer is used up. Answer now from what you have, in plain text, without calling tools.)"})
+		}
+		body := map[string]any{"model": model, "messages": msgs, "max_tokens": maxTokens}
 		if len(tools) > 0 && !lastRound {
 			body["tools"] = tools
 		}
@@ -244,8 +263,9 @@ func (c *Client) Sample(ctx context.Context, req Request, onText OnText, exec Ex
 			return res, &Failure{Code: "upstream_error", Message: "no choices in response", Text: all.String()}
 		}
 		ch := r.Choices[0]
-		if ch.Message.Content != "" {
-			delta := ch.Message.Content
+		content := stripToolMarkup(ch.Message.Content)
+		if content != "" {
+			delta := content
 			if all.Len() > 0 {
 				delta = "\n\n" + delta // rounds are separated by a blank line (sample spec)
 			}
@@ -266,7 +286,7 @@ func (c *Client) Sample(ctx context.Context, req Request, onText OnText, exec Ex
 			}
 			return res, nil
 		}
-		msgs = append(msgs, oaMessage{Role: "assistant", Content: ch.Message.Content, ToolCalls: ch.Message.ToolCalls})
+		msgs = append(msgs, oaMessage{Role: "assistant", Content: content, ToolCalls: ch.Message.ToolCalls})
 		for _, tc := range ch.Message.ToolCalls {
 			input := json.RawMessage(tc.Function.Arguments)
 			if !json.Valid(input) {

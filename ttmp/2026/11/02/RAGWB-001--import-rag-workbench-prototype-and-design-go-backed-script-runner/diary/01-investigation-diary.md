@@ -600,3 +600,70 @@ This step has two parts. First, the whole-vault parity run (opt-in, all 2,282 no
 ### Technical details
 - Embedded text per chunk = `[title, headingPath.join(' › '), text].filter(Boolean).join('\n\n')`. Rerank document text uses the same composition.
 - LunaRoute limits respected: 64 inputs per request, max 99 docs per rerank (`k` capped at 99), and empty strings replaced by `" "`.
+
+## Step 12: P5 — the workbench served from Go with a local window.claude runtime; the agent runs on LunaRoute
+
+The ported workbench now runs from `ragwb workbench`: the claude.ai page (unchanged `index.html`, `app.js`, `agent.js`), the engine files served from `pkg/ragjs` (so browser and server run identical engine code), and a local `window.claude` runtime. That runtime provides `sample` over SSE with **page-executed tools** (the slop-computer protocol), `db` (a Firestore-style document store in SQLite), `user` and `downloads`. In a real browser, a preset builds, Ask produces a cited answer, and the agent completes a 9-step tool session on LunaRoute that reproduces the original session's analysis of the one golden miss. I also verified the whole-vault dense build, fixed a tool-markup leak in the tool loop that browser testing exposed, and made `invalid_json` failures self-describing after an intermittent rerank failure.
+
+### Prompt Context
+**User prompt (verbatim):** see Step 4 (turn 1: "a version where I can create and save scripts with an agent in the workbench (by porting the UI, you can look at … slop-computer … on how to implement the claude sample and other apis to serve the app)") and Step 9 (LunaRoute).
+**Assistant interpretation:** Serve the prototype from Go with the capabilities it expects, LLM on LunaRoute, tools still in the page.
+**Inferred user intent:** Use the workbench and its agent locally, against a real backend, as the place where scripts get written.
+**Commit (code):** see the commit right after this entry ("RAGWB-001 P5: …").
+
+### What I did
+- `web/workbench/` (embedded via `web/embed.go`): the prototype's `index.html`, `app.js` and `agent.js` verbatim, plus a new `claude.js` shim:
+  - `db.doc/collection` → `POST /_rt/db/{get,set,delete,list}`;
+  - `user.id()` → `"local"`;
+  - `downloads.save` → a Blob link;
+  - `sample` → `POST /_rt/sample`, SSE parse; on a `tool` event it runs `execute` in the page and POSTs `/_rt/sample/{call}/tools/{use}`; `sample.json` and `sample.limits` included.
+- `pkg/server/`:
+  - `server.go`: ServeMux with Go 1.22 patterns. Index with `<script src="/_rt/claude.js">` injected after the first `<head>`, engine assets from `ragjs.Source`, `/corpus.json` built from `--corpus`, `/presets/{file}` from `--presets` (basename-only, `.js`/`index.json`), db RPC, `/healthz`.
+  - `sample.go`: `call` → `text` → `tool` → `result` | `error`. Tool calls are parked on a per-call channel with a 3-min timeout, cancellation via `/cancel` or client disconnect, and `json: true` parsed server-side.
+  - `docs.go`: SQLite `docs(path PK, json, updated)`; `List` returns direct children only; 256 KiB per-document cap like the platform.
+- `cmd/ragwb workbench --addr 127.0.0.1:8790 --presets examples/presets --corpus examples/apps/reports/corpus --db ~/.ragwb/ragwb.db` (uses the global `--llm`).
+- `pkg/server/server_test.go`: a Go client plays the page (SSE + tool POST); JSON and error paths; 503 without an LLM; db semantics (direct children only); assets (shim injected first, patched `rag.js`, 11-file corpus, presets, path traversal → 404).
+- Tool-loop fixes in `pkg/llm/lunaroute.go`: `DefaultMaxRounds` 6 → **10** (flag `--llm-max-rounds`). On the forced final round a user note says the tool budget is spent. `stripToolMarkup` cuts `<tool_call>`/`<|tool_call|>`/`<function_call>` from text; test `TestStripToolMarkup`.
+- `llm.InvalidJSONMessage`: `invalid_json` errors now include an excerpt of the reply and say whether it was cut off (used by the headless bridge and the server).
+
+### Why
+- Serving rag.js/gui.js/kit.js from `pkg/ragjs` rather than a copy keeps one engine source for browser and goja (the D6 regex fix is feature-detected, so the browser keeps `\p{L}`).
+- Presets and corpus are files on disk, not embedded. That's the first step toward D7 (the apps directory is the source of truth).
+
+### What worked
+- `go test ./pkg/server/ -v`: 4/4 pass.
+- Browser (Playwright, Chromium) against `ragwb --llm lunaroute workbench`:
+  - Page boots: status "Built · 11 docs · 490 chunks · 125 ms", the default query gives "46 results · lexical · 35.9 ms". The only console error is `/favicon.ico` 404.
+  - **Ask** → cited answer (stateful vs. sessionless MCP transport, [E1] [E2], "2 of 18 sources cited").
+  - **Agent**, suggestion "Which golden questions does the current plan miss, and why? Show the ranks." (Balanced = `glm-5.3-flash`, Auto mode): 9 eval steps, 125 s. Generative-UI tables show golden ranks (11/12, miss at rank 9) and the want-chunk's stage positions (text 5 → fuse 9 → neighbors 10). The final answer has three causes and a `wb:query` link. No leaked markup. Screenshot: `various/p5-workbench-agent-lunaroute.png`.
+- Whole-vault dense index (`parc index --dense` with `--embed lunaroute`, started in Step 11): 85,881 chunks; ix-vec 944,222 ms (15.7 min, 4 concurrent batches); total 961 s; max RSS 3.76 GB. The cache now holds `emb-granite|85393` vectors.
+
+### What didn't work
+- **First agent run: leaked tool markup.** The final paragraph read `path ranks are null here; let me check res.trace for per-node outputs instead.<tool_call>eval<arg_key>code</arg_key><arg_value>const q = …`. The agent hit `MaxRounds` (6). My forced final round removed `tools`, and GLM still wanted a tool, so it emitted its native call syntax as content. Fixed by the three measures above; the re-run ended cleanly.
+- **Intermittent `rerank: the reply contained no complete JSON value`** in the browser's Ask flow. CLI reproduction: 1 of 3 runs failed (`rerank error 13322.2ms 50→0`), then 5 of 5 passed after the message change. A direct probe (9 calls; `muse-spark-open`, `glm-5.3-flash`, `deepseek-4.1-flash` with a rerank-style prompt over 20 passages) returned valid JSON every time. Notably the two GLM-family models often returned `{"ranking": []}`, while `deepseek-4.1-flash` ranked properly but took 14–32 s. **Root cause not established.** The new message will show the raw reply the next time it happens. Open issue.
+- My `pkill -f "dist/ragwb --llm lunaroute workbench"` also matched the shell running it (exit 144) and killed the restart. I used `TaskStop` on the background task instead.
+- `browser_take_screenshot` refused the scratchpad path ("outside allowed roots"). Saved into the ticket's `various/` instead, and added `.playwright-mcp/` to `.gitignore`.
+
+### What I learned
+- The prototype's agent prompt is large (API reference + state), so first-round latency on `glm-5.3-flash` is 20–80 s. The claude.ai platform "allows a handful of rounds", and this agent routinely needs 6–9 small steps.
+- The `quick`-tier choice matters for JSON-producing nodes. `rerank.llm`/`rewrite.llm` default to `quick`, and `muse-spark-open` tends to return empty rankings. Evaluate the tier models on the LLM presets before trusting their numbers.
+
+### What was tricky to build
+- **Parked tool calls.** The model's tool request arrives on the server goroutine running `Sample`, but the tool must run in the browser. The handler registers a channel under the tool-use id, emits a `tool` SSE event, and blocks on select(channel, timeout, ctx). The page's POST to `/tools/{use}` looks up the call and sends on the channel. Every SSE write goes through one mutex-guarded `emit`, because `onText` and `tool` events can come from the same loop at different times.
+
+### What warrants a second pair of eyes
+- No authentication. Bind to loopback only (the default; documented in the flag help). `db` accepts any path under one store, with no per-user separation (single local user by design).
+- `handleSample` holds the HTTP request open for the whole tool loop (minutes). Fine locally; proxies would need SSE-friendly timeouts.
+- `rerank.llm` intermittent `invalid_json` (above).
+
+### What should be done in the future
+- P6: an apps directory as the script store, with `wb.save`/`wb.load` (and the editor) writing `apps/<name>/*.js` that `ragwb verbs` can run; history in SQLite.
+- P7: RemoteRag + `ragwb serve <app>` (the gui runtime driving a server-side session).
+- Evaluate the tier models on JSON nodes; consider `deepseek-4.1-flash` for `quick` JSON tasks despite its latency.
+
+### Code review instructions
+- `web/workbench/claude.js` (sample SSE client, tool round trip), `pkg/server/sample.go` (parking), `pkg/server/docs.go` (`List`), `pkg/llm/lunaroute.go` (forced final round, `stripToolMarkup`).
+- Validate: `go test ./pkg/server ./pkg/llm`; `./dist/ragwb --llm lunaroute workbench`, then open http://127.0.0.1:8790, press Ask, and run an agent suggestion.
+
+### Technical details
+- SSE event payloads: `call {id}`, `text {text, delta}`, `tool {use, name, input}`, `result {text, truncated, modelTierApplied, json?}`, `error {code, message, text?}`.

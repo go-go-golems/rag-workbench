@@ -26,7 +26,7 @@ func main() {
 		Run:   func(cmd *cobra.Command, args []string) { fmt.Fprintln(cmd.OutOrStdout(), version) },
 	})
 	cmds.AddGlobalFlags(root)
-	root.AddCommand(cmds.NewRunCommand(), cmds.NewPresetsCommand())
+	root.AddCommand(cmds.NewRunCommand(), cmds.NewPresetsCommand(), cmds.NewWorkbenchCommand())
 
 	dir, _ := cmds.DiscoverVerbsDir(os.Args[1:])
 	verbs, err := cmds.NewVerbsCommand(dir)

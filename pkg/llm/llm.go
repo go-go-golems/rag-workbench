@@ -150,3 +150,17 @@ func ParseJSON(text string) (json.RawMessage, bool) {
 	}
 	return nil, false
 }
+
+// InvalidJSONMessage explains an invalid_json failure with an excerpt of the reply,
+// so the page and run reports show what the model actually said.
+func InvalidJSONMessage(res Result) string {
+	why := "the reply contained no complete JSON value"
+	if res.Truncated {
+		why += " (the answer was cut short at max_tokens)"
+	}
+	ex := strings.Join(strings.Fields(res.Text), " ")
+	if len(ex) > 160 {
+		ex = ex[:80] + " … " + ex[len(ex)-60:]
+	}
+	return fmt.Sprintf("%s; reply: %q", why, ex)
+}

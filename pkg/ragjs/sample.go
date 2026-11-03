@@ -142,7 +142,7 @@ func newSample(vm *goja.Runtime, backend llm.Backend) (goja.Value, error) {
 				if lreq.JSON {
 					raw, ok := llm.ParseJSON(res.Text)
 					if !ok || res.Truncated {
-						failure = &llm.Failure{Code: "invalid_json", Message: "the reply contained no complete JSON value", Text: res.Text}
+						failure = &llm.Failure{Code: "invalid_json", Message: llm.InvalidJSONMessage(res), Text: res.Text}
 					} else {
 						out["json"] = raw
 					}

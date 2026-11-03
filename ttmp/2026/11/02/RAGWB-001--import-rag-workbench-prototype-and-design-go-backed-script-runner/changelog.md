@@ -57,3 +57,13 @@ Whole-vault parity (2282 notes) found and fixed the empty-fence token quirk; now
 
 - /home/manuel/code/wesen/go-go-golems/rag-workbench/pkg/natives/embcache.go — persistent embedding cache
 - /home/manuel/code/wesen/go-go-golems/rag-workbench/pkg/natives/vector.go — index.vector + rerank.model components
+
+## 2026-11-02
+
+P5: ragwb workbench serves the ported page with a local window.claude runtime (sample SSE with page tools, SQLite db, user, downloads); browser-verified Ask + 9-step agent session on LunaRoute; tool-loop markup leak fixed; whole-vault dense index built (85,881 chunks, 15.7 min, cached)
+
+### Related Files
+
+- /home/manuel/code/wesen/go-go-golems/rag-workbench/pkg/server/sample.go — SSE sample with parked page tools
+- /home/manuel/code/wesen/go-go-golems/rag-workbench/web/workbench/claude.js — window.claude shim
+- ttmp/2026/11/02/RAGWB-001--import-rag-workbench-prototype-and-design-go-backed-script-runner/various/p5-workbench-agent-lunaroute.png — browser evidence of agent session
