@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/dop251/goja_nodejs/require"
@@ -93,7 +94,11 @@ func NewFactory(cfg Config) (*engine.RuntimeFactory, error) {
 	}
 	nat := []ragjs.Native{&natives.SourceDir{Roots: cfg.Roots, Base: cfg.Base, DigestTTL: cfg.SourceDigestTTL}}
 	if !cfg.JSComponents {
-		nat = append(nat, natives.Markdown{}, natives.Bm25Native{Backend: cfg.IndexBackend})
+		tempRoot := ""
+		if cfg.Artifacts != nil {
+			tempRoot = filepath.Join(cfg.Artifacts.Dir, cfg.Artifacts.NS) // storing a built index is then a rename
+		}
+		nat = append(nat, natives.Markdown{}, natives.Bm25Native{Backend: cfg.IndexBackend, TempRoot: tempRoot})
 	}
 	nat = append(nat, &natives.Vectors{Embedder: cfg.Embedder, Cache: cfg.EmbedCache})
 	nat = append(nat, cfg.Natives...)
@@ -114,4 +119,7 @@ func NewFactory(cfg Config) (*engine.RuntimeFactory, error) {
 }
 
 // Natives that hold resources get the runtime's closer hook.
-var _ ragjs.EnvNative = natives.Bm25Native{}
+var (
+	_ ragjs.EnvNative = natives.Bm25Native{}
+	_ ragjs.EnvNative = natives.Persist{}
+)

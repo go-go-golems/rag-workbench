@@ -130,16 +130,18 @@ func (n Bm25Native) InstallEnv(vm *goja.Runtime, rag *goja.Object, env rtenv.Env
 		if len(texts) != len(ids) || len(docIDs) != len(ids) {
 			return nil, fmt.Errorf("index.bm25: %d ids, %d docIds, %d text rows", len(ids), len(docIDs), len(texts))
 		}
-		root, err := os.MkdirTemp(n.TempRoot, "ragwb-bm25-")
+		// built under TempRoot (the artifact store's namespace when there is one, so
+		// storing it is a rename on the same filesystem); removed on Close unless stored
+		root, err := os.MkdirTemp(n.TempRoot, ".tmp-bm25-")
 		if err != nil {
 			return nil, err
 		}
-		ix, err := BuildBleveBm25(filepath.Join(root, "index"), len(ids), func(i int) string { return ids[i] }, func(i int) string { return docIDs[i] }, textAt(texts), fs, BleveOptions{Stem: doStem, Temp: true, Combined: combined})
+		ix, err := BuildBleveBm25(filepath.Join(root, "index"), len(ids), func(i int) string { return ids[i] }, func(i int) string { return docIDs[i] }, textAt(texts), fs, BleveOptions{Stem: doStem, Combined: combined})
 		if err != nil {
 			_ = os.RemoveAll(root)
 			return nil, err
 		}
-		ix.Dir = root // the temp root goes with the index on Close
+		ix.SetCleanup(root)
 		addCloser(ix.Close)
 		return bleveObject(vm, ix), nil
 	})

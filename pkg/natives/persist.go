@@ -8,6 +8,7 @@ import (
 	"github.com/dop251/goja"
 
 	"github.com/go-go-golems/rag-workbench/pkg/artifacts"
+	"github.com/go-go-golems/rag-workbench/pkg/rtenv"
 	"github.com/go-go-golems/rag-workbench/pkg/timing"
 )
 
@@ -33,8 +34,17 @@ type Persist struct {
 func (Persist) Name() string { return "artifacts" }
 
 func (p Persist) Install(vm *goja.Runtime, rag *goja.Object) error {
+	return p.InstallEnv(vm, rag, rtenv.Env{})
+}
+
+// InstallEnv installs the hook; indexes opened from the store close with the runtime.
+func (p Persist) InstallEnv(vm *goja.Runtime, rag *goja.Object, env rtenv.Env) error {
 	if p.Store == nil {
 		return nil
+	}
+	addCloser := env.AddCloser
+	if addCloser == nil {
+		addCloser = func(func() error) {}
 	}
 	jsonObj := vm.Get("JSON").ToObject(vm)
 	stringify, ok1 := goja.AssertFunction(jsonObj.Get("stringify"))
@@ -58,6 +68,21 @@ func (p Persist) Install(vm *goja.Runtime, rag *goja.Object) error {
 	})
 	_ = a.Set("save", func(key, typ string, v goja.Value, count int) {
 		t0 := time.Now()
+		if ix := bleveHandle(v); ix != nil {
+			// a directory payload: move the built index into the store and reopen it there
+			err := ix.Relocate(func(dir string) (string, error) {
+				if err := p.Store.SaveDir(key, typ, "bleve", count, dir); err != nil {
+					return "", err
+				}
+				_, path, err := p.Store.Path(key)
+				return path, err
+			})
+			debugf("save %s bleve: %v", typ, time.Since(t0))
+			if err != nil {
+				panic(vm.NewGoError(fmt.Errorf("%s: %w", typ, err)))
+			}
+			return
+		}
 		codec, data, err := encodeArtifact(vm, stringify, v)
 		t1 := time.Now()
 		if err == nil {
@@ -70,6 +95,20 @@ func (p Persist) Install(vm *goja.Runtime, rag *goja.Object) error {
 	})
 	_ = a.Set("load", func(key string) goja.Value {
 		t0 := time.Now()
+		if m, err := p.Store.Has(key); err == nil && m != nil && m.Kind == artifacts.KindDir && m.Codec == "bleve" {
+			_, path, err := p.Store.Path(key)
+			var ix *BleveBm25
+			if err == nil {
+				ix, err = OpenBleveBm25(path)
+			}
+			if err != nil {
+				panic(vm.NewGoError(fmt.Errorf("stored artifact %s (%s) could not be opened: %w; delete it with `ragwb store prune --all`", key, m.Type, err)))
+			}
+			addCloser(ix.Close)
+			p.Timing.Add("store", m.Type, float64(time.Since(t0).Microseconds())/1000,
+				fmt.Sprintf("bleve · open %v · %.1f MB on disk", time.Since(t0).Round(time.Microsecond), float64(m.Size)/(1<<20)))
+			return bleveObject(vm, ix)
+		}
 		m, data, err := p.Store.Load(key)
 		t1 := time.Now()
 		if err == nil {
@@ -87,9 +126,9 @@ func (p Persist) Install(vm *goja.Runtime, rag *goja.Object) error {
 	if !ok {
 		return fmt.Errorf("rag.configure is not a function")
 	}
-	env := vm.NewObject()
-	_ = env.Set("artifacts", a)
-	_, err := configure(rag, env)
+	cfg := vm.NewObject()
+	_ = cfg.Set("artifacts", a)
+	_, err := configure(rag, cfg)
 	return err
 }
 
@@ -161,4 +200,18 @@ func debugf(format string, args ...any) {
 	if os.Getenv("RAGWB_STORE_DEBUG") != "" {
 		fmt.Fprintf(os.Stderr, "store: "+format+"\n", args...)
 	}
+}
+
+// bleveHandle returns the Go index behind a bleve index.bm25 handle, or nil.
+func bleveHandle(v goja.Value) *BleveBm25 {
+	o, ok := v.(*goja.Object)
+	if !ok {
+		return nil
+	}
+	h := o.Get(goHandleKey)
+	if h == nil {
+		return nil
+	}
+	ix, _ := h.Export().(*BleveBm25)
+	return ix
 }

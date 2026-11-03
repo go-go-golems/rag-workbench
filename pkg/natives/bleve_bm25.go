@@ -24,11 +24,11 @@ import (
 // scoring, so rankings may differ from Bm25 (per-field scoring, coordination
 // factor); a quality gate against the memory backend checks they stay sensible.
 type BleveBm25 struct {
-	mu   sync.Mutex
-	idx  bleve.Index
-	Dir  string
-	temp bool // remove Dir on Close (an index that was never persisted)
-	Meta BleveMeta
+	mu      sync.RWMutex
+	idx     bleve.Index
+	path    string // the index directory
+	cleanup string // removed on Close: the temp build area of an index that was never stored
+	Meta    BleveMeta
 }
 
 // BleveMeta is stored in the index (internal key ragwb.meta), so an opened index
@@ -117,7 +117,10 @@ func BuildBleveBm25(dir string, n int, id, docID func(i int) string, text func(i
 	if err != nil {
 		return nil, fmt.Errorf("index.bm25 (bleve): create %s: %w", dir, err)
 	}
-	b := &BleveBm25{idx: idx, Dir: dir, temp: temp, Meta: BleveMeta{N: n, Stem: doStem, Fields: fields, Combined: o.Combined}}
+	b := &BleveBm25{idx: idx, path: dir, Meta: BleveMeta{N: n, Stem: doStem, Fields: fields, Combined: o.Combined}}
+	if temp {
+		b.cleanup = dir
+	}
 	batch := idx.NewBatch()
 	terms := map[string]struct{}{}
 	for i := 0; i < n; i++ {
@@ -184,7 +187,7 @@ func OpenBleveBm25(dir string) (*BleveBm25, error) {
 		_ = idx.Close()
 		return nil, fmt.Errorf("index.bm25 (bleve): %s has no ragwb metadata", dir)
 	}
-	b := &BleveBm25{idx: idx, Dir: dir}
+	b := &BleveBm25{idx: idx, path: dir}
 	if err := json.Unmarshal(raw, &b.Meta); err != nil {
 		_ = idx.Close()
 		return nil, err
@@ -192,19 +195,67 @@ func OpenBleveBm25(dir string) (*BleveBm25, error) {
 	return b, nil
 }
 
-// Close releases the index; a temp index is deleted.
+// Path is the index directory.
+func (b *BleveBm25) Path() string {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	return b.path
+}
+
+// SetCleanup makes Close remove dir (the temp area the index was built in).
+func (b *BleveBm25) SetCleanup(dir string) {
+	b.mu.Lock()
+	b.cleanup = dir
+	b.mu.Unlock()
+}
+
+// Close releases the index; a never-stored index's temp area is deleted.
 func (b *BleveBm25) Close() error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if b.idx == nil {
-		return nil
+	var err error
+	if b.idx != nil {
+		err = b.idx.Close()
+		b.idx = nil
 	}
-	err := b.idx.Close()
-	b.idx = nil
-	if b.temp {
-		_ = os.RemoveAll(b.Dir)
+	if b.cleanup != "" {
+		_ = os.RemoveAll(b.cleanup)
+		b.cleanup = ""
 	}
 	return err
+}
+
+// Relocate closes the index, hands its directory to move (which stores it and
+// returns where it now lives) and reopens it read-only there. The same handle
+// keeps working, so JS objects that wrap it need not change. If move fails the
+// index is reopened where it was.
+func (b *BleveBm25) Relocate(move func(dir string) (string, error)) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.idx == nil {
+		return fmt.Errorf("index.bm25 (bleve): index is closed")
+	}
+	if err := b.idx.Close(); err != nil {
+		return err
+	}
+	b.idx = nil
+	dst, err := move(b.path)
+	if err != nil {
+		if idx, oerr := bleve.Open(b.path); oerr == nil {
+			b.idx = idx
+		}
+		return err
+	}
+	idx, err := bleve.OpenUsing(dst, map[string]any{"read_only": true})
+	if err != nil {
+		return fmt.Errorf("index.bm25 (bleve): reopen %s: %w", dst, err)
+	}
+	if b.cleanup != "" {
+		_ = os.RemoveAll(b.cleanup)
+		b.cleanup = ""
+	}
+	b.idx, b.path = idx, dst
+	return nil
 }
 
 // Search returns the top k chunks for q. only (optional) restricts to chunk ids.
@@ -218,9 +269,9 @@ func (b *BleveBm25) SearchIn(docID, q string, k int, syn []Synonym) ([]Hit, erro
 }
 
 func (b *BleveBm25) search(q string, k int, syn []Synonym, only []string, inDoc string) ([]Hit, error) {
-	b.mu.Lock()
+	b.mu.RLock()
+	defer b.mu.RUnlock()
 	idx := b.idx
-	b.mu.Unlock()
 	if idx == nil {
 		return nil, fmt.Errorf("index.bm25 (bleve): index is closed")
 	}
