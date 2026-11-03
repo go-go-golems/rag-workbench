@@ -1534,3 +1534,69 @@ Together: roughly 838 → ~250 MB live for the vault.
 
 ### Code review instructions
 - Reproduce with the command above; compare `chunkToJS` / `metaToJS` in `pkg/natives/markdown_codec.go` and `Session.ctx` in `pkg/ragjs/assets/rag.js`.
+
+## Step 26: goja-bleve checked; the vault in a bleve index opens in 1 ms at 91 MB RSS
+
+The user asked whether queries could run on bleve or SQLite instead of an in-memory corpus, and then asked me to check `~/code/wesen/go-go-golems/goja-bleve`. I read the module, checked that it compiles alongside rag-workbench, and indexed the stored vault chunks into a persistent bleve index to measure it.
+
+Opening that index takes 0.9 ms, and a query process peaks at 91 MB RSS. The same session through `ragwb serve` takes 2.2 s and 1.4 GB. Searches take 4–32 ms with a tag facet, and fetching a stored chunk takes about 0.01–0.03 ms.
+
+### Prompt Context
+**User prompt (verbatim):** "ok so can we use goja-bleve or sqlite or so to actually do querying? If i understand correctly, we load the entire corpus into memory and then query?" then "check~/code/wesen/go-go-golems/goja-bleve"
+**Assistant interpretation:** Assess goja-bleve as the backing store for retrieval and chunk lookup, with evidence rather than a recommendation from memory.
+**Inferred user intent:** Stop paying memory and open time proportional to the corpus; reuse their own bleve module if it fits.
+**Commit (code):** — (probe only: `scripts/07-bleve-vault-probe/`, a nested module so the root module does not depend on bleve).
+
+### What I did
+- Read the goja-bleve README, the `bleve.d.ts.golden` API surface, `module.go`, `api_index.go` and `api_search.go`.
+- Compat check: a scratch module requiring both repos via `replace`, building rag-workbench's runtime factory plus `goja-bleve/pkg`.
+- Probe (bleve Go API directly; the JS wrapper would need the chunks as JS objects, which is the cost being avoided):
+  - Decode the stored vault chunks: `edc1ece5955f1f.bin`, 85,882 chunks, 136 MB.
+  - Map title/heading/text as `en`-analyzed stored text, and docId/tags/type as stored keywords; set `ScoringModel = "bm25"`.
+  - Batch-index in batches of 2,000.
+  - In a fresh process: open the index, run 7 queries twice (title^3 · heading^2 · text disjunction, size 30, `tags` facet), and fetch the top 10 documents by id.
+
+### What worked
+- **Compatibility.** goja-bleve pins go-go-goja v0.8.3, but with rag-workbench's v0.10.7 and goja master (97b96e1) everything builds unchanged. Only the `go` directive rises to 1.26.4.
+- **Registration.** The module registers itself in go-go-goja's global registry (`init → modules.Register`), so a blank import would make `require("bleve")` available in every ragwb runtime.
+- **Build:** 21.0 s, 315 MB on disk with all text stored, max RSS 932 MB during indexing.
+- **Query process:**
+
+| query | total hits | search (incl. facet) | fetch top 10 | top hit |
+|---|---|---|---|---|
+| obsidian vault search | 7,359 | 9.04 ms | 0.13 ms | obsidian-publish retro › the search index |
+| goja regexp unicode | 5,980 | 7.36 ms | 0.19 ms | direct LLVM JS › RegExp literals allocate fresh runtime objects (same top as our BM25 in step 24) |
+| protobuf schema exchange | 7,198 | 7.75 ms | 0.10 ms | protobuf payload contracts › the schema registry… |
+| remarkable upload | 2,056 | 4.49 ms | 0.35 ms | obsidian-to-remarkable sync › live upload result |
+| go-go-goja module authoring | 30,319 | 32.30 ms | 0.10 ms | fringe Go host modules › go-owned module registration |
+| rebalance law preserves placements | 11,728 | 10.67 ms | 0.10 ms | pbui rebalance layout repair › the gesture grammar… |
+| xyzzy | 0 | 0.07 ms | — | |
+
+- **Open:** 922 µs. Live heap after open is 2 MB, after queries 5 MB. Process: 0.15 s wall, max RSS 91 MB.
+
+### What didn't work
+- First probe build: `cannot index c.Meta (variable of struct type natives.Meta)`. `Meta` is `{Keys, Values}`, so the code now uses `c.Meta.Values["tags"]`.
+- `ragwb store list --output json` has no `size` field (it reports `mb`); my one-liner's `KeyError: 'size'` was my mistake. The listed `key` is also shortened, so I found the file by prefix.
+
+### What I learned
+- **What goja-bleve exposes today:** mappings (named analyzers via `.analyzer("en")`), memory/persistent indexes with explicit `create`/`open`/`close`, batches, query builders, highlight, explain, KNN with filters and IVF params, and RRF/RSF hybrid scoring.
+- **What it lacks for this use:**
+  - the scoring-model setting (`bm25`; bleve v2.6 supports it, the README says scoring config is deliberately unexposed);
+  - facet requests (`bleve.NewFacetRequest`);
+  - fetch a stored document by id (`Index` has `index/delete/search/docCount/batch/close` only);
+  - custom analyzers;
+  - a path policy: `create`/`open` take any path, and the README says that is the host's concern.
+- **Vectors** need `-tags vectors` and FAISS via cgo (its `docs/faiss-xgoja-playbook.md`).
+- **Ranking will differ from our BM25.** The `en` analyzer (porter, stop words) and bleve's BM25 parameters change scores, even though the probe's top hits look relevant.
+
+### What should be done in the future
+- Add `index.bleve` as a Go-native rag component, like `Bm25Native`:
+  - its build writes the index under the artifact store, keyed by store key;
+  - load means `bleve.Open`;
+  - `retrieve` calls Search.
+- Back `art.chunks` with stored-field lookups, a lazy Go-backed map. That removes the 411 MB of chunk objects (step 25).
+- Upstream to goja-bleve: scoring model, facets, `get(id)`, and a host path hook. Then expose `require("bleve")` in ragwb restricted to `--root`.
+- Measure top-10 overlap against `index.bm25` on the reports goldens before choosing a default.
+
+### Code review instructions
+- `scripts/07-bleve-vault-probe/{probe,compat}/main.go`; run per its README.
