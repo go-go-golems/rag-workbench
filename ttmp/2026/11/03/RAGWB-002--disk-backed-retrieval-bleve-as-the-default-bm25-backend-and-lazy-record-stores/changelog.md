@@ -11,3 +11,7 @@ Ticket opened; intern design/implementation guide written: bleve as the default 
 ### Related Files
 
 - /home/manuel/code/wesen/go-go-golems/rag-workbench/ttmp/2026/11/03/RAGWB-002--disk-backed-retrieval-bleve-as-the-default-bm25-backend-and-lazy-record-stores/design-doc/01-intern-guide-disk-backed-retrieval-with-bleve-and-lazy-record-stores.md — the guide
+
+## 2026-11-03
+
+Guide uploaded to reMarkable: /ai/2026/11/03/RAGWB-002/RAGWB-002 Disk-backed Retrieval Intern Guide.pdf
