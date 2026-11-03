@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -32,8 +31,7 @@ func NewWorkbenchCommand() *cobra.Command {
 				return err
 			}
 			if dbPath == "" {
-				home, _ := os.UserHomeDir()
-				dbPath = filepath.Join(home, ".ragwb", "ragwb.db")
+				dbPath = DefaultDBPath()
 			}
 			docs, err := server.OpenDocStore(dbPath)
 			if err != nil {
@@ -76,7 +74,7 @@ func NewWorkbenchCommand() *cobra.Command {
 	cmd.Flags().StringVar(&addr, "addr", "127.0.0.1:8790", "Listen address (keep it on loopback: there is no auth)")
 	cmd.Flags().StringVar(&presets, "presets", "examples/presets", "Directory with presets/index.json and preset scripts")
 	cmd.Flags().StringVar(&corpus, "corpus", "examples/apps/reports/corpus", "Directory of .md files served as the bundled corpus")
-	cmd.Flags().StringVar(&appsDir, "apps", "", "Apps directory for saved scripts (default ~/.ragwb/apps); each app is a directory ragwb verbs/run can execute")
+	cmd.Flags().StringVar(&appsDir, "apps", "", "Apps directory for saved scripts (default $RAGWB_APPS or ~/.ragwb/apps); each app is a directory ragwb verbs/run can execute")
 	cmd.Flags().StringVar(&dbPath, "db", "", "SQLite document store for the page's db capability (default ~/.ragwb/ragwb.db)")
 	return cmd
 }

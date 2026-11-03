@@ -27,6 +27,12 @@ func main() {
 	})
 	cmds.AddGlobalFlags(root)
 	root.AddCommand(cmds.NewRunCommand(), cmds.NewPresetsCommand(), cmds.NewWorkbenchCommand())
+	apps, err := cmds.NewAppsCommand()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	root.AddCommand(apps)
 
 	dir, _ := cmds.DiscoverVerbsDir(os.Args[1:])
 	verbs, err := cmds.NewVerbsCommand(dir)

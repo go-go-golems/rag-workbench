@@ -13,6 +13,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/go-go-golems/rag-workbench/pkg/runner"
+	"github.com/go-go-golems/rag-workbench/pkg/store"
 )
 
 type runFlags struct {
@@ -54,11 +55,15 @@ func (f *runFlags) options() (runner.ScriptOptions, error) {
 func NewRunCommand() *cobra.Command {
 	f := &runFlags{}
 	cmd := &cobra.Command{
-		Use:   "run <script.js>",
+		Use:   "run <script.js | app/file.wb.js>",
 		Short: "Run a workbench script (async body returning {plan, evals, app}) and print a JSON report",
-		Args:  cobra.ExactArgs(1),
+		Long: "Runs a workbench-form script headlessly. The argument is a file path, or <app>/<file> for a script saved\n" +
+			"from the workbench (resolved in $RAGWB_APPS or ~/.ragwb/apps). Relative source.dir roots resolve against the\n" +
+			"script's directory, which is also allowlisted.",
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			src, err := os.ReadFile(args[0])
+			path := resolveScript(args[0])
+			src, err := os.ReadFile(path)
 			if err != nil {
 				return err
 			}
@@ -74,13 +79,14 @@ func NewRunCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			factory, err := runner.NewFactory(runner.Config{Verbose: f.verbose, Roots: Roots(), JSComponents: JSComponents(), LLM: backend, BuildCalls: BuildCalls(), Embedder: embedder, EmbedCache: embedCache})
+			base := filepath.Dir(path)
+			factory, err := runner.NewFactory(runner.Config{Verbose: f.verbose, Roots: Roots(base), Base: base, JSComponents: JSComponents(), LLM: backend, BuildCalls: BuildCalls(), Embedder: embedder, EmbedCache: embedCache})
 			if err != nil {
 				return err
 			}
 			ctx, cancel := context.WithTimeout(cmd.Context(), f.timeout)
 			defer cancel()
-			rep, err := runner.RunWorkbenchScript(ctx, factory, args[0], string(src), opts)
+			rep, err := runner.RunWorkbenchScript(ctx, factory, path, string(src), opts)
 			if err != nil {
 				return err
 			}
@@ -91,6 +97,18 @@ func NewRunCommand() *cobra.Command {
 	}
 	f.bind(cmd)
 	return cmd
+}
+
+// resolveScript maps <app>/<file> to the apps directory when it is not an existing path.
+func resolveScript(arg string) string {
+	if _, err := os.Stat(arg); err == nil {
+		return arg
+	}
+	app, rest, ok := strings.Cut(filepath.ToSlash(arg), "/")
+	if !ok || store.CheckApp(app) != nil || store.CheckPath(rest) != nil {
+		return arg
+	}
+	return filepath.Join(DefaultAppsDir(), app, filepath.FromSlash(rest))
 }
 
 // NewPresetsCommand runs every preset in a directory and prints one summary line each:

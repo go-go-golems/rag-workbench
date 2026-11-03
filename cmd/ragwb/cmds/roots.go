@@ -3,7 +3,6 @@ package cmds
 import (
 	"fmt"
 	"os"
-	"path/filepath"
 
 	"github.com/spf13/cobra"
 
@@ -102,10 +101,4 @@ func Roots(dirs ...string) []string {
 		}
 	}
 	return append(out, extraRoots...)
-}
-
-// DefaultAppsDir is where saved scripts live unless --apps says otherwise: ~/.ragwb/apps.
-func DefaultAppsDir() string {
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".ragwb", "apps")
 }

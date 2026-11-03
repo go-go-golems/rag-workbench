@@ -3,6 +3,7 @@ package cmds
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"strings"
 
 	"github.com/go-go-golems/glazed/pkg/cli"
@@ -16,9 +17,14 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/go-go-golems/rag-workbench/pkg/runner"
+	"github.com/go-go-golems/rag-workbench/pkg/store"
 )
 
-// DiscoverVerbsDir finds the --dir value for the verbs command in raw argv.
+// appDir resolves a saved app name to its directory.
+func appDir(name string) string { return filepath.Join(DefaultAppsDir(), name) }
+
+// DiscoverVerbsDir finds the directory for the verbs command in raw argv:
+// --dir <path>, or --app <name> for an app in the apps directory.
 // jsverbs commands are generated from the scanned directory, so it must be
 // known before cobra parses flags (the same approach as jsverbs-example).
 func DiscoverVerbsDir(args []string) (string, bool) {
@@ -39,6 +45,12 @@ func DiscoverVerbsDir(args []string) (string, bool) {
 			}
 		case strings.HasPrefix(a, "--dir="):
 			return strings.TrimPrefix(a, "--dir="), true
+		case a == "--app" || a == "-a":
+			if i+1 < len(args) {
+				return appDir(args[i+1]), true
+			}
+		case strings.HasPrefix(a, "--app="):
+			return appDir(strings.TrimPrefix(a, "--app=")), true
 		}
 	}
 	return "", inVerbs
@@ -51,17 +63,21 @@ func NewVerbsCommand(dir string) (*cobra.Command, error) {
 	verbsCmd := &cobra.Command{
 		Use:   "verbs",
 		Short: "Run JS functions from an app directory as commands (jsverbs)",
-		Long: "Scan --dir for .js files; each top-level function (or __verb__) becomes a command whose result is printed as rows.\n" +
-			"Example: ragwb verbs --dir examples/apps/reports reports search \"rebalance law\"",
+		Long: "Scan an app directory for .js files; each function declared with __verb__(name, {...}) becomes a command whose\n" +
+			"result is printed as rows. Workbench scripts (*.wb.js) are skipped: run them with `ragwb run`.\n" +
+			"Examples:\n" +
+			"  ragwb verbs --dir examples/apps/reports reports search \"rebalance law\"\n" +
+			"  ragwb verbs --app notes list        (an app saved from the workbench, in $RAGWB_APPS or ~/.ragwb/apps)",
 	}
 	verbsCmd.PersistentFlags().StringP("dir", "d", dir, "App directory to scan for verbs")
+	verbsCmd.PersistentFlags().StringP("app", "a", "", "Saved app name (resolved in $RAGWB_APPS or ~/.ragwb/apps); alternative to --dir")
 	if dir == "" {
 		verbsCmd.RunE = func(cmd *cobra.Command, args []string) error {
-			return fmt.Errorf("pass --dir <app directory>")
+			return fmt.Errorf("pass --dir <app directory> or --app <saved app>")
 		}
 		return verbsCmd, nil
 	}
-	registry, err := jsverbs.ScanDir(dir)
+	registry, err := jsverbs.ScanDir(dir, store.VerbScanOptions())
 	if err != nil {
 		return nil, err
 	}
