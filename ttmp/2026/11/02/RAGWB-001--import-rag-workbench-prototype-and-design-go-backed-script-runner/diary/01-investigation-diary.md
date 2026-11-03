@@ -1489,3 +1489,48 @@ On the whole parc vault (85,882 chunks), a warm open takes 2.2 s. After that, 16
   - `go test ./pkg/runner ./pkg/server ./web -run 'Serve|RagServer|GuiCSS'`
   - `ragwb serve examples/apps/reports`, then open http://127.0.0.1:8791/
   - for the vault: `ragwb --root ~/code/wesen/go-go-golems/go-go-parc serve examples/apps/parc`
+
+## Step 25: why a served vault session takes 1.4 GB: one JS object per chunk, frontmatter copied into every chunk
+
+The user asked why sessions use so much memory, after I said a vault session needs about 1.4 GB. I measured it instead of estimating: a heap profile of one opened parc session. The live heap is 838 MB in 9.4 million objects. The ~1.3 GB of RSS is that live heap plus Go GC headroom: after the decode garbage is collected, the default GOGC=100 keeps the freed memory.
+
+Half the live heap (411 MB) is the 85,882 chunks materialized as JS objects. A query reads about 50 of them.
+
+### Prompt Context
+**User prompt (verbatim):** "jwhy are sessions using so much memory?"
+**Assistant interpretation:** Explain, with evidence, where a served session's memory goes.
+**Inferred user intent:** Decide whether the memory cost of P7 sessions (and the planned 2–3 open sessions in the workbench) is inherent or fixable.
+**Commit (code):** — (measurement script only: `scripts/06-serve-heap/main.go`).
+
+### What I did
+- `scripts/06-serve-heap/main.go` opens an app with the artifact store, forces GC, prints `MemStats`, runs one query and writes a heap profile.
+- `go run ./…/scripts/06-serve-heap -root ~/code/wesen/go-go-golems/go-go-parc -out heap.pb.gz`, then `go tool pprof -top` and `-peek`.
+
+### What worked
+- `after open: live heap 838.5 MB · heap objects 9,443,298 · sys 1293.3 MB`. One query adds nothing measurable. After `Close`, live heap is 2.5 MB, so nothing leaks past a session.
+- Where the live heap goes (inuse_space, cumulative):
+
+| what | MB | notes |
+|---|---|---|
+| chunk JS objects (`chunkToJS`) | 411 | ↳ `meta` per chunk (`metaToJS`) 156 · 15 property slots per object 142 · `headingPath` arrays 52 · `range` objects 42 |
+| Go `[]Chunk` (gob decode), kept as the array's `__go` handle | 204 | text, ids, titles, per-chunk Meta maps; ASCII JS strings share these bytes |
+| BM25 index (Go) | 132 | postings `{int, float64}` = 16 B each, plus the term map |
+| terms index (`ix-meta`), JSON.parse into JS objects | ~53 | |
+| everything else | ~20 | |
+
+### What I learned
+- **Most chunk objects are never read.** Retrieval is Go-native (BM25 returns ids), and a query reads about 50 chunk objects, yet all 85,882 are built at open. That is also most of the 1.2 s "load chunks" time from step 23.
+- **Frontmatter is copied into every chunk.** Each chunk carries its document's frontmatter as its own object. About 4,000 documents' metadata is stored about 20 times over: 156 MB on the JS side, plus Go-side copies.
+- **Per-run cost, found while reading:** `Session.ctx()` runs `const chunkList = [...art.chunks.values()]` for every live node of every run. That allocates an 85k-element array even when no component uses `ctx.chunks()`. It probably explains why a zero-hit query still costs about 7 ms of engine time.
+
+### What should be done in the future
+Ordered by gain per effort:
+1. **Return freed memory after open.** `debug.FreeOSMemory()` after open, plus a `GOMEMLIMIT`/GOGC setting for serve. RSS ~1.3 GB → ~0.9 GB; trivial.
+2. **Make `chunkList` lazy in `Session.ctx`.** Per-query time, not memory; trivial.
+3. **Share one meta object per document across its chunks.** About −150 MB. First check that no component mutates `chunk.meta` (enrich components may), or freeze/copy on write.
+4. **Lazy chunk objects.** A Go-backed `chunks` Map that builds a JS object on `get(id)`. About −400 MB and −1.2 s of open, for the CLI too. It needs an audit of every place rag.js iterates all chunks: `order`, `ctx.chunks(f)`, enrich, bakes.
+5. **BM25 postings as `int32` + `float32`.** About −60 MB.
+Together: roughly 838 → ~250 MB live for the vault.
+
+### Code review instructions
+- Reproduce with the command above; compare `chunkToJS` / `metaToJS` in `pkg/natives/markdown_codec.go` and `Session.ctx` in `pkg/ragjs/assets/rag.js`.
