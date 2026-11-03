@@ -151,10 +151,13 @@ func TestArtifactsKeyIncludesComponentSource(t *testing.T) {
 				rag.define("chunk.tagged", { phase: "build", in: ["docs"], out: "chunks",
 					all: new Function("[docs]", "return docs.slice(0, 2).map((d, i) => ({ id: d.id + '#' + i, docId: d.id, title: d.title, headingPath: [], text: '" + marker + "', blocks: [] }));") });
 				const c = rag.corpus("t").from(rag.source.dir({ root, include: ["*.md"] })).parse(rag.markdown()).chunk(rag.chunk.tagged()).index("text", rag.bm25());
-				const ir = rag.compile(rag.plan("t").over(c).signals({ q: "", k: 5 }).retrieve("text", { k: 5 }).limit());
+				const plan = rag.plan("t").over(c).signals({ q: "", k: 5 }).retrieve("text", { k: 5 }).limit();
+				const ir = rag.compile(plan);
 				const rep = await rag.engine().build(ir);
 				if (!rep.ok) throw new Error(rep.errors.join("\n"));
-				return [...rag.engine().artifacts(ir).chunks.values()].map(x => x.text).join(",");
+				// the index downstream of the edited chunker must follow it (PR #1 review)
+				const hits = (await rag.run(plan, { q: marker })).hits.length;
+				return [...rag.engine().artifacts(ir).chunks.values()].map(x => x.text).join(",") + "|" + hits;
 			})(%q, %q)`, root, marker))
 		})
 		if err != nil {
@@ -162,10 +165,11 @@ func TestArtifactsKeyIncludesComponentSource(t *testing.T) {
 		}
 		return v.(string)
 	}
-	if got := run("one"); got != "one,one" {
+	if got := run("one"); got != "one,one|2" {
 		t.Fatalf("first = %q", got)
 	}
-	if got := run("two"); got != "two,two" {
+	// "two,two|0" was the review's bug: new chunks, but the stored index of the old ones
+	if got := run("two"); got != "two,two|2" {
 		t.Fatalf("after editing the component body: %q (a stale stored output was reused)", got)
 	}
 }

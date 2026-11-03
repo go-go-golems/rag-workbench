@@ -1301,7 +1301,11 @@
         const def = REG.get(n.t);
         if (n.t === 'source.files') extra = this.files().map(f => this.fileDigest(f)).join(',');
         else if (def && typeof def.digest === 'function') extra = String(def.digest(n.p, this) || '');
-        out.set(n.id, hash([n.t, n.p, n.in.map(i => out.get(i) || i), extra]));
+        // a rag.define'd component's source is part of its identity: editing its body (same type,
+        // same params) invalidates the node and, through the input digests, everything downstream.
+        // Built-in components have no src, so their digests are unchanged.
+        const src = def && def.src ? [def.src] : [];
+        out.set(n.id, hash([n.t, n.p, n.in.map(i => out.get(i) || i), extra, ...src]));
       }
       return out;
     }
@@ -1559,6 +1563,8 @@
       const engine = this.engine;
       let art = engine.artifacts(ir);
       if (!art) { const rep = await engine.build(ir, { signal: opts.signal, onProgress: opts.onProgress }); if (!rep.ok) throw new RagError('build', rep.errors.join('\n')); art = engine.artifacts(ir); }
+      // live outputs memoized against other artifacts (a rebuilt corpus) are stale
+      if (this.artKey !== art.key) { this.memo.clear(); this.artKey = art.key; }
       const t0 = now();
       const trigger = opts.trigger || 'submit';
       const s = { ...ir.signals, ...signals };
@@ -1576,7 +1582,7 @@
           return src.t === 'signal' && (portsOf(n).in[0] || '').startsWith('queries') ? this.queries(v) : v;
         });
         const input = (portsOf(n).in[0] || '') === 'hits*' ? inputs : inputs[0];
-        const nd = hash([n.t, n.p, n.trigger]);
+        const nd = hash([n.t, n.p, n.trigger, def.src || '']); // a redefined live component reruns
         const wants = trigger === 'submit' || triggerOf(n) === 'change';
         const m = this.memo.get(n.id);
         const sameInputs = m && m.inputs.length === inputs.length && m.inputs.every((v, i) => v === inputs[i]);
