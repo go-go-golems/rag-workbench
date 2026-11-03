@@ -394,3 +394,67 @@ Blocks and chunks also gained `range: {byteStart, byteEnd, lineStart, lineEnd}` 
 ### Technical details
 - Range: half-open bytes in the original file; 1-based inclusive lines. Fences include their marker lines. Chunk range = union of its blocks' ranges. Synthetic heading paragraphs (deeper sections folded into a group) have no range.
 - Native index object: `{kind: 'bm25', N, fields, search(q, k = 20, {synonyms, only}), searchIn(docId, q, k = 3, {synonyms}), toJSON()}`.
+
+## Step 9: LunaRoute as the LLM, embedding and rerank provider — research, probes, and a credential slip
+
+The user asked to use LunaRoute for embeddings, reranking and LLM calls, with the key Pi already uses. I read the LunaRoute docs, found the key in Pi's config, listed the available models, and probed each endpoint once with a minimal request. That way the client is written against observed responses rather than undocumented assumptions. I also fixed the formatting slip from Step 8.
+
+There was one mistake with consequences. While locating the key I printed a redacted view of `~/.pi/agent/auth.json`. My redaction matched key *names* containing `key|token|secret|auth`, but that file stores the LunaRoute OAuth credential under `access`, so **the token value appeared in this session's local tool output**. It was not written to any file, committed or sent anywhere. All later access reads the key inside the program and prints only metadata. The user was told and may want to rotate it.
+
+### Prompt Context
+**User prompt (verbatim):** "we can use embeddings models and reranking from https://docs.lunaroute.com/ and for llm calls, for testing (the same key through pi as the normal hosting)" and "don't forget the dairy".
+**Assistant interpretation:** Make LunaRoute the backend for `ctx.sample` (P9), embeddings and rerank (P8), with credentials taken from Pi's existing config. Keep the diary current at every step.
+**Inferred user intent:** Test real LLM/embedding behavior now without new accounts or keys.
+**Commit (code):** e434fb6 — "RAGWB-001: gofmt bm25 files; make lint checks gofmt" (the research itself has no code).
+
+### What I did
+- Fetched `https://docs.lunaroute.com/`, `/api/embeddings-rerank/`, `/models/` and `/api/chat-completions/`. Base URL `https://gw.lunaroute.com`, header `LUNAROUTE-API-KEY`. Endpoints: `POST /v1/chat/completions` (OpenAI-style), `/v1/messages` (Anthropic), `POST /v1/embeddings` (TEI's OpenAI-compatible body, 2 MiB cap, no truncation), `POST /v1/rerank` (Cohere v2), and listings `GET /v1/models`, `/v1/embeddings/models`, `/v1/rerank/models`.
+- Key location: `~/.pi/agent/models.json` → `providers.lunaroute` = `{baseUrl: "https://gw.lunaroute.com/v1", api: "openai-completions", apiKey: <67 chars>}`. Pi's `auth.json` also has an OAuth `lunaroute.access` token (the one exposed). The client will prefer `$LUNAROUTE_API_KEY`, then `models.json`.
+- Listings (embeddings policy `included`):
+
+| task | id | dims | max tokens | batch/docs |
+|---|---|---|---|---|
+| embed | `emb-granite` | 768 | 32768 | 64 |
+| embed | `emb-qwen3` | 1024 (dimensions settable) | 32768 | 64 |
+| embed | `emb-nomic-code` | 3584 | 32768 | 64 |
+| embed | `emb-nomic-moe` | 768 (dimensions settable) | 512 | 64 |
+| rerank | `bge-rr-v2-m3` | — | 8192 | 99 docs |
+
+  Chat ids: `clef-flash, deepseek-4.1-flash(-background), djev, glm-5.3(-background), glm-5.3-flash(-background), glm-5.3-vision(-background), muse-spark-open(-background), whisper-large-v3`.
+- Probes (one request each, key read inside Python, output scrubbed):
+  - chat + tools (`glm-5.3-flash`, `max_tokens` 300) → 1.49 s, `finish_reason: "tool_calls"`, `message.tool_calls[0] = {id, type: "function", function: {name: "search", arguments: "{\"query\": \"rebalance law\"}"}}`, separate `message.reasoning_content`, `usage.reasoning_tokens: 23`.
+  - plain chat with `max_tokens` 50 → `finish_reason: "length"`, **empty `content`**: the budget was spent on `reasoning_content`.
+  - embeddings (`emb-granite`, 2 inputs) → 0.67 s, `data[i] = {object: "embedding", index, embedding: [768 floats]}`, `usage.prompt_tokens: 10`.
+  - rerank (`bge-rr-v2-m3`, 2 docs) → 0.45 s, `results: [{index: 0, relevance_score: 0.9896}, {index: 1, relevance_score: 1.6e-05}]`, `meta.billed_units.search_units: 1`.
+- gofmt: `gofmt -l .` in the Step 8 commit chain listed `pkg/natives/bm25.go` and `bm25_native.go`, but `&&` only guarded `go vet`, so the commit went ahead. Formatted them in e434fb6, and `make lint` now fails when `gofmt -l` is non-empty.
+
+### Why
+- The listings and probes replace guesses. The response fields (`tool_calls`, `reasoning_content`, `finish_reason`) aren't documented on the chat page.
+
+### What worked
+- All four endpoints answered with the documented header and lr_ key on the first try. Latencies are 0.45–1.5 s.
+
+### What didn't work
+- The redaction described above (security slip). Root cause: redacting by key-name pattern instead of by value. Prevention: never pretty-print credential files. Read the needed field programmatically, and print only lengths or presence.
+- `/models/` and `/api/chat-completions/` docs don't list model ids, tool format or response schema. Resolved via the listing endpoints and probes.
+
+### What I learned
+- GLM models reason by default, and reasoning consumes `max_tokens`. The `quick` tier needs either a thinking-off control or a generous token budget. `finish_reason: "length"` must map to `truncated: true`, and empty content after reasoning must not be returned as an answer (`empty_completion`).
+- `-background` model variants exist for work that can wait (bulk enrichment, synthetic evals).
+
+### What was tricky to build
+- N/A (research step). The tricky part ahead is resolving JS promises from HTTP goroutines. `runtimebridge.Lookup(vm).PostWithLifetimeContext` is the path, since native loaders only receive `vm`.
+
+### What warrants a second pair of eyes
+- Credential handling in the coming `pkg/llm`: env first, then `models.json`. Never log it, and never put it in error messages (HTTP error bodies are truncated and scrubbed).
+
+### What should be done in the future
+- P9: `pkg/llm` (Backend interface, LunaRoute + fake), `env.sample` / `sample.json` in the ragwb host, tier → model config. Then the "With Claude" presets run headless.
+- P8: `embed` + `index.vector` + `rerank.model` components on emb-granite / bge-rr-v2-m3.
+
+### Code review instructions
+- No code in this step beyond e434fb6 (`Makefile` lint target).
+
+### Technical details
+- Rerank request: `{model, query, documents[], top_n, return_documents}`. A long query reduces each document's share of the 8192-token pair limit.
+- Embeddings: unknown fields are rejected, so send only `model`, `input`, and optionally `dimensions` / `encoding_format`.
