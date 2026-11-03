@@ -1,0 +1,263 @@
+[
+ {
+  "id": "reports",
+  "file": "reports.js",
+  "group": "Start here",
+  "title": "Reports · hybrid + rerank + answer",
+  "blurb": "Three retrievers fused with RRF; Claude rewrites, reranks and answers on Enter.",
+  "level": 3,
+  "llm": "enter"
+ },
+ {
+  "id": "minimal",
+  "file": "minimal.js",
+  "group": "Start here",
+  "title": "Minimal search",
+  "blurb": "One chunker, one BM25 index, one retriever. The smallest pipeline that works.",
+  "level": 1,
+  "llm": ""
+ },
+ {
+  "id": "graph",
+  "file": "graph.js",
+  "group": "Start here",
+  "title": "Graph form",
+  "blurb": "The same kind of plan with every node and edge named, via rag.graph.",
+  "level": 2,
+  "llm": "enter"
+ },
+ {
+  "id": "chunk-sizes",
+  "file": "chunk-sizes.js",
+  "group": "Corpus & chunking",
+  "title": "Chunk sizes",
+  "blurb": "200, 450 and 900-token sections, h2-only and overlap as variants to compare.",
+  "level": 1,
+  "llm": ""
+ },
+ {
+  "id": "table-rows",
+  "file": "table-rows.js",
+  "group": "Corpus & chunking",
+  "title": "Table rows as chunks",
+  "blurb": "A build lambda turns every table row into its own chunk.",
+  "level": 2,
+  "llm": ""
+ },
+ {
+  "id": "code-blocks",
+  "file": "code-blocks.js",
+  "group": "Corpus & chunking",
+  "title": "Code search",
+  "blurb": "rag.define a chunker for fenced code; language becomes a facet.",
+  "level": 2,
+  "llm": ""
+ },
+ {
+  "id": "outline",
+  "file": "outline.js",
+  "group": "Corpus & chunking",
+  "title": "Outline search",
+  "blurb": "Index headings only, with each section's first sentence.",
+  "level": 1,
+  "llm": ""
+ },
+ {
+  "id": "per-doc",
+  "file": "per-doc.js",
+  "group": "Corpus & chunking",
+  "title": "Which report?",
+  "blurb": "One card per document for document-level retrieval.",
+  "level": 1,
+  "llm": ""
+ },
+ {
+  "id": "fields",
+  "file": "fields.js",
+  "group": "Ranking",
+  "title": "Field weights",
+  "blurb": "BM25F weights on title, headings, callouts and text, with variants.",
+  "level": 1,
+  "llm": ""
+ },
+ {
+  "id": "fusion",
+  "file": "fusion.js",
+  "group": "Ranking",
+  "title": "Fusion",
+  "blurb": "RRF over three retrievers; variants swap the rule and the weights.",
+  "level": 2,
+  "llm": ""
+ },
+ {
+  "id": "custom-rerank",
+  "file": "custom-rerank.js",
+  "group": "Ranking",
+  "title": "Rerank with a lambda",
+  "blurb": "Heading overlap, code and length heuristics with params. No Claude.",
+  "level": 2,
+  "llm": ""
+ },
+ {
+  "id": "define-components",
+  "file": "define-components.js",
+  "group": "Ranking",
+  "title": "Your own components",
+  "blurb": "rag.define diversify and boost.tags, then chain them like built-ins.",
+  "level": 3,
+  "llm": ""
+ },
+ {
+  "id": "synonyms",
+  "file": "synonyms.js",
+  "group": "Ranking",
+  "title": "Query expansion",
+  "blurb": "Index-time synonyms and an acronym-expanding rewrite lambda.",
+  "level": 2,
+  "llm": ""
+ },
+ {
+  "id": "context",
+  "file": "context.js",
+  "group": "Ranking",
+  "title": "Context expansion",
+  "blurb": "Neighbouring sections and [[linked]] reports feed the answer.",
+  "level": 2,
+  "llm": "enter"
+ },
+ {
+  "id": "llm-rerank",
+  "file": "llm-rerank.js",
+  "group": "With Claude",
+  "title": "Rewrite + rerank",
+  "blurb": "rewrite.llm and rerank.llm with reasons, on Enter.",
+  "level": 1,
+  "llm": "enter"
+ },
+ {
+  "id": "hyde",
+  "file": "hyde.js",
+  "group": "With Claude",
+  "title": "HyDE",
+  "blurb": "Search with a hypothetical answer drafted by Claude; a toggle turns it off.",
+  "level": 2,
+  "llm": "enter"
+ },
+ {
+  "id": "doc-cards",
+  "file": "doc-cards.js",
+  "group": "With Claude",
+  "title": "Doc cards",
+  "blurb": "enrich.llm adds summaries and questions per document, then routes queries.",
+  "level": 3,
+  "llm": "build"
+ },
+ {
+  "id": "agentic",
+  "file": "agentic.js",
+  "group": "With Claude",
+  "title": "Agentic answer",
+  "blurb": "One node that searches, reads and cites with tools.",
+  "level": 2,
+  "llm": "enter"
+ },
+ {
+  "id": "two-answers",
+  "file": "two-answers.js",
+  "group": "With Claude",
+  "title": "Two answers",
+  "blurb": "One context branches into a brief and a detailed answer.",
+  "level": 2,
+  "llm": "enter"
+ },
+ {
+  "id": "judged",
+  "file": "judged.js",
+  "group": "With Claude",
+  "title": "Judged evals",
+  "blurb": "answerHas checks and Claude judges for groundedness and length.",
+  "level": 3,
+  "llm": "enter"
+ },
+ {
+  "id": "facets",
+  "file": "facets.js",
+  "group": "Search experiences",
+  "title": "Faceted search",
+  "blurb": "Frontmatter facets, filter.where and a toggle-driven filter lambda.",
+  "level": 1,
+  "llm": ""
+ },
+ {
+  "id": "answer-first",
+  "file": "answer-first.js",
+  "group": "Search experiences",
+  "title": "Answer first",
+  "blurb": "Tabs for the answer, its sources, and the trace with a live DAG.",
+  "level": 2,
+  "llm": "enter"
+ },
+ {
+  "id": "doc-browser",
+  "file": "doc-browser.js",
+  "group": "Search experiences",
+  "title": "Document browser",
+  "blurb": "Pick a report, read its outline, or search inside it.",
+  "level": 2,
+  "llm": ""
+ },
+ {
+  "id": "compare-nodes",
+  "file": "compare-nodes.js",
+  "group": "Search experiences",
+  "title": "Compare stages",
+  "blurb": "Three result lists from three nodes of the same plan.",
+  "level": 2,
+  "llm": ""
+ },
+ {
+  "id": "playground",
+  "file": "playground.js",
+  "group": "Search experiences",
+  "title": "Ranking playground",
+  "blurb": "Sliders bound to signals the plan reads; only those nodes re-run.",
+  "level": 3,
+  "llm": ""
+ },
+ {
+  "id": "canvas-map",
+  "file": "canvas-map.js",
+  "group": "Search experiences",
+  "title": "Result map",
+  "blurb": "A canvas drawing of hits by document and rank, clickable.",
+  "level": 3,
+  "llm": ""
+ },
+ {
+  "id": "dashboard",
+  "file": "dashboard.js",
+  "group": "Search experiences",
+  "title": "Corpus dashboard",
+  "blurb": "Stats, charts and a table built from the corpus itself.",
+  "level": 2,
+  "llm": ""
+ },
+ {
+  "id": "synthetic-evals",
+  "file": "synthetic-evals.js",
+  "group": "Evaluation",
+  "title": "Synthetic evals",
+  "blurb": "Claude writes questions for sampled sections; score them in place.",
+  "level": 2,
+  "llm": "enter"
+ },
+ {
+  "id": "sweep",
+  "file": "sweep.js",
+  "group": "Evaluation",
+  "title": "Parameter sweep",
+  "blurb": "Twelve configurations scored on the goldens, with a line chart.",
+  "level": 2,
+  "llm": ""
+ }
+]
