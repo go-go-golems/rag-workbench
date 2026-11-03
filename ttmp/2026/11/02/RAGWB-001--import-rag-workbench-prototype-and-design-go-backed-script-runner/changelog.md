@@ -87,3 +87,12 @@ go-go-goja v0.10.7 released; rag-workbench on it (goja master): isLN=\p{L}\p{N},
 ### Related Files
 
 - /home/manuel/code/wesen/go-go-golems/rag-workbench/pkg/natives/jslower.go — goja toLowerCase port (cases.Lower + Final_Sigma)
+
+## 2026-11-03
+
+P6 app store done: apps dir + SQLite history, /api/apps with save-time checks, ragwb apps / verbs --app / run <app>/<file>, workbench Save + Saved apps + agent wb.apps/save/open; browser- and agent-verified (D9: roles by file name)
+
+### Related Files
+
+- /home/manuel/code/wesen/go-go-golems/rag-workbench/pkg/server/apps.go — /api/apps routes
+- /home/manuel/code/wesen/go-go-golems/rag-workbench/pkg/store/apps.go — app store (files + history)

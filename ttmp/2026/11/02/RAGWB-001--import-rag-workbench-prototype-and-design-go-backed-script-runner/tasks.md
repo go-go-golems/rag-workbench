@@ -9,7 +9,7 @@
 - [x] P3 rag.source.dir native: walk, globs, excludes, stat digest, roots allowlist; go-go-parc subset <!-- t:q4fk -->
 - [x] P4 native parse.markdown/chunk.sections (goldmark) with byte ranges (A2), parity fixtures <!-- t:ls4u -->
 - [x] P5 workbench server: ported UI + window.claude shim (sample SSE/page tools, db, user) <!-- t:pgim -->
-- [ ] P6 app store: apps dir + history API; agent wb.save/load <!-- t:bhly -->
+- [x] P6 app store: apps dir + history API; agent wb.save/load <!-- t:bhly -->
 - [ ] P7 remote pipeline: /api/rag sessions, RemoteRag, ragwb serve <app> <!-- t:i5j5 -->
 - [ ] P8 persistence + vectors: artifact store by digest, bleve index, embeddings + sqliteexact <!-- t:f6cl -->
 - [x] P9 server-side LLM nodes: ctx.sample on geppetto <!-- t:jlcq -->

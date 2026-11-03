@@ -784,6 +784,13 @@ function remoteRag(base, sessionId) {
 - **Consequences:** Two RAG DSLs exist in the org. The guide and help pages must say which to use when: **workbench for exploring and ad-hoc apps, v2 for audited products/studies**. Our module is `require("ragwb")`; scripts typically write `const rag = require("ragwb")`.
 - **Status:** proposed
 
+### Decision D9: A file's role comes from its name
+
+- **Context:** One app directory holds workbench scripts (async function bodies returning `{plan, evals, app}`) and jsverbs files (CommonJS modules with `__verb__`). jsverbs scans every `.js` file in the directory.
+- **Options considered:** (a) separate directories per role; (b) a manifest file; (c) naming: `*.wb.js` for workbench scripts, `lib/**` for libraries, any other `.js` for verbs.
+- **Decision:** (c). `store.VerbScanOptions()` excludes `**/*.wb.js` from jsverbs; `ragwb run <app>/<file>.wb.js` runs workbench scripts; the save-time check compiles each file the way it will run.
+- **Status:** implemented (P6)
+
 ## 11. Key flows (pseudocode)
 
 ### 11.1 `ragwb verbs --dir apps/parc parc index`
@@ -956,7 +963,7 @@ This section records what exists now. The diary (`diary/01-investigation-diary.m
 | P3 directory source | done | `pkg/natives/sourcedir.go` | roots allowlist (`--root`), stat digest via a new engine hook `def.digest` |
 | P4 native parse/chunk | done, **and BM25** | `pkg/natives/{markdown,chunk,bm25}.go` | Faithful ports, not goldmark/Bleve: byte-identical to rag.js on the **whole vault** (2,282 notes) and in BM25 results. Vault build is 17 s (it was ~10 min in JS). A2 ranges on blocks and chunks |
 | P5 workbench server | done | `pkg/server`, `web/workbench`, `ragwb workbench` | Browser-verified Ask + agent on LunaRoute |
-| P6 app store | **next** | — | apps dir + `wb.save` |
+| P6 app store | done (2026-11-03) | `pkg/store`, `pkg/server/apps.go`, `cmd/ragwb/cmds/apps.go`, `web/workbench/app.js` | apps dir + SQLite history; `/api/apps`; Save/Ctrl+S, Saved apps menu; agent `wb.apps/save/open`; `ragwb apps`, `verbs --app`, `run <app>/<file>`. Roles by file name (D9) |
 | P7 remote pipeline / `ragwb serve` | open | — | §9.8 sync `host.rag.chunk` caveat still applies |
 | P8 persistence + vectors | partly | `pkg/natives/{vector,embcache}.go` | `index.vector` + `rerank.model` + SQLite embedding cache done. Persisting BM25/terms/build artifacts by digest (A5) is open |
 | P9 server-side LLM nodes | done | `pkg/llm`, `pkg/ragjs/sample.go` | the claude.ai `sample` contract on LunaRoute; tool loops; `--build-calls` |
@@ -966,6 +973,6 @@ This section records what exists now. The diary (`diary/01-investigation-diary.m
 - **§9.6 / D4, LLM bridge:** implemented as a direct OpenAI-compatible HTTP client for **LunaRoute** (`https://gw.lunaroute.com`, header `LUNAROUTE-API-KEY`, key from `$LUNAROUTE_API_KEY` or Pi's `~/.pi/agent/models.json`), behind `llm.Backend`. Geppetto remains a possible second backend. Tier defaults: quick `muse-spark-open`, default `glm-5.3-flash`, complex `glm-5.3`. GLM always reasons, and reasoning consumes `max_tokens` (budgets 2k/8k/16k).
 - **§9.5, natives:** natives replace built-in types (`parse.markdown`, `chunk.sections`, `index.bm25`) under the same names and with explicit family ids (`id: () => 'parse'|'chunk'|'index'`). `--js-components` restores the JS versions.
 - **§12.1, API:** implemented additions are `rag.source.dir({root, include, exclude, maxBytes, skipHtml})`, `rag.vector({model, over, dimensions})` / `index.vector`, and `plan.rerank.model({model, k, keepTail})`. `corpus.store`, `rag.open` and `corpus.represent` are not yet implemented.
-- **CLI surface:** global flags `--root`, `--llm none|fake|lunaroute`, `--llm-quick|default|complex`, `--llm-max-rounds`, `--embed none|lunaroute`, `--build-calls`, `--js-components`. Commands `run`, `presets`, `verbs`, `workbench`.
+- **CLI surface:** global flags `--root`, `--llm none|fake|lunaroute`, `--llm-quick|default|complex`, `--llm-max-rounds`, `--embed none|lunaroute`, `--build-calls`, `--js-components`. Commands `run` (also `<app>/<file>`), `presets`, `verbs` (`--dir` or `--app`), `workbench` (`--apps`), `apps list|files|history|show`.
 
 **Known open issues:** intermittent `invalid_json` from `rerank.llm` on the quick tier; vault-scale memory (3.5–3.8 GB RSS; A6); query verbs rebuild every invocation (A5); synchronous embedding blocks the VM goroutine (fine for CLI, needs per-session runtimes in the server); the leaked LunaRoute OAuth token from Step 9 (rotate).

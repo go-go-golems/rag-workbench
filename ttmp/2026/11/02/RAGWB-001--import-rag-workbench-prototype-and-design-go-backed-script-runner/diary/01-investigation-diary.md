@@ -1094,3 +1094,86 @@ Verified end to end against a running `ragwb workbench`: I PUT three files over 
 
 ### Technical details
 - PUT body `{source, comment}` → `{saved: {app, path, version, sha256, unchanged}, check: {role, ok, problems[{path, line, severity, message}], verbs[{name, source}], run[]}}`.
+
+## Step 20: P6 page side: Save, Saved apps, and an agent that writes runnable apps
+
+The workbench page now uses the app store. Save and Ctrl+S write the editor's script to `<app>/<file>.wb.js`. The preset menu lists saved scripts, and the open file survives a reload. The agent can list, read, save and open app files. In a live LunaRoute session I asked the agent for a terminal search tool over the reports: it inspected the plan, wrote `reports-cli/search.js` with the plan's exact BM25 weights, saved it (ok, verb `reports search`), and gave the command. That command returned the right top hit from the terminal. This meets P6's exit criterion: save from the browser → a file on disk → runnable via `ragwb verbs`.
+
+### Prompt Context
+**User prompt (verbatim):** see Step 19 ("Ok, do it. commit at appropriate intervals and keep a detailed diary as you work …").
+**Assistant interpretation:** Finish P6 in the page and the agent, then verify in a real browser and with the real agent.
+**Inferred user intent:** Build apps conversationally in the workbench and run them later without it.
+**Commit (code):** `5485629`.
+
+### What I did
+- **`web/workbench/app.js`:**
+  - State `W.apps` (feature-detected via `GET /api/apps` at boot; the Save button is hidden without it), `W.appsIndex` (saved `*.wb.js`), `W.file` (`{app, path, version}`).
+  - New section "saved apps":
+    - `appsFetch` (maps the server's `{error:{code,message}}` to `RagError`);
+    - `splitTarget` (accepts `'app/path'` or `(app, path)`);
+    - `probeApps`, `indexApps`, `refreshAppsIndex`;
+    - `saveAppFile` → `{version, unchanged, role, ok, problems, verbs, run}`;
+    - `openAppFile` (only `*.wb.js`; stashes unsaved edits like presets do; builds);
+    - `saveEditor` (defaults to the open file; the button asks via `prompt`; the agent must name a target; forces `.wb.js`; puts problems in the error panel; logs the run command);
+    - `saveButton`, `appsApi(readonly)`.
+  - Header shows `App · <app> · v<N>` / path / edited / run command.
+  - "Saved apps" group at the top of the preset menu, refreshed when it opens.
+  - Ctrl+S = save, then build (Ctrl+Enter still builds).
+  - Page state keeps `file: {app, path}`, and boot reopens it before considering presets.
+  - `wb` gained `apps`, `file()`, `open`, `save`; read-only mode blocks writes. `wb.state()` reports `script.file` and `apps`.
+  - `loadPreset` clears `W.file`.
+- **`web/workbench/index.html`:** `#save-btn` in the editor header (hidden by default).
+- **`web/workbench/agent.js` DOCS:**
+  - A "Saved apps" bullet: file roles, calls, return shape.
+  - The headless rule: verbs read with `rag.source.dir`, while `rag.files` only sees page uploads (`source.dir` is Go-only: `pkg/natives/sourcedir.go`; rag.js only has `source.files`/`source.inline`).
+  - A complete verb-file template.
+  - A "how to work" line on saving and reporting the run command; read-only mode lists `wb.save`/`wb.apps.save`.
+- **`pkg/server/server_test.go`:** asserts the page carries `id="save-btn"`, `fetch('/api/apps'`, and `wb.apps` in the agent docs.
+- **Guide:** §17 table (P6 done), new decision D9 (roles by file name), CLI surface updated.
+
+### Why
+- I chose a `.wb.js`-only editor over "open any file". The editor builds what it shows, and verb files aren't workbench scripts. The agent writes them as text with `wb.apps.save`, and the save-time check stands in for building.
+- I chose feature detection over a capability flag in `window.claude`. `/api/apps` is a ragwb server feature, not part of the claude.ai contract, so the same page still runs without it.
+
+### What worked
+- Server: `./dist/ragwb --llm lunaroute workbench --addr 127.0.0.1:8792 --apps $T/apps --db $T/wb.db`, Playwright (Chromium).
+- Boot: `W.apps = {dir: …/p6ui/apps}`, Save visible, preset 01 built (490 chunks).
+- **Save button** → prompt "Save the script as app/file in the apps directory:" → `reports-ui/hybrid.wb.js` → toast "Saved reports-ui/hybrid.wb.js · v1". Header "App · reports-ui · v1 | hybrid.wb.js". Console: `saved reports-ui/hybrid.wb.js v1 · run: ragwb run …`.
+- **Edit + Ctrl+S** → v2, toast "Saved … · v2", rebuilt.
+- **Reload** → `W.file` v2, first line `// tuned in the workbench`, console "reopened reports-ui/hybrid.wb.js". A further edit shows "edited".
+- **Preset menu**: "SAVED APPS 1 · v2 reports-ui/hybrid.wb.js" on top. Screenshot: `various/p6-saved-apps-menu.png`.
+- **Agent** (Balanced = glm-5.3-flash, Auto), prompt: "Save a verb file into a new app called "reports-cli" … same field weights as the current plan … tell me the exact command". **2 steps, 40.7 s.**
+  - Step 1 read `ix-text` (`fields: {title: 2, headingPath: 3, callout: 2, text: 1}`), `chunks` (depth 3, maxTokens 450) and `text` (k 40).
+  - Step 2 wrote `search.js` with `rag.source.dir({root: <abs corpus>, include: ["**/*.md"]})`, those weights, `__package__({name: "reports"})` and `__verb__("search", …)`, then `wb.apps.save(…)` → `ok: true, problems: [], verbs: [reports search]`.
+  - The reply gave the run command.
+- **Terminal:**
+  - `RAGWB_APPS=$T/apps ./dist/ragwb verbs --app reports-cli reports search "rebalance law" --k 3` → rank 1 "5. The core's modules › 5.9 The rebalance law".
+  - `ragwb run reports-ui/hybrid.wb.js --files examples/apps/reports/corpus --q "rebalance law" --k 2` → build ok, top hit the same section (score 0.01639, fused).
+  - `ragwb apps history reports-ui` → v2 and v1.
+- `go test ./...` all ok; `make lint` ok. Browser console: only `/favicon.ico` 404s.
+
+### What didn't work
+- My first "edited" check ran synchronously after dispatching `input`. `paintEditor` runs on the next animation frame, so it read `false`. Re-checked after 200 ms: `true`. A test-timing artifact, not a bug.
+
+### What I learned
+- The agent used the new docs as intended on the first try: it inspected the live plan to copy the weights, wrote an absolute `source.dir` root, and checked `ok`/`verbs` before answering. The verb-file template in DOCS did most of the work.
+
+### What was tricky to build
+- Restore order at boot. The saved page state can name a preset, a file, or neither, plus unsaved edits. The file is tried first, and a failed reopen (file deleted on disk) logs a warning and falls through to the preset logic.
+
+### What warrants a second pair of eyes
+- `saveButton` uses `window.prompt` for the first save. It's simple and works in Playwright, but it's a modal browser dialog. A small inline form would be nicer.
+- `indexApps` makes one request per app (up to 40) whenever the menu opens. Fine locally; a `?role=workbench` filter on `/api/apps` would make it one request.
+- The agent's `wb.save()` without a target throws `needs_target` rather than prompting, by design, so the agent never blocks on a dialog.
+
+### What should be done in the future
+- P8 next (persist build artifacts by digest), so saved query verbs don't rebuild the corpus on every run; then P7 (`ragwb serve <app>`).
+- Optional: an "Apps" pane listing verb/library files with their verbs and run commands, plus a history view with restore in the page.
+
+### Code review instructions
+- `web/workbench/app.js`, section "saved apps (/api/apps)", plus the boot restore block. `web/workbench/agent.js` DOCS "Saved apps".
+- Validate: `ragwb --llm lunaroute workbench --apps /tmp/apps`; Save, Ctrl+S, reload; ask the agent to save a verb file; run it with `RAGWB_APPS=/tmp/apps ragwb verbs --app <app> list`.
+
+### Technical details
+- `wb.save(app, path, comment)` / `wb.apps.save(app, path, text, comment)` → `{app, path, version, unchanged, role, ok, problems, verbs, run}`.
+- `wb.open(app, path, {version})` → `{opened, version, ok, nodes, ms, …}`.
