@@ -132,7 +132,7 @@
     });
     ta.addEventListener('scroll', syncScroll);
     ta.addEventListener('keydown', e => {
-      if ((e.metaKey || e.ctrlKey) && e.key === 's' && W.apps) { e.preventDefault(); saveButton(); return; }
+      if ((e.metaKey || e.ctrlKey) && (e.key === 's' || e.key === 'S') && W.apps) { e.preventDefault(); saveButton(e); return; }
       if ((e.metaKey || e.ctrlKey) && (e.key === 'Enter' || e.key === 's')) { e.preventDefault(); buildScript(); return; }
       if (e.key === 'Tab' && !e.metaKey && !e.ctrlKey) {
         e.preventDefault();
@@ -379,7 +379,20 @@
     return j;
   }
   const encPath = p => String(p).split('/').map(encodeURIComponent).join('/');
-  const fileUrl = (app, path, version) => `/${encodeURIComponent(app)}/files/${encPath(path)}${version ? '?version=' + version : ''}`;
+  // The server's rules (store.CheckPath), checked before any request: the URL parser would
+  // otherwise resolve '.'/'..' segments (even as %2E%2E) and the server would see a
+  // different, valid path than the one the page means.
+  const pathProblem = p => (!p || p.length > 256 || p.startsWith('/') || p.includes('\\') || p.split('/').some(seg => !seg || seg.startsWith('.'))
+    ? `“${p}” is not a clean relative path: no leading “/”, empty, “.”/“..” or hidden segments` : null);
+  const appSeg = app => {
+    if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(String(app))) throw new rag.RagError('invalid_app', `“${app}” is not an app name: letters, digits, “.”, “_” and “-”, max 64`);
+    return encodeURIComponent(app);
+  };
+  const fileUrl = (app, path, version) => {
+    const bad = pathProblem(String(path));
+    if (bad) throw new rag.RagError('invalid_path', bad);
+    return `/${appSeg(app)}/files/${encPath(path)}${version ? '?version=' + version : ''}`;
+  };
   // 'app/path' or (app, path)
   function splitTarget(app, path) {
     if ((path === undefined || path === null) && typeof app === 'string' && app.includes('/')) { const i = app.indexOf('/'); return [app.slice(0, i), app.slice(i + 1)]; }
@@ -393,7 +406,7 @@
     list = list || (await appsFetch('')).apps;
     const out = [];
     for (const a of list.slice(0, 40)) {
-      const j = await appsFetch('/' + encodeURIComponent(a.name)).catch(() => ({ files: [] }));
+      const j = await appsFetch('/' + appSeg(a.name)).catch(() => ({ files: [] }));
       for (const f of j.files) if (f.role === 'workbench') out.push({ app: a.name, path: f.path, version: f.version, updated: f.updated });
     }
     return out;
@@ -430,17 +443,12 @@
     return { opened: `${app}/${path}`, version: j.version, ...r };
   }
   // Save the editor's script. Without a target it goes to the open file, or asks for one.
-  async function saveEditor(app, path, comment, opts = {}) {
+  async function saveEditor(app, path, comment) {
     needApps();
     [app, path] = splitTarget(app, path);
     if (!app) {
       if (W.file) ({ app, path } = W.file);
-      else if (opts.ask) {
-        const guess = (W.preset ? rag.util.slug(W.preset.id || W.preset.title) : 'my-app') + '/pipeline.wb.js';
-        const ans = window.prompt('Save the script as app/file in the apps directory:', guess);
-        if (!ans) return { ok: false, cancelled: true };
-        [app, path] = splitTarget(ans.trim());
-      } else throw new rag.RagError('needs_target', 'No app file is open: call wb.save(app, path), e.g. wb.save("notes", "pipeline.wb.js").');
+      else throw new rag.RagError('needs_target', 'No app file is open: call wb.save(app, path), e.g. wb.save("notes", "pipeline.wb.js").');
     }
     if (!path) path = 'pipeline.wb.js';
     if (!/\.[A-Za-z]+$/.test(path)) path += '.wb.js';
@@ -458,18 +466,60 @@
     store.saveState({ file: { app, path }, preset: null, script: '' });
     return r;
   }
-  function saveButton() {
-    saveEditor(undefined, undefined, '', { ask: true })
-      .then(r => { if (!r.cancelled && src().value !== W.scriptBuiltText) buildScript(); })
-      .catch(e => toast(e.message, 'bad'));
+  // Save: straight to the open file; otherwise (or "save as": Shift+click, Ctrl+Shift+S)
+  // an inline form under the header asks for app, file and an optional note.
+  function saveButton(e) {
+    if (W.file && !(e && e.shiftKey)) {
+      saveEditor().then(afterSave).catch(err => toast(err.message, 'bad'));
+      return;
+    }
+    openSaveForm();
+  }
+  function afterSave(r) { if (r && src().value !== W.scriptBuiltText) buildScript(); }
+  const APP_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+  function openSaveForm() {
+    const apps = [...new Set((W.appsIndex || []).map(x => x.app))];
+    $('#save-apps').replaceChildren(...apps.map(a => h('option', { value: a })));
+    $('#save-app').value = W.file ? W.file.app : (W.preset ? rag.util.slug(W.preset.id || W.preset.title).slice(0, 64) : '');
+    $('#save-path').value = W.file ? W.file.path : 'pipeline.wb.js';
+    $('#save-comment').value = '';
+    saveMsg(W.file ? `Save a copy of ${W.file.app}/${W.file.path} under a new name.` : `Saved to ${(W.apps && W.apps.dir) || 'the apps directory'}/<app>/<file>; *.wb.js runs with ragwb run.`);
+    $('#save-form').hidden = false;
+    ($('#save-app').value ? $('#save-path') : $('#save-app')).focus();
+  }
+  function closeSaveForm() { $('#save-form').hidden = true; }
+  function saveMsg(text, bad) { const m = $('#save-msg'); m.textContent = text; m.classList.toggle('bad', !!bad); }
+  async function submitSaveForm(ev) {
+    ev.preventDefault();
+    const app = $('#save-app').value.trim();
+    let path = $('#save-path').value.trim() || 'pipeline.wb.js';
+    if (!APP_RE.test(app)) { saveMsg('App: letters, digits, “.”, “_” and “-” (it becomes a directory name).', true); $('#save-app').focus(); return; }
+    if (!/\.[A-Za-z]+$/.test(path)) path += '.wb.js';
+    if (!/\.wb\.js$/.test(path)) { saveMsg('The editor holds a workbench script: the file must end in .wb.js.', true); $('#save-path').focus(); return; }
+    if (pathProblem(path)) { saveMsg(pathProblem(path), true); $('#save-path').focus(); return; }
+    $('#save-submit').disabled = true;
+    saveMsg('Saving…');
+    try {
+      const r = await saveEditor(app, path, $('#save-comment').value.trim());
+      closeSaveForm();
+      afterSave(r);
+    } catch (e) {
+      saveMsg(e.message, true); // e.g. the server's path rules
+    } finally { $('#save-submit').disabled = false; }
+  }
+  function wireSaveForm() {
+    $('#save-btn').addEventListener('click', saveButton);
+    $('#save-form').addEventListener('submit', submitSaveForm);
+    $('#save-cancel').addEventListener('click', closeSaveForm);
+    $('#save-form').addEventListener('keydown', e => { if (e.key === 'Escape') { e.preventDefault(); closeSaveForm(); src().focus(); } });
   }
   function appsApi(readonly) {
     const block = name => () => { throw new rag.RagError('readonly', `${name} is blocked in Read-only mode.`); };
     return {
       list: async () => { needApps(); return (await appsFetch('')).apps; },
-      files: async app => { needApps(); return (await appsFetch('/' + encodeURIComponent(app))).files; },
+      files: async app => { needApps(); return (await appsFetch('/' + appSeg(app))).files; },
       read: async (app, path, o = {}) => { needApps(); [app, path] = splitTarget(app, path); return (await appsFetch(fileUrl(app, path, o.version))).source; },
-      history: async (app, path) => { needApps(); return (await appsFetch(`/${encodeURIComponent(app)}/history${path ? '?path=' + encodeURIComponent(path) : ''}`)).versions; },
+      history: async (app, path) => { needApps(); return (await appsFetch(`/${appSeg(app)}/history${path ? '?path=' + encodeURIComponent(path) : ''}`)).versions; },
       save: readonly ? block('wb.apps.save') : (app, path, text, comment) => saveAppFile(app, path, text, comment),
       remove: readonly ? block('wb.apps.remove') : async (app, path) => { needApps(); [app, path] = splitTarget(app, path); await appsFetch(fileUrl(app, path), { method: 'DELETE' }); refreshAppsIndex(); return `removed ${app}/${path}`; },
     };
@@ -1124,7 +1174,7 @@
       loadPresetList(),
       probeApps(),
     ]);
-    $('#save-btn').addEventListener('click', saveButton);
+    wireSaveForm();
     W.bundled = (corpus.files || []).map(f => ({ ...f, source: 'bundled' }));
     rag.configure({ files: activeFiles, log: (...a) => clog('', ...a), librarySource: () => fetch('rag.js').then(r => r.text()), buildCalls: 'explicit' });
     W.engine = rag.engine();

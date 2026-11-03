@@ -170,6 +170,14 @@ body.resizing, body.resizing * { user-select: none; }
 .ide-head .icon-btn { height: auto; }
 .ide-desc { padding: 6px 12px 8px; border-bottom: 1px solid var(--ink); font-size: 12px; line-height: 1.45; color: var(--muted); flex: none; }
 .ide-desc b { color: var(--ink); font-weight: 600; }
+.save-form { display: flex; flex-wrap: wrap; gap: 6px 8px; align-items: end; padding: 8px 10px; border-bottom: 1px solid var(--ink); background: var(--grid); flex: none; }
+.save-form label { display: flex; flex-direction: column; gap: 3px; font: 700 9.5px var(--body); letter-spacing: .12em; text-transform: uppercase; color: var(--muted); min-width: 0; }
+.save-form .sf-app { flex: 1 1 110px; } .save-form .sf-path { flex: 1 1 130px; } .save-form .sf-note { flex: 2 1 160px; }
+.save-form input { border: 1px solid var(--ink); background: var(--sheet); padding: 6px 8px; font: 400 12px var(--mono); letter-spacing: 0; text-transform: none; color: var(--ink); min-width: 0; }
+.save-form input:invalid:not(:placeholder-shown) { border-color: var(--bad); }
+.save-form .sf-btns { display: flex; gap: 6px; }
+.save-form .sf-msg { flex-basis: 100%; font: 400 11.5px var(--mono); color: var(--muted); }
+.save-form .sf-msg.bad { color: var(--bad); }
 .preset-menu { position: absolute; z-index: 30; left: 8px; right: 8px; top: 62px; max-height: calc(100% - 76px); display: flex; flex-direction: column; background: var(--sheet); border: 1px solid var(--ink); box-shadow: 5px 5px 0 0 var(--shadow); }
 .pm-top { display: flex; gap: 6px; padding: 8px; border-bottom: 1px solid var(--ink); align-items: center; }
 .pm-top input { flex: 1; min-width: 0; border: 1px solid var(--ink); background: var(--sheet); padding: 6px 8px; font: 400 12px var(--mono); }
@@ -510,9 +518,17 @@ h3.g-h { font-size: 20px; }
         </button>
         <button type="button" class="icon-btn" id="preset-prev" aria-label="Previous preset" title="Previous preset">‹</button>
         <button type="button" class="icon-btn" id="preset-next" aria-label="Next preset" title="Next preset">›</button>
-        <button type="button" class="icon-btn" id="save-btn" title="Save the script to the apps directory (Ctrl+S)" hidden>Save</button>
+        <button type="button" class="icon-btn" id="save-btn" title="Save to the apps directory (Ctrl+S) · Shift+click: save as… (Ctrl+Shift+S)" hidden>Save</button>
       </div>
       <div class="ide-desc" id="preset-desc"></div>
+      <form class="save-form" id="save-form" hidden novalidate aria-label="Save the script to an app">
+        <label class="sf-app">App<input id="save-app" list="save-apps" placeholder="my-app" required autocomplete="off" spellcheck="false" pattern="[A-Za-z0-9][A-Za-z0-9._\-]{0,63}"></label>
+        <label class="sf-path">File<input id="save-path" placeholder="pipeline.wb.js" required autocomplete="off" spellcheck="false"></label>
+        <label class="sf-note">Note<input id="save-comment" placeholder="what changed (optional)" autocomplete="off"></label>
+        <div class="sf-btns"><button type="submit" class="btn tiny primary" id="save-submit">Save</button><button type="button" class="btn tiny" id="save-cancel">Cancel</button></div>
+        <div class="sf-msg" id="save-msg" role="status"></div>
+        <datalist id="save-apps"></datalist>
+      </form>
       <div class="preset-menu" id="preset-menu" role="menu" hidden>
         <div class="pm-top"><input type="search" id="preset-filter" placeholder="Filter presets…" aria-label="Filter presets"><button type="button" class="btn tiny" id="preset-close">Close</button></div>
         <div class="pm-list" id="preset-list"></div>
