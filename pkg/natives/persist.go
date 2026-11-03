@@ -3,6 +3,7 @@ package natives
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/dop251/goja"
@@ -46,6 +47,14 @@ func (p Persist) InstallEnv(vm *goja.Runtime, rag *goja.Object, env rtenv.Env) e
 	if addCloser == nil {
 		addCloser = func(func() error) {}
 	}
+	mv, err := vm.RunString(recordsViewJS)
+	if err != nil {
+		return err
+	}
+	mkView, ok := goja.AssertFunction(mv)
+	if !ok {
+		return fmt.Errorf("artifacts: record view constructor is not a function")
+	}
 	jsonObj := vm.Get("JSON").ToObject(vm)
 	stringify, ok1 := goja.AssertFunction(jsonObj.Get("stringify"))
 	parse, ok2 := goja.AssertFunction(jsonObj.Get("parse"))
@@ -83,6 +92,22 @@ func (p Persist) InstallEnv(vm *goja.Runtime, rag *goja.Object, env rtenv.Env) e
 			}
 			return
 		}
+		if chunks := chunksHandle(v); chunks != nil {
+			// a file payload read one chunk at a time (codec "records")
+			tmp, err := p.Store.TempDir()
+			if err == nil {
+				f := filepath.Join(tmp, "chunks.records")
+				if err = WriteChunkRecords(f, chunks); err == nil {
+					err = p.Store.SaveFile(key, typ, "records", count, f)
+				}
+				_ = os.RemoveAll(tmp)
+			}
+			debugf("save %s records: %v", typ, time.Since(t0))
+			if err != nil {
+				panic(vm.NewGoError(fmt.Errorf("%s: %w", typ, err)))
+			}
+			return
+		}
 		codec, data, err := encodeArtifact(vm, stringify, v)
 		t1 := time.Now()
 		if err == nil {
@@ -95,6 +120,24 @@ func (p Persist) InstallEnv(vm *goja.Runtime, rag *goja.Object, env rtenv.Env) e
 	})
 	_ = a.Set("load", func(key string) goja.Value {
 		t0 := time.Now()
+		if m, err := p.Store.Has(key); err == nil && m != nil && m.Kind == artifacts.KindFile && m.Codec == "records" {
+			_, path, err := p.Store.Path(key)
+			var r *ChunkRecords
+			if err == nil {
+				r, err = OpenChunkRecords(path)
+			}
+			if err != nil {
+				panic(vm.NewGoError(fmt.Errorf("stored artifact %s (%s) could not be opened: %w; delete it with `ragwb store prune --all`", key, m.Type, err)))
+			}
+			addCloser(r.Close)
+			view, err := mkView(goja.Undefined(), recordsObject(vm, r))
+			if err != nil {
+				panic(err)
+			}
+			p.Timing.Add("store", m.Type, float64(time.Since(t0).Microseconds())/1000,
+				fmt.Sprintf("records · open %v · %d chunks · %.1f MB on disk", time.Since(t0).Round(time.Microsecond), r.Len(), float64(m.Size)/(1<<20)))
+			return view
+		}
 		if m, err := p.Store.Has(key); err == nil && m != nil && m.Kind == artifacts.KindDir && m.Codec == "bleve" {
 			_, path, err := p.Store.Path(key)
 			var ix *BleveBm25
@@ -128,7 +171,7 @@ func (p Persist) InstallEnv(vm *goja.Runtime, rag *goja.Object, env rtenv.Env) e
 	}
 	cfg := vm.NewObject()
 	_ = cfg.Set("artifacts", a)
-	_, err := configure(rag, cfg)
+	_, err = configure(rag, cfg)
 	return err
 }
 
@@ -215,3 +258,97 @@ func bleveHandle(v goja.Value) *BleveBm25 {
 	ix, _ := h.Export().(*BleveBm25)
 	return ix
 }
+
+// chunksHandle returns the Go chunks behind a chunks output (the JS array made
+// by chunksArray), or nil.
+func chunksHandle(v goja.Value) []Chunk {
+	o, ok := v.(*goja.Object)
+	if !ok {
+		return nil
+	}
+	h := o.Get(goHandleKey)
+	if h == nil {
+		return nil
+	}
+	cs, _ := h.Export().([]Chunk)
+	return cs
+}
+
+// recordsObject is the Go side of a RecordView.
+func recordsObject(vm *goja.Runtime, r *ChunkRecords) *goja.Object {
+	o := vm.NewObject()
+	must := func(err error) {
+		if err != nil {
+			panic(vm.NewGoError(err))
+		}
+	}
+	_ = o.Set("len", func() int { return r.Len() })
+	_ = o.Set("has", func(id string) bool { return r.Has(id) })
+	_ = o.Set("get", func(id string) goja.Value {
+		c, ok, err := r.Get(id)
+		must(err)
+		if !ok {
+			return goja.Null()
+		}
+		return chunkToJS(vm, &c)
+	})
+	_ = o.Set("slice", func(from, to int) goja.Value {
+		cs, err := r.Slice(from, to)
+		must(err)
+		out := make([]any, len(cs))
+		for i := range cs {
+			out[i] = chunkToJS(vm, &cs[i])
+		}
+		return vm.NewArray(out...)
+	})
+	_ = o.Set("all", func() goja.Value {
+		cs, err := r.Slice(0, r.Len())
+		must(err)
+		return chunksArray(vm, cs)
+	})
+	_ = o.Set("order", func(docID string) []string {
+		ids, err := r.Order(docID)
+		must(err)
+		return ids
+	})
+	return o
+}
+
+// recordsViewJS makes a stored chunks output usable where the engine expected
+// the chunks array or the art.chunks Map: iteration yields chunks in array
+// order (like the array), get/has/size behave like the Map, order(docId) gives
+// a document's chunk ids (art.order), toArray() materializes the array for
+// build components that need one. Recently read chunks are cached (identity
+// holds within a query).
+const recordsViewJS = `(function () {
+  const CACHE = 4096, BATCH = 512;
+  class RecordView {
+    constructor(r) {
+      Object.defineProperty(this, '__records', { value: r });
+      Object.defineProperty(this, '_cache', { value: new Map() });
+      this.size = r.len();
+    }
+    get length() { return this.size; }
+    get(id) {
+      const k = String(id);
+      let v = this._cache.get(k);
+      if (v === undefined) {
+        v = this.__records.get(k);
+        if (v === null) return undefined;
+        if (this._cache.size >= CACHE) this._cache.delete(this._cache.keys().next().value);
+        this._cache.set(k, v);
+      }
+      return v;
+    }
+    has(id) { return this._cache.has(String(id)) || this.__records.has(String(id)); }
+    order(docId) { return this.__records.order(String(docId)); }
+    *values() { for (let i = 0; i < this.size; i += BATCH) yield* this.__records.slice(i, Math.min(this.size, i + BATCH)); }
+    *keys() { for (const c of this.values()) yield c.id; }
+    *entries() { for (const c of this.values()) yield [c.id, c]; }
+    forEach(f) { for (const c of this.values()) f(c, c.id, this); }
+    [Symbol.iterator]() { return this.values(); }
+    toArray() { return this.__records.all(); }
+    toJSON() { return { records: this.size }; }
+  }
+  return r => new RecordView(r);
+})()`
