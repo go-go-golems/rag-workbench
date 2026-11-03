@@ -323,3 +323,79 @@ With the bleve backend, a warm `parc search` over the whole vault now takes **0.
 ### Code review instructions
 - `pkg/artifacts/store.go` (`savePath`, `Has`, `List`), `pkg/natives/persist.go` (save/load branches, `recordsViewJS`), `pkg/natives/records.go`, rag.js (`isView`, `unionChunks`, `artifacts()`, `Session.ctx`, evals).
 - Reproduce: `go test ./pkg/artifacts ./pkg/runner -run 'Payload|Bleve|Records'`; `ragwb --timings --index-backend bleve --root <vault> verbs --dir examples/apps/parc parc search "…"`, twice.
+
+## Step 6: Go terms index (exact parity), bleve made the default, final vault measurements
+
+The last decoded artifact on the query path, the terms index, is now Go. It matches rag.js's `TermsIndex` exactly, on the reports corpus and on a 642-query sample over the vault's 6,928 metadata values. bleve is now `index.bm25`'s default backend in every Go runtime.
+
+Final numbers on the vault (85,882 chunks), all warm:
+
+| | before RAGWB-002 | now |
+|---|---|---|
+| CLI search | 2.2 s at 1.4 GB RSS | **0.16 s at 90 MB** |
+| served app open | 2.2 s | **66–77 ms** |
+| served app live heap | 838 MB | **15 MB** |
+| served app RSS | 1.4 GB | **80 MB** after open, 131 MB after queries |
+| query round trip (median / max) | 14.7 / 45.5 ms | **10.7 / 29.7 ms** |
+
+### Prompt Context
+**User prompt (verbatim):** see Step 4.
+**Commit (code):** `ea4b359` (terms + default switch).
+
+### What I did
+- **`pkg/natives/terms.go`** (`Terms`, `NewTerms`, `Search`, `Values`, codec `terms`):
+  - Postings are chunk ordinals into an id table.
+  - Search walks values and keys in insertion order (as JS Maps iterate), so float sums happen in the same order. The skip rule is ported exactly: `len16(trim(words)) < 2`.
+  - The weight is `1/ln(2 + n/10)`. `why` keeps `{...why, [key]: val}` semantics: a new key is appended, an existing one keeps its place.
+  - Ties sort stably with goja's `localeCompare`: `collate.New(language.Und).CompareString` over NFD (goja `builtin_string.go:379-383`).
+- **`pkg/natives/terms_native.go`:** redefines `index.terms`. JS extracts `keys.map(key => arr(getPath(c.meta, key)).map(v => String(v).toLowerCase()))` with rag.js's own helpers, so the strings are rag.js's by construction. Installed by `runner.NewFactory` next to the other Go components.
+- **`pkg/runner/terms_parity_test.go`:** in one runtime, `new rag.util.TermsIndex(chunks, {keys})` against the Go component. It compares `search(q, 50)` as JSON on every value (or a 600-value sample for big corpora), 40 two-value queries, 20 uppercased/punctuated queries, empty/1-char/no-match queries and one mixed query, plus `values(key)` for each key. `RAGWB_PARITY_ROOT` points it at another corpus.
+- **Default switch:**
+  - `Bm25Native` "" → bleve; `--index-backend` defaults to bleve; `ArtifactNamespace` treats "" as bleve (`go+bleve`).
+  - The exact-parity tests pin `IndexBackend: "memory"` (`bm25_parity_test.go`, `empty_results_test.go`).
+  - `TestReportsAppVerbs` runs both backends: memory must give rag.js's 12.6758; bleve must give the same top section.
+- `natives.Version` → `2026-11-04.1`.
+- **Phase 5 measurements:**
+  - CLI `--timings` cold and warm.
+  - RAGWB-001's `scripts/06-serve-heap` (heap after open and after a query).
+  - RAGWB-001's `scripts/05-serve-latency-bench.py` against `ragwb serve` (16 typed queries).
+  - Presets sweep (`ragwb --no-store presets`: 30/30 ok).
+  - Browser check of the served vault app (screenshot `various/02-serve-parc-bleve-records.png`).
+- The guide gained §10.1 "Implementation status", listing the deviations: records hold chunks only; terms are a gob blob; `why` is approximate; the closer hook goes through `rtenv`.
+
+### Why
+- After Phase 2, the terms index was the only thing still decoded at open: 0.5 s and the largest remaining JS structure. Porting it with exact parity removes it without any ranking question (unlike BM25).
+- The default switch completes the user's request ("Make it the default").
+
+### What worked
+- **Terms parity:** reports, 158 queries over 94 values: identical. Vault (`RAGWB_PARITY_ROOT=~/…/go-go-parc`), 642 queries over 6,928 values: identical, 91 s.
+- **Warm CLI** (`ragwb --timings --root <vault> verbs --dir examples/apps/parc parc search "goja regexp unicode"`): total 150 ms; artifacts 22–24 ms (terms 9.1 MB gob decoded in 15–18 ms, bleve open 0.8–1.2 ms, records open 0.1–0.2 ms); query 4–7 ms; wall 0.16 s, max RSS 89–90 MB.
+- **Cold CLI** (new namespace after the version bump, run during the parity test, so its timings are inflated by contention): 28.6 s; bleve text index 17.0 s, chunks with records 5.4 s, Go terms 2.25 s.
+- **Served heap** (`06-serve-heap`, defaults): opened in 77 ms; live heap 15.3 MB after open, 15.8 MB after a query; the largest item is the terms id table (gob string slice, 8.7 MB).
+- **Serve latency** (`05-serve-latency-bench.py 8795`): engine 0.4–3.9 ms, except "go-go-goja module authoring" at 14.9 ms; pack 1.8–5.4 ms; median round trip 10.7 ms, max 29.7 ms (the first query, which warms the record cache). RSS 80 MB after open, 131 MB after the run.
+- **Browser:** typing "goja unicode regexp" gives the same #1 as before. Three "next →" steps walk the document's sections through the records' order bucket. The "go" tag facet re-runs with 10 results.
+- `go test ./... -count=1`, `make lint`, presets 30/30.
+
+### What didn't work
+- The first `TestTermsIndexParity` source had a misplaced parenthesis in the `Sprintf` call (`too many arguments in call to vm.RunString`). Then `go vet` caught `fmt.Sprintf format %q reads arg #3`: the JS template contained a modulo, `(i * 7) % vals.length`, which needed escaping as `%%`.
+- **The first vault parity run never finished in reasonable time.** I stopped it after 5.5 minutes with `TaskStop` plus a pid kill. It used every one of the 6,928 values as a query, and `TermsIndex.search` scans all values per query in goja, which is quadratic. Fixed by sampling at most 600 values as queries, deterministically by stride. `values()` is still compared in full.
+- `TestReportsAppVerbs` failed after the switch: `top row = …score:0.8075`. It pinned rag.js's exact score (12.6758). Under bleve the top section is the same but the score is on bleve's scale, as D2 expects. The test now checks both backends.
+
+### What I learned
+- With every stored structure either opened or small, the warm vault CLI is dominated by fixed costs: startup 7 ms, compile 1.3 ms, terms decode 16 ms, the query itself, and process exit. The 2 s of loading is gone.
+- Pack (reading about 50 chunk records and building their JS objects) is now the largest part of a served query after the engine, at 2–5 ms. That's the price of not holding 85k chunk objects. It is well inside the latency budget.
+
+### What was tricky to build
+- **Parity with goja, not with the browser.** `localeCompare` in the Go port must match goja (root collation, NFD), not V8's ICU. The parity that matters is with rag.js running in the same Go runtime.
+
+### What warrants a second pair of eyes
+- The terms index still decodes a 9.1 MB gob at open. It's 15 ms, but proportional to the corpus; it could become a records-style file if corpora grow 10×.
+- RSS grows from 80 to 131 MB over a query run: the record cache (4,096 chunks) plus bleve's mapped segments. It's bounded by the cache size, but worth watching in a long-running server.
+
+### What should be done in the future
+- Optional: re-upload the guide (v3) with §10.1.
+- Open a PR for `task/ragwb-002-disk-backed-retrieval`.
+
+### Code review instructions
+- `pkg/natives/terms.go`, `terms_native.go`, `pkg/runner/terms_parity_test.go`; the default switch in `bm25_native.go`, `runner/runtime.go`, `cmds/roots.go`; `cmds/verbs_test.go`.
+- Reproduce: `go test ./pkg/runner -run TestTermsIndexParity -v` (set `RAGWB_PARITY_ROOT` for the vault); `ragwb --timings --root <vault> verbs --dir examples/apps/parc parc search "…"` twice; `ragwb --root <vault> serve examples/apps/parc` plus `scripts/05-serve-latency-bench.py`.

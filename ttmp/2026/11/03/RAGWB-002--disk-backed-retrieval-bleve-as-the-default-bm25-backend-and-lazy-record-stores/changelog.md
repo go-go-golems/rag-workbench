@@ -23,3 +23,13 @@ Guide v2 (two browser pages section) uploaded: /ai/2026/11/03/RAGWB-002/RAGWB-00
 ## 2026-11-03
 
 D2 changed per user: bleve's own BM25 scoring (rankings may change) behind a quality gate vs the memory backend; D3 now one pre-tokenized field per weighted field with boosts; guide §6.4, plan, risks, tests updated
+
+## 2026-11-03
+
+Implemented: bleve default index.bm25 (persisted, read-only), chunk records (bbolt), Go terms index (exact parity), file/dir artifact payloads. Vault warm CLI 2.2 s/1.4 GB → 0.16 s/90 MB; served app open 2.2 s → 77 ms, live heap 838 → 15 MB; median query 14.7 → 10.7 ms. Quality gate passed (diary step 4).
+
+### Related Files
+
+- /home/manuel/code/wesen/go-go-golems/rag-workbench/pkg/natives/bleve_bm25.go — bleve backend
+- /home/manuel/code/wesen/go-go-golems/rag-workbench/pkg/natives/records.go — chunk records
+- /home/manuel/code/wesen/go-go-golems/rag-workbench/pkg/natives/terms.go — Go terms index

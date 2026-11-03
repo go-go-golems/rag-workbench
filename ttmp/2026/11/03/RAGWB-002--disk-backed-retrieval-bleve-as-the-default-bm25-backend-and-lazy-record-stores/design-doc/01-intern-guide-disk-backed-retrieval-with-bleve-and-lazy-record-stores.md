@@ -768,6 +768,33 @@ Each phase ends with a commit, a diary step (investigation format) and the liste
 - Update the RAGWB-001 guide's §17 status, help text and the agent prompt's component notes.
 - Targets: vault open under 100 ms excluding first-touch page faults; RSS under 200 MB; median query unchanged (≤ 15 ms round trip).
 
+### 10.1 Implementation status (2026-11-04)
+
+| Phase | Status | Commit | Notes |
+|---|---|---|---|
+| 0 dependency + flag | done | `78321cb` | bleve v2.6.0; the `go` directive stays 1.26.1 |
+| 3a bleve backend + quality gate | done | `78321cb`, `4fa58a9` | per-field mode passes (diary step 4); `combined: true` available |
+| 1 file/dir payloads | done | `fc295ba` | cross-device copy fallback; `List` skips payload dirs |
+| 3b stored bleve indexes | done | `fc295ba` | built in the store namespace, `Relocate` into the store, read-only open |
+| 2 chunk records | done | `f463797` | **chunks only**: docs stay a gob blob (decoded on first `art.docs` use) |
+| 4 Go terms index | done | `ea4b359` | exact parity with rag.js's TermsIndex (ties by goja's `localeCompare`) |
+| default switch | done | `ea4b359` | bleve is the default everywhere; `memory` pinned in the exact-parity tests |
+| 5 measurements + docs | in progress | | diary step 6 |
+
+**Differences from the design above:**
+- **The record store holds chunks only.** Docs are not on the query path.
+- **One extra stored format:** the terms index is a gob blob (codec `terms`), not records.
+- **`why` for bleve hits** is approximated from term locations (§6.4.3). There is no `explain` mode yet.
+- **The closer hook** reaches natives through `pkg/rtenv.Env` plus a ragwb module registrar that captures go-go-goja's `AddCloser`. It is not an `Options` field.
+
+**Measured, vault (85,882 chunks), warm:**
+
+| | before RAGWB-002 | after |
+|---|---|---|
+| CLI `parc search` | 2.2 s, 1.4 GB RSS | **0.16 s, 90 MB RSS** |
+| served app open | 2.2 s | **77 ms** |
+| served app live heap | 838 MB | **15.3 MB** |
+
 ## 11. Risks, alternatives and open questions
 
 - **Build time.** BM25 indexing in bleve may be 2× slower than the in-memory build. Mitigations: larger batches, `unsafe_batch` (scorch), building in a temp dir with persister settings tuned. Measure in Phase 3.
