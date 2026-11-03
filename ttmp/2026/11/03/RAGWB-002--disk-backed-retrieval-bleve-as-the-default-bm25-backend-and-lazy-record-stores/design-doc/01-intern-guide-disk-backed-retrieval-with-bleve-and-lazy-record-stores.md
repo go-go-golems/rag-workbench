@@ -747,7 +747,14 @@ Each phase ends with a commit, a diary step (investigation format) and the liste
 - Step 2: build, persist, read-only open, closers, `searchIn`, synonyms, `only`, `why`.
 - Step 3: make it the default; namespace and `Version` bump.
 - Tests:
-  - the quality gate: on the reports goldens, hit@5 and MRR no more than 0.05 below the memory backend; on the presets sweep, no preset's HIT@5 drops by more than 0.1; on the vault sample, median top-10 overlap ≥ 0.5 with every query below 0.2 inspected by hand. The thresholds are revisited after the Step 1 spike;
+  - the quality gate (revised after the Step 1 spike, diary step 4):
+    - on the reports goldens across the presets, mean hit@5 and MRR no more than 0.05 below the memory backend;
+    - no preset's hit@5 drops by more than 0.1;
+    - on the vault, self-recall@10 (a chunk's own heading as the query retrieves it) no more than 0.05 below the memory backend.
+
+    Top-10 overlap with the memory backend is reported but not gated: on the vault it was 0.11 for a bleve mode whose recall was *higher*, because many chunks match generic queries almost equally well.
+    Spike result for the default (per-field) mode: hit@5 0.925 → 0.942, MRR 0.872 → 0.893, nDCG@10 0.783 → 0.770, no preset drop > 0.1; vault self-recall 0.725 → 0.755.
+    The `combined: true` mode (one BM25F-style field) stays closer to the memory backend (preset overlap 0.82) but has lower vault self-recall (0.635) and one preset drop > 0.1 (outline);
   - `bm25_parity_test.go` stays exact, pinned to the memory backend;
   - two processes opening one stored index read-only;
   - `--no-store` temp dir cleanup.

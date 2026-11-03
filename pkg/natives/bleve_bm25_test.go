@@ -27,7 +27,7 @@ func buildBoth(t *testing.T, dir string, temp bool) (*Bm25, *BleveBm25) {
 	id := func(i int) string { return bleveTestChunks[i].id }
 	doc := func(i int) string { return bleveTestChunks[i].doc }
 	mem := NewBm25(n, id, doc, bleveTestText, bleveTestFields, 1.2, 0.75, true)
-	bl, err := BuildBleveBm25(dir, n, id, doc, bleveTestText, bleveTestFields, true, temp)
+	bl, err := BuildBleveBm25(dir, n, id, doc, bleveTestText, bleveTestFields, BleveOptions{Stem: true, Temp: temp})
 	if err != nil {
 		t.Fatal(err)
 	}

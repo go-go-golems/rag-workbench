@@ -3,6 +3,7 @@ package natives
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"sort"
 	"strings"
@@ -37,6 +38,28 @@ type BleveMeta struct {
 	Stem   bool    `json:"stem"`
 	Fields []Field `json:"fields"`
 	Terms  int     `json:"terms,omitempty"`
+	// Combined indexes one field ("all") holding every weighted field's tokens
+	// repeated round(weight) times: BM25F-style term frequencies and lengths, one
+	// IDF. Otherwise each field is its own bleve field (per-field IDF) and weights
+	// are query boosts.
+	Combined bool `json:"combined,omitempty"`
+}
+
+// BleveOptions configures BuildBleveBm25.
+type BleveOptions struct {
+	Stem     bool
+	Temp     bool // delete the index directory on Close
+	Combined bool // see BleveMeta.Combined
+}
+
+const bleveAllField = "all"
+
+// repeats is how often a field's tokens go into the combined field.
+func repeats(w float64) int {
+	if w <= 0 {
+		return 0
+	}
+	return max(1, int(math.Round(w)))
 }
 
 const (
@@ -50,20 +73,27 @@ const (
 // documents, so fields are positional; BleveMeta.Fields keeps the order.
 func bleveField(i int) string { return fmt.Sprintf("f%d", i) }
 
-func bleveMapping(fields []Field) (*mapping.IndexMappingImpl, error) {
+func bleveMapping(fields []Field, combined bool) (*mapping.IndexMappingImpl, error) {
 	m := bleve.NewIndexMapping()
 	m.ScoringModel = "bm25"
 	if err := m.AddCustomAnalyzer(blevePretokenize, map[string]any{"type": custom.Name, "tokenizer": whitespace.Name}); err != nil {
 		return nil, err
 	}
 	doc := bleve.NewDocumentMapping()
-	for i := range fields {
+	names := []string{bleveAllField}
+	if !combined {
+		names = names[:0]
+		for i := range fields {
+			names = append(names, bleveField(i))
+		}
+	}
+	for _, name := range names {
 		fm := bleve.NewTextFieldMapping()
 		fm.Analyzer = blevePretokenize
 		fm.Store = false
 		fm.IncludeInAll = false
 		fm.IncludeTermVectors = true // term locations: which query terms matched (why)
-		doc.AddFieldMappingsAt(bleveField(i), fm)
+		doc.AddFieldMappingsAt(name, fm)
 	}
 	kw := bleve.NewKeywordFieldMapping()
 	kw.Store = false
@@ -77,8 +107,9 @@ func bleveMapping(fields []Field) (*mapping.IndexMappingImpl, error) {
 
 // BuildBleveBm25 indexes n chunks into a new index at dir (which must not exist).
 // text(i, f) returns chunk i's text for fields[f] (false = absent), as for NewBm25.
-func BuildBleveBm25(dir string, n int, id, docID func(i int) string, text func(i, f int) (string, bool), fields []Field, doStem bool, temp bool) (*BleveBm25, error) {
-	m, err := bleveMapping(fields)
+func BuildBleveBm25(dir string, n int, id, docID func(i int) string, text func(i, f int) (string, bool), fields []Field, o BleveOptions) (*BleveBm25, error) {
+	doStem, temp := o.Stem, o.Temp
+	m, err := bleveMapping(fields, o.Combined)
 	if err != nil {
 		return nil, err
 	}
@@ -86,11 +117,12 @@ func BuildBleveBm25(dir string, n int, id, docID func(i int) string, text func(i
 	if err != nil {
 		return nil, fmt.Errorf("index.bm25 (bleve): create %s: %w", dir, err)
 	}
-	b := &BleveBm25{idx: idx, Dir: dir, temp: temp, Meta: BleveMeta{N: n, Stem: doStem, Fields: fields}}
+	b := &BleveBm25{idx: idx, Dir: dir, temp: temp, Meta: BleveMeta{N: n, Stem: doStem, Fields: fields, Combined: o.Combined}}
 	batch := idx.NewBatch()
 	terms := map[string]struct{}{}
 	for i := 0; i < n; i++ {
 		d := map[string]any{bleveDocIDField: docID(i)}
+		var all strings.Builder
 		for fi := range fields {
 			v, ok := text(i, fi)
 			if !ok {
@@ -103,7 +135,18 @@ func BuildBleveBm25(dir string, n int, id, docID func(i int) string, text func(i
 			for _, t := range toks {
 				terms[t] = struct{}{}
 			}
-			d[bleveField(fi)] = strings.Join(toks, " ")
+			joined := strings.Join(toks, " ")
+			if !o.Combined {
+				d[bleveField(fi)] = joined
+				continue
+			}
+			for r := 0; r < repeats(fields[fi].Weight); r++ {
+				all.WriteString(joined)
+				all.WriteByte(' ')
+			}
+		}
+		if o.Combined && all.Len() > 0 {
+			d[bleveAllField] = all.String()
 		}
 		if err := batch.Index(id(i), d); err != nil {
 			_ = b.Close()
@@ -192,6 +235,13 @@ func (b *BleveBm25) search(q string, k int, syn []Synonym, only []string, inDoc 
 	dq := bleve.NewDisjunctionQuery()
 	for _, qt := range terms {
 		qw[qt.t] = qt.w
+		if b.Meta.Combined {
+			tq := bleve.NewTermQuery(qt.t)
+			tq.SetField(bleveAllField)
+			tq.SetBoost(qt.w)
+			dq.AddQuery(tq)
+			continue
+		}
 		for fi, f := range b.Meta.Fields {
 			if f.Weight <= 0 {
 				continue
@@ -217,7 +267,7 @@ func (b *BleveBm25) search(q string, k int, syn []Synonym, only []string, inDoc 
 	if err != nil {
 		return nil, err
 	}
-	weight := map[string]float64{}
+	weight := map[string]float64{bleveAllField: 1}
 	for fi, f := range b.Meta.Fields {
 		weight[bleveField(fi)] = f.Weight
 	}

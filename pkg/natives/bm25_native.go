@@ -60,7 +60,7 @@ const bm25JS = `(function (rag, h) {
       const texts = chunks.map(c => names.map(f => fieldText(c, f)));
       const spec = names.map(f => [f, Number(fields[f])]);
       const backend = backendOf(p);
-      if (backend === 'bleve') return wrap(h.buildBleve(chunks.map(c => c.id), chunks.map(c => c.docId), texts, spec, p.stem !== false), fields);
+      if (backend === 'bleve') return wrap(h.buildBleve(chunks.map(c => c.id), chunks.map(c => c.docId), texts, spec, p.stem !== false, p.combined === true), fields);
       if (backend !== 'memory') throw new Error("index.bm25: unknown backend '" + backend + "' (memory | bleve)");
       return wrap(h.build(chunks.map(c => c.id), chunks.map(c => c.docId), texts, spec, p.k1 ?? 1.2, p.b ?? 0.75, p.stem !== false), fields);
     },
@@ -122,7 +122,7 @@ func (n Bm25Native) InstallEnv(vm *goja.Runtime, rag *goja.Object, env rtenv.Env
 		ix := NewBm25(len(ids), func(i int) string { return ids[i] }, func(i int) string { return docIDs[i] }, textAt(texts), fs, k1, b, doStem)
 		return bm25Object(vm, ix), nil
 	})
-	_ = h.Set("buildBleve", func(ids, docIDs []string, texts [][]any, fields [][]any, doStem bool) (*goja.Object, error) {
+	_ = h.Set("buildBleve", func(ids, docIDs []string, texts [][]any, fields [][]any, doStem, combined bool) (*goja.Object, error) {
 		fs, err := parseFields("index.bm25", fields)
 		if err != nil {
 			return nil, err
@@ -134,7 +134,7 @@ func (n Bm25Native) InstallEnv(vm *goja.Runtime, rag *goja.Object, env rtenv.Env
 		if err != nil {
 			return nil, err
 		}
-		ix, err := BuildBleveBm25(filepath.Join(root, "index"), len(ids), func(i int) string { return ids[i] }, func(i int) string { return docIDs[i] }, textAt(texts), fs, doStem, true)
+		ix, err := BuildBleveBm25(filepath.Join(root, "index"), len(ids), func(i int) string { return ids[i] }, func(i int) string { return docIDs[i] }, textAt(texts), fs, BleveOptions{Stem: doStem, Temp: true, Combined: combined})
 		if err != nil {
 			_ = os.RemoveAll(root)
 			return nil, err
