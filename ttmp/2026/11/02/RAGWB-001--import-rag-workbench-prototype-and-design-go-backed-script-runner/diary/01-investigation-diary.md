@@ -833,3 +833,84 @@ Following route A from Step 14, I bumped goja in go-go-goja itself, the shared r
 ### Technical details
 - Branch `task/bump-goja-unicode-property-escapes` @ `dfe2aae`, base go-go-golems/go-go-goja `main` @ `c265ae0`.
 - goja `v0.0.0-20251103141225-af2ceb9156d7` → `v0.0.0-20261001121453-e1fc788e4f41`.
+
+## Step 16: PR #106 grows: goja master, Dependabot updates, security alerts, a goja nil-slice break, a green dependency scan
+
+The user asked me to fold the Dependabot updates into PR #106, then to "do the master jump", and then said "YOLO". The PR now has five commits:
+- goja → master and goja_nodejs → master;
+- a database fix for a breaking goja change (nil Go slices now reach JS as `null`);
+- every Dependabot/security-alert dependency at its newest release, plus toolchain go1.26.10;
+- a GoSec exclusion for `ttmp/`.
+
+Locally, tests, lint, govulncheck (0 affecting the code) and gosec all pass. go-go-goja's dependency-scanning workflow had been red on `main` every week since 2026-07-26. This PR should make it green.
+
+### Prompt Context
+**User prompt (verbatim):** "tackel dependabot updates as well as part of that PR for go-go-goja"
+**Mid-turn messages (verbatim):** "you can also do the master jump, tbh" and "YOLO"
+**Assistant interpretation:** Same PR. Supersede the open Dependabot PRs rather than merging them, take goja (and its companion goja_nodejs) to master, and prefer newest releases over minimal versions. Fix whatever that breaks.
+**Inferred user intent:** One merge that leaves go-go-goja current and its security checks clean.
+**Commit (code):** go-go-goja `1ebcb0c`, `9c88572`, `9dcfa60`, `3dfcc78` on `wesen:task/bump-goja-unicode-property-escapes` (head `3dfcc78`); PR https://github.com/go-go-golems/go-go-goja/pull/106.
+
+### What I did
+- Inventory:
+  - `gh pr list --author app/dependabot`: #105 grpc 1.80.0→1.83.1, #94 excelize 2.10.0→2.11.0, #89 mongo-driver 1.14.0→1.17.7 (CONFLICTING).
+  - `gh api repos/go-go-golems/go-go-goja/dependabot/alerts?state=open`: 22 alerts. The extras: go-jose/v4 ≤4.1.5 (#52, high, no PR), and excelize alerts 38–51, only fixed after 2.11.0.
+- The background CI watch from Step 15 on `dfe2aae`: all pass except **Go Vulnerability Check** and **GoSec**.
+- `1ebcb0c`: `go get github.com/dop251/goja@master github.com/dop251/goja_nodejs@master && go mod tidy`. That gives goja 97b96e1, goja_nodejs b481721, regexp2/v2 v2.11.0, and x/{crypto,mod,net,sync,sys,term,text,tools} forward.
+- `9c88572`: `modules/database` `rowsToRecords`, `var result []map[string]any` → `result := []map[string]any{}`.
+- `9dcfa60`: grpc v1.85.0, excelize v2.11.1, go-jose v4.1.8, mongo-driver v1.17.10, `go mod edit -toolchain=go1.26.10`. That also pulled otel 1.41→1.45 and protobuf 1.36.12.
+- `3dfcc78`: `-exclude-dir=ttmp` in `.github/workflows/dependency-scanning.yml` and in the `make gosec` target.
+- PR title and body rewritten through `gh api -X PATCH …/pulls/106`, because `gh pr edit` failed (below).
+- Audited the JS-facing exports in go-go-goja and in rag-workbench `pkg/natives` for nil slices.
+
+### Why
+- The newest release for each dependency, because the user said YOLO, and because Dependabot's minimal versions leave alerts open: excelize 2.11.0 still has alerts 38–51.
+- The toolchain line: `setup-go` uses `go-version-file: go.mod`, so CI ran govulncheck on go1.26.5. That produced 21 stdlib findings, fixed in 1.26.6.
+- `ttmp` excluded wholesale rather than one directory: ticket probes are not shipped, and new nested `go.mod` files keep appearing there.
+
+### What worked
+- After `1ebcb0c`, `make lint`: 0 issues.
+- After `9c88572`: `go test ./modules/database/`: ok. The commit's lefthook pre-commit: ✔️ lint 6.7 s, ✔️ test 38.5 s.
+- After `9dcfa60`: `go test ./...` exit 0, `make lint` 0 issues.
+- govulncheck (go1.26.10): "Your code is affected by 0 vulnerabilities." The only module-level finding is GO-2026-5932 `x/crypto/openpgp`, which nothing imports.
+- `gosec -exclude=G101,G304,G301,G306,G204,G703 -exclude-generated -exclude-dir=.history -exclude-dir=ttmp -quiet ./...`: exit 0, 18.7 s.
+- `git push`: the lefthook pre-push ran with no glob filter: ✔️ test 86.5 s, ✔️ lint 95.9 s.
+
+### What didn't work
+- **goja master broke a go-go-goja test**: `TestDatabaseTransactionRollbackDiscardsWrites` expected `{"rollback":{"success":true},"rows":[]}`, got `{"rollback":{"success":true},"rows":null}`. Bisected with a scratch probe (`nilslice_test.go`) across three goja commits:
+  - `e1fc788` and `6ace4dd~1` (3c7039f) → `JSON.stringify(f())` = `[]`;
+  - `6ace4dd` → `null`.
+  The cause is goja `6ace4dd` (2026-10-23, "Refactored handling of pointers in Runtime.ToValue()", fixes dop251/goja#822). Its doc change reads "Nil is converted to null. This includes nil pointers, nil interfaces, nil slices, and nil functions." The new rule (`value.IsNil() && !value.CanSet()`) nulls only non-settable values, so nil slice fields of structs reached through a pointer still convert to arrays.
+- **The pre-commit hook skipped tests on `1ebcb0c`**: lefthook's pre-commit `glob: '*.go'` doesn't match go.mod/go.sum. I ran `go test ./...` by hand, which found the failure above.
+- **`gh pr edit 106 …`** failed with "GraphQL: Projects (classic) is being deprecated … (repository.pullRequest.projectCards)", leaving the title unchanged. `gh api -X PATCH repos/go-go-golems/go-go-goja/pulls/106 -f title=… -F body=@file` worked.
+- Older dependency-scanning logs on main (`gh run view 41274123696 --log-failed`) returned nothing, so I couldn't confirm main's GoSec failure reason. Its job conclusions (both jobs failure on 2026-11-01) are confirmed.
+
+### What I learned
+- The weekly dependency scan on go-go-goja `main` had been failing since 2026-07-26 (last success 2026-07-23).
+- `mongo-driver` v1 is deprecated (`go get` notice), and it's indirect via go-openapi/strfmt → jedib0t/go-pretty → glazed.
+
+### What was tricky to build
+- Telling an intended upstream semantic change from a goja regression. The bisect probe plus the commit's own doc text settled it: intentional, and documented.
+
+### What warrants a second pair of eyes
+- **Downstream nil-slice audit** for every go-go-golems native module (goja-bleve, goja-text, upwork runtime packages, …): any `var out []T; return out` now reaches JS as `null`.
+  - rag-workbench `pkg/natives` looks safe: arrays are built with `vm.NewArray(out...)`, which gives `[]` for nil, and `scalarToJS` converts `[]any` the same way.
+  - go-go-goja: `fs.readdirSync` and the docs module use `make`; `uidsl` nodes are struct pointers (settable fields).
+- 202 upstream goja commits. go-go-goja's own suite passes, but it's the downstream suites that will show real-world effects.
+
+### What should be done in the future
+- User: merge #106 and tag v0.10.7. Dependabot should close #105/#94/#89 by itself.
+- rag-workbench (task k4hx):
+  - bump to go-go-goja v0.10.7;
+  - `isLN` → Unicode;
+  - flip the canary;
+  - run the whole-vault hashed parity;
+  - confirm the natives with an empty-result test (e.g. a BM25 search with no hits returns `[]`).
+
+### Code review instructions
+- PR #106, commit by commit: `dfe2aae` (test), `1ebcb0c` (goja master), `9c88572` (database), `9dcfa60` (deps/toolchain), `3dfcc78` (gosec).
+- Validate in go-go-goja: `go test ./...`, `make lint`, `govulncheck ./...`, `make gosec`.
+
+### Technical details
+- Bisect versions: `v0.0.0-20261023121931-6ace4dde0b29` (null) vs `v0.0.0-20261023113153-3c7039fb89af` (array).
+- Alert → fix map: grpc 32–35 → 1.85.0; excelize 31, 36–51 → 2.11.1; mongo-driver 17 → 1.17.10; go-jose 52 → 4.1.8; otel GO-2026-5158 → 1.45.0.

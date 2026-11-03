@@ -75,3 +75,7 @@ go-go-goja PR #106 (https://github.com/go-go-golems/go-go-goja/pull/106): bump g
 ### Related Files
 
 - /home/manuel/code/wesen/go-go-golems/go-go-goja/pkg/engine/regexp_test.go — regression test for Unicode property escapes in the shared runtime
+
+## 2026-11-03
+
+go-go-goja PR #106 extended: goja/goja_nodejs master, database nil-slice fix, Dependabot #105/#94/#89 + alerts at newest releases, toolchain go1.26.10, gosec ttmp exclusion
