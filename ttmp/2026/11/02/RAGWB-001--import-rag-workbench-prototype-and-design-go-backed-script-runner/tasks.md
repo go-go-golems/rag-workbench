@@ -11,6 +11,6 @@
 - [x] P5 workbench server: ported UI + window.claude shim (sample SSE/page tools, db, user) <!-- t:pgim -->
 - [x] P6 app store: apps dir + history API; agent wb.save/load <!-- t:bhly -->
 - [ ] P7 remote pipeline: /api/rag sessions, RemoteRag, ragwb serve <app> <!-- t:i5j5 -->
-- [ ] P8 persistence + vectors: artifact store by digest, bleve index, embeddings + sqliteexact <!-- t:f6cl -->
+- [x] P8 persistence + vectors: artifact store by digest, bleve index, embeddings + sqliteexact <!-- t:f6cl -->
 - [x] P9 server-side LLM nodes: ctx.sample on geppetto <!-- t:jlcq -->
 - [x] After go-go-goja v0.10.7: nil-slice audit (goja 6ace4dd nil slice → null) — add an empty-result test for natives (BM25 no hits, empty source.dir) <!-- t:de8c -->

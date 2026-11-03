@@ -96,3 +96,12 @@ P6 app store done: apps dir + SQLite history, /api/apps with save-time checks, r
 
 - /home/manuel/code/wesen/go-go-golems/rag-workbench/pkg/server/apps.go — /api/apps routes
 - /home/manuel/code/wesen/go-go-golems/rag-workbench/pkg/store/apps.go — app store (files + history)
+
+## 2026-11-03
+
+P8 done: build outputs persisted by digest (+component source) with lazy loading and codecs (docs/chunks gob, bm25, vectors, terms, lazy source); vault parc search 10.8 s/3.4 GB -> 2.6 s/1.4 GB warm, hybrid 3.0 s; outputs identical. Inline save form; client-side path validation (fetch resolves '..')
+
+### Related Files
+
+- /home/manuel/code/wesen/go-go-golems/rag-workbench/pkg/artifacts/store.go — artifact store
+- /home/manuel/code/wesen/go-go-golems/rag-workbench/pkg/natives/persist.go — env.artifacts bridge and codecs

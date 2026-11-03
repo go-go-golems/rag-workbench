@@ -1177,3 +1177,152 @@ The workbench page now uses the app store. Save and Ctrl+S write the editor's sc
 ### Technical details
 - `wb.save(app, path, comment)` / `wb.apps.save(app, path, text, comment)` → `{app, path, version, unchanged, role, ok, problems, verbs, run}`.
 - `wb.open(app, path, {version})` → `{opened, version, ok, nodes, ms, …}`.
+
+## Step 21: P8: build outputs persisted by digest; a warm vault query drops from 10.8 s / 3.4 GB to 2.6 s / 1.4 GB
+
+Query verbs no longer rebuild the corpus on every run. The engine keeps a persistent second level behind its in-memory memo: a node whose output is stored becomes a lazy entry, loaded only if something reads it. The first version merely moved the cost around (warm 11 s, the same as no store). Tracing loads and saves showed why: eager reads of unused outputs, a JS index with no codec, and goja's `JSON.parse` on 335 MB. After lazy docs and source, codecs for every component on the query path, and Go codecs instead of JSON, a warm `parc search` over the whole vault takes 2.6 s and hybrid search 3.0 s. Outputs are identical to an in-memory build: the whole-vault hashes of every chunk, doc and the terms map match across no-store, cold and warm runs.
+
+### Prompt Context
+**User prompt (verbatim):** "ok, do P8, also do the small inline form."
+**Assistant interpretation:** Implement P8 (persist build artifacts by digest, so saved query verbs stop rebuilding), measured on the vault; replace the first-save `window.prompt` with an inline form (Step 22).
+**Inferred user intent:** Make the many small apps fast enough to use from the terminal.
+**Commit (code):** `221096e` (store, engine, codecs, CLI), `d3ca836` (vector codec).
+
+### What I did
+- **Engine (rag.js):**
+  - `class Lazy` and `class Outputs extends Map`, whose `get` forces lazies.
+  - `env.artifacts {has, save, load}` (synchronous).
+  - In `build()`, before the memo check: if the store has `storeKey(d, def)` = `hash([digest, def.src])`, the memo gets `{ get value(), count, lazy }` and the node counts as reused (`st.stored`). Memo hits put the Lazy itself into `outputs`.
+  - After computing: `store.save(key, n.t, codec.save(value), count)` (`st.saved`); errors are only logged.
+  - `persistOf(def)`: `def.persist` or false; `docs`/`chunks` default to a pass-through JSON codec.
+  - `define()` records `d.src` (the map/all/run source), so editing a component's code changes its key.
+  - `artifacts()`: `byId` is an `Outputs` of lazies. It only reads chunks, indexes and synonyms; `docs` and `links` are getters computed on first use.
+- **`pkg/artifacts`:** `Open(dir, ns)`; `<dir>/<ns>/<key[:2]>/<key>.bin` + `.json` meta (written after the payload; `Has` rejects a size mismatch or bad meta); atomic writes; `List`, `Prune`.
+- **`pkg/natives/persist.go`:** the `Persist` native installs `env.artifacts`. A value with a hidden `__go` handle is encoded by its Go type; everything else goes through the VM's `JSON.stringify`/`parse`. `natives.Version` names the Go components' behavior. `RAGWB_STORE_DEBUG=1` traces each load and save with its timings.
+- **Codecs:**
+  - `bm25` (`EncodeBm25`, terms sorted, deterministic);
+  - `docs`/`chunks` (gob of `[]*Doc`/`[]Chunk`, which the native components now attach to their output arrays via `docsArray`/`chunksArray`);
+  - `index.terms` (its value map as JSON; the unused `byDoc` comes back empty);
+  - `source.dir` (`save: () => 0`, `load: re-read` — valid because the digest covers every file's path, size and mtime);
+  - `vectors` (Step 21b below).
+- **`runner`:** `Config.Artifacts`, and `ArtifactNamespace(js)` = sha256(natives.Version, mode, rag.js)[:16].
+- **CLI:** `--store`/`--no-store` (default `$RAGWB_STORE` or `~/.ragwb/store`) for run/presets/verbs; `ragwb store list` (Glazed) and `ragwb store prune [--all]`.
+- **Tests:**
+  - `TestArtifactsPersistAcrossRuntimes`: cold saves; warm reuses everything with identical results plus the full JSON of all chunks and docs; a param change recomputes chunks and index from stored docs.
+  - `TestArtifactsKeyIncludesComponentSource`.
+  - `TestArtifactsVectorIndex`.
+  - `pkg/artifacts` store tests, `TestBm25CodecRoundTrip`.
+
+### Why
+- The node digest covers type, params, inputs and file stats, but not the component's *code*. In memory that was harmless; on disk it means stale outputs after editing a custom chunker, so `def.src` joins the key. The namespace covers the code I ship (rag.js, natives).
+- Lazy rather than eager loading, because the query path needs chunks and indexes but rarely docs or files, which are the biggest outputs (205 MB docs JSON; the vault text).
+
+### What worked
+- The equality run on the whole vault, a verb hashing every chunk, every doc and the terms map:
+  - no-store, cold and warm all give `chunk_hash 2509fac26394bc`, `doc_hash be0ebadd61f9ab`, `terms_hash 171e84d41bc023`, `top 613611cf6e6282` (85,882 chunks, 2,063 docs);
+  - warm: `build_ms 23`, reused `files,parse,chunks,ix-text,ix-meta`.
+- `parc search "rebalance law"` (`/usr/bin/time`), all with the same top hit "5.9 The rebalance law":
+
+| run | wall | max RSS |
+|---|---|---|
+| no store | 10.82 s | 3.43 GB |
+| cold (saves) | 15.75 s | 4.03 GB |
+| warm | 2.84 s | 1.42 GB |
+| warm | 2.60 s | 1.47 GB |
+| hybrid, saving vectors | 5.65 s | 2.76 GB |
+| hybrid warm | 3.03 / 3.02 s | 1.9–2.0 GB |
+
+- Warm load breakdown: chunks (gob) read 46 ms + decode 1.13 s (142 MB); bm25 0.26 s (55 MB); terms 0.36 s (44 MB JSON); vectors 0.14 s (277 MB). Store: 398 MB lexical, 662 MB with vectors.
+- Mutation check: with `storeKey` ignoring `def.src`, `TestArtifactsKeyIncludesComponentSource` fails with "after editing the component body: "one,one" (a stale stored output was reused)".
+- `go test ./...` all ok; `make lint` ok.
+
+### What didn't work
+- **First version: no gain.** Warm `parc search` took 10.95 / 11.25 s (no store 11.68 s), and cold 21.91 s. The traces showed:
+  - `chunk.sections json: decode 2.9–6.1 s` (147 MB, goja `JSON.parse`);
+  - `parse.markdown json: decode 3.36 s` (205 MB), docs loaded by `artifacts()`;
+  - `ix-meta` (`index.terms`, no codec) recomputed in 4.4 s, forcing the chunk load;
+  - the source re-read (355 ms).
+  
+  Fixed in that order: lazy docs/links, a terms codec, the lazy source codec, Go codecs for docs/chunks. After the first three: warm 7.84 / 6.96 s, 1.43 GB. After Go codecs: 2.6–2.8 s.
+- **`artifacts()` forced every stored output.** My debug verb printed `after artifacts: files=loaded parse=lazy chunks=loaded`. The loop called `byId.get(n.id)` for every non-docs node, including the source. It now reads only chunks, indexes and synonyms.
+- **My verification was slower than the thing it verified.** `rag.util.hash(JSON.stringify([...85k chunks]))` took 131 s in goja (one ~140 MB string), which first looked like a hang ("cold" still running after 10 min). Per-item hashing still took about 7 minutes per run. The verification completed; the store itself was never slow. I lost one run to the Bash tool's 600 s limit.
+- **zsh doesn't word-split:** `flag="--store $S"; ragwb $flag …` passed one argument, so the first "cold/warm" runs failed in 0.01 s. I switched to arrays (`a=(--store $S)`, `"${a[@]}"`).
+- **Test mistakes:**
+  - a leftover junk line (`rag.compile(…then ? null : null)` → "compile() takes a plan…");
+  - a guessed factory (`rag.tagged()`); defined components are `rag.<family>.<variant>()`, here `rag.chunk.tagged()`;
+  - a plan without retrieve.
+- **An editing slip in `vector.go`:** a stray fragment of the old search closure ended up inside `rerank` (`vet: undefined: only`). Removed.
+
+### What I learned
+- In goja, building JS objects from Go structs (`chunkToJS`) is several times faster than `JSON.parse` of the same data, and `JSON.stringify` of a very large array is pathologically slow. Large artifacts should never round-trip through JSON in the VM.
+- "Persist" doesn't have to mean "store the bytes". For a source whose digest already pins its inputs, a lazy re-read is a correct codec and costs nothing when downstream is stored.
+
+### What was tricky to build
+- Laziness through three layers: memo entries (a getter), build outputs (`Outputs.get` forces), and `artifacts().byId` (the same). Plus making sure no code path touches `.value` without needing it. The debug verb that prints lazy/loaded per node after each step was the tool that made this checkable.
+
+### What warrants a second pair of eyes
+- `natives.Version` must be bumped whenever a Go component's output changes. Otherwise old stored outputs are reused under the same namespace. The rag.js side is automatic (its source is hashed).
+- A source digest is a stat digest (size + mtime). An edit that keeps both leaves the old outputs in use. The same was already true of the in-memory memo.
+- The store grows without bound (`prune` only drops other namespaces). A size cap or LRU would be the next step.
+
+### What should be done in the future
+- P7 (`ragwb serve <app>`): one long-lived process keeps the artifacts in memory, which makes the remaining ~2.5 s disappear for interactive use.
+- Optional: per-node timing in `ragwb store list` (hit and miss counts), and an `--max-size` prune.
+
+### Code review instructions
+- rag.js: the `Lazy`/`Outputs`/`persistOf`/`storeKey` block above `class Engine`; `build()` store lookup and save; `artifacts()`; `define()` `d.src`.
+- `pkg/natives/persist.go`, `*_codec.go`; `pkg/artifacts/store.go`; `cmd/ragwb/cmds/store.go`.
+- Validate:
+  - `go test ./pkg/artifacts ./pkg/natives ./pkg/runner -run 'Artifacts|Bm25Codec|Save|Torn|Prune'`;
+  - `ragwb --root <vault> --store /tmp/s verbs --dir examples/apps/parc parc search "rebalance law"`, run twice with `RAGWB_STORE_DEBUG=1`.
+
+### Technical details
+- Store key = `cyrb53(stable([nodeDigest, def.src]))`; namespace = `sha256(natives.Version \0 mode \0 rag.js)[:16]`.
+- Codecs: `json`, `docs`, `chunks`, `bm25`, `vectors` (8-byte header length + gob header + N×dims float32 LE).
+
+## Step 22: inline save form; a URL-normalization bug found on the way
+
+The first Save in the workbench now opens a small form under the editor header instead of `window.prompt`:
+- App, with completion from saved apps;
+- File, where `.wb.js` is appended when there is no extension;
+- an optional Note.
+
+Validation and server errors show inline. Shift+click or Ctrl+Shift+S opens it as "save as". Testing it turned up a real bug: `lib/../x.wb.js` saved as `x.wb.js`, because the browser resolves `..` in the URL before the server sees it.
+
+### Prompt Context
+**User prompt (verbatim):** see Step 21 ("… also do the small inline form.").
+**Assistant interpretation:** Replace the prompt dialog with an inline form (the rough edge noted in Step 20).
+**Inferred user intent:** A save flow that doesn't feel bolted on.
+**Commit (code):** `6afe342`.
+
+### What I did
+- `index.html`: `<form id="save-form">` (App with `<datalist id="save-apps">`, File, Note, Save/Cancel, a status line), styled with the page's tokens. The tooltip on Save mentions Shift+click and Ctrl+Shift+S.
+- `app.js`:
+  - `saveButton(e)` saves directly when a file is open; otherwise (or with Shift) `openSaveForm()` (prefilled from the open file or a slug of the preset).
+  - `submitSaveForm` validates the app name, the `.wb.js` ending and the path rules, then shows `saveEditor` errors inline.
+  - Escape closes it. The `window.prompt` path is gone (`saveEditor` no longer takes `opts.ask`).
+- `pathProblem` and `appSeg` mirror `store.CheckPath`/`CheckApp`. `fileUrl` (used by every apps call) throws before any request.
+
+### What worked
+- Playwright on `ragwb-ui workbench --addr 127.0.0.1:8793`:
+  - Save with no file → form prefilled app `reports`, file `pipeline.wb.js`, focus on File.
+  - `bad name!` → "App: letters, digits, “.”, “_” and “-” …". `notes.txt` → "… must end in .wb.js". `lib/../x.wb.js` → "… is not a clean relative path …"; the form stays open.
+  - `hybrid` + note + Enter → `reports-ui/hybrid.wb.js` v1, history "1: first save from the inline form".
+  - Shift+click → "Save a copy of reports-ui/hybrid.wb.js under a new name."; `hybrid-copy` + Enter → the new file, and the editor switches to it. Escape closes the form.
+  - Screenshot: `various/p8-inline-save-form.png`.
+- The page state left over from the bug (file `lib/../x.wb.js`) now fails to reopen with "could not reopen … not a clean relative path" and falls back to the preset.
+
+### What didn't work
+- **URL normalization.** Submitting `lib/../x.wb.js` reported success with `W.file.path = "lib/../x.wb.js"`, but the server had saved `x.wb.js`: `fetch()` resolved `lib/..` before the request. The server's path check never saw `..`, so nothing escaped the app dir, but page and disk disagreed. Percent-encoding didn't help: `new URL(…/lib/%2E%2E/x.wb.js).pathname` → `/api/apps/a/files/x.wb.js` (WHATWG treats `%2e%2e` as a dot segment). The fix is to refuse such paths on the client before building a URL.
+- **First layout: a giant "App" box.** The label class `app` collided with the page shell's `.app {display: grid; height: 100%; border…}` (computed: border 1px, height 130 px). Renamed the classes to `sf-app`/`sf-path`/`sf-note`.
+- A first Python edit aborted midway: the line being replaced also appeared in the new `wireSaveForm`. `index.html` was written but `app.js` wasn't. Redone with the replacement ordered first.
+- I built the UI test binary as `dist/ragwb-ui`, so as not to overwrite `dist/ragwb` while the background vault check was running it.
+
+### What I learned
+- A client that builds URLs from user paths must validate them itself. The URL parser silently rewrites dot segments, even percent-encoded ones.
+
+### What warrants a second pair of eyes
+- The datalist only completes apps that contain a `*.wb.js` (from `W.appsIndex`). An app holding only verb files isn't suggested.
+
+### Code review instructions
+- `web/workbench/app.js`: `pathProblem`, `appSeg`, `fileUrl`, and `saveButton` through `wireSaveForm`. `web/workbench/index.html`: `.save-form` CSS and the form markup.
