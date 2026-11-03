@@ -58,7 +58,7 @@ This guide designs the change that makes that the normal path. There are three p
 2. **Docs and chunks are stored in an on-disk record store** (a `bbolt` file, which bleve already depends on). The engine reads one record when it needs it, instead of decoding all of them at load.
 3. **The artifact store learns file and directory payloads,** so indexes and record stores are kept by digest, as everything else already is.
 
-The browser workbench is unchanged: it has no filesystem and keeps the in-memory engine.
+The **workbench page** (`ragwb workbench`) runs its queries in the browser and is unchanged: a browser tab has no filesystem, so it keeps the in-memory engine. The **app shell** that `ragwb serve` opens runs every query on the server, so it gets the new backend automatically (§3.2).
 
 **Expected result:** a served vault app opens in tens of milliseconds and needs on the order of 100 MB instead of 1.4 GB. Queries stay in the same 2–40 ms range. These are targets to be measured in Phase 5, not results yet.
 
@@ -90,7 +90,7 @@ A query then reads about 50 chunks. The cost is proportional to the corpus, not 
 - Exposing goja-bleve's `require("bleve")` to user scripts (needs a path policy first).
 - Incremental index updates for `ragwb serve --watch`.
 - Vectors in bleve (needs FAISS/cgo).
-- Any change to the browser page.
+- Any change to the workbench page (the app shell needs none either, see §3.2).
 
 ## 3. Orientation: what you need to know first
 
@@ -111,7 +111,23 @@ A query then reads about 50 chunks. The cost is proportional to the corpus, not 
 
 The **same `rag.js`** is served to the browser (`GET /rag.js`) and loaded into every goja runtime (`pkg/ragjs/module.go`). That is why "parity" — byte-identical results between the JS and Go implementations — matters throughout this codebase. A plan tuned in the workbench page must rank the same way when run from the CLI or a served app.
 
-### 3.2 Terms
+### 3.2 Two browser pages, two execution models
+
+The repository ships two pages, and they run queries in different places. The rest of the guide assumes you know which is which.
+
+| | Workbench page | App shell |
+|---|---|---|
+| Started by | `ragwb workbench` | `ragwb serve <app>` |
+| Files | `web/workbench/{index.html, app.js, agent.js}` | `web/app-shell/{index.html, shell.js}` |
+| Purpose | editor/IDE: script editor, inspector, DAG, agent | the app's search UI, nothing else |
+| Where `rag.js` builds and queries | **in the browser tab** | **on the server** (goja runtime + Go natives) |
+| Corpus | files loaded into the page (`rag.files(...)`: bundled `/corpus.json` or uploads) | whatever the server-side plan reads, e.g. `source.dir` over the vault |
+| What the Go server does | LLM calls (`/_rt/sample`), db, saved apps, presets | `POST /api/rag/<app>/run`, `GET …/chunk`, `…/doc` (`pkg/server/rag.go`) |
+| Affected by RAGWB-002 | no (a tab cannot open bleve or bbolt) | yes, transparently: its queries already run on the backend |
+
+In the app shell, `host.rag.session().run(...)` is a fetch to `/api/rag/<app>/run` (`web/app-shell/shell.js`, `run`). The response carries the result and the bodies of the chunks it mentions. `rag.js` is loaded in that page only for helpers over returned data (`rag.ir()`, `rag.explain`); it never builds or searches. The measurements in §4.5 for `ragwb serve` are server-side numbers, and they are what this design improves.
+
+### 3.3 Terms
 
 **Corpus spec and plan.** A *corpus spec* chains build components: `rag.corpus("parc").from(rag.source.dir(...)).parse(rag.markdown()).chunk(rag.sections(...)).index("text", rag.bm25(...))`. A *plan* adds live components on top: `rag.plan("q").over(corpus).signals({q:"",k:10}).retrieve("text",{k:30}).filter.where().limit()`. See `examples/apps/parc/lib/corpus.js`.
 
@@ -152,7 +168,7 @@ The **same `rag.js`** is served to the browser (`GET /rag.js`) and loaded into e
 
 **Hit.** `{id, score, why}`. `why` maps the top contributing query terms to their partial scores. The inspector and `rag.explain` use it.
 
-### 3.3 A query, end to end (today)
+### 3.4 A query, end to end (today)
 
 ```
 ragwb serve examples/apps/parc               (one long-lived goja runtime)
@@ -168,7 +184,7 @@ ragwb serve examples/apps/parc               (one long-lived goja runtime)
          pack: bodies of ~50 chunks → JSON → browser                             ← 7–40 ms total
 ```
 
-### 3.4 Where the memory goes (measured)
+### 3.5 Where the memory goes (measured)
 
 From `ttmp/2026/11/02/RAGWB-001-…/scripts/06-serve-heap` (diary step 25), one opened vault session:
 
@@ -245,7 +261,7 @@ In `Engine.build` (`rag.js:1340-1362`), for each build node:
 | CLI warm `parc search`, total | 2.2 s; `artifacts()` 2.06 s (chunks 1.2 s: decode 1.1 s of 136 MB; terms 0.43 s; bm25 0.24 s); query 1.7 ms | step 23 |
 | `ragwb serve` vault open | 2.15 s, 1.4 GB RSS | step 24 |
 | `ragwb serve` query round trip | median 14.7 ms, max 45 ms | step 24 |
-| Live heap breakdown | table §3.4 | step 25 |
+| Live heap breakdown | table §3.5 | step 25 |
 | bleve probe: build | 21.0 s (3 analyzed stored fields, `en` analyzer) | step 26 |
 | bleve probe: disk | 315 MB with stored text | step 26 |
 | bleve probe: open | 0.9 ms; query process 91 MB RSS | step 26 |
@@ -526,7 +542,7 @@ Semantics are ported exactly (`RE_NONWORD`, the `1/ln(2 + n/10)` weight, the tie
 ### 6.7 What does not change
 
 - **Vectors (`index.vector`):** they keep their raw float32 artifact. Moving to memory-mapped vectors or bleve KNN is deferred: bleve KNN needs FAISS and cgo (goja-bleve `docs/faiss-xgoja-playbook.md`).
-- **The browser workbench page and its engine.**
+- **The workbench page and its in-browser engine.** The app shell needs no change either: its queries already run on the server.
 - **The live components, the result shape, the serve API and the app shell.** The serve harness `pack` already uses `a.chunks.get` and `a.order`, which the views provide.
 
 ## 7. Decision records

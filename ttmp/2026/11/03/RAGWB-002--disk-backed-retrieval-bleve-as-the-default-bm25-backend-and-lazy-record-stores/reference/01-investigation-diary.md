@@ -116,3 +116,16 @@ Make it the default."
 
 ### Code review instructions
 - Read the guide top to bottom. Check its line references against `pkg/ragjs/assets/rag.js`, `pkg/natives/bm25.go` and the bleve module source (`~/go/pkg/mod/github.com/blevesearch/bleve/v2@v2.6.0`).
+
+## Step 2: guide v2 — the two browser pages made explicit
+
+The user asked what "the browser page" is, and whether `ragwb serve` runs queries on the backend (it should). It does: the app shell posts every query to `/api/rag/<app>/run`. The guide's phrase "the browser workbench is unchanged" was ambiguous between the two pages, so I added §3.2, a table contrasting the workbench page (queries run in the tab) with the app shell (queries run on the server, so RAGWB-002 applies to it automatically). Later sections were renumbered, and the summary and scope lines were reworded to match.
+
+### Prompt Context
+**User prompt (verbatim):** "what's the browser page? when I run serve, will it hit the backend to run the queries? (it should)" then "Upload as v2"
+**Assistant interpretation:** Clarify the two pages in the guide and upload a second version without overwriting the first (which may carry annotations).
+**Commit (code):** — (documents only).
+
+### What I did
+- Guide: new §3.2 with a table (started by, files, where `rag.js` builds and queries, corpus, server role, affected by RAGWB-002); reworded the executive summary, §2.3 and §6.7; §3.3–3.5 renumbered.
+- Uploaded as "RAGWB-002 Disk-backed Retrieval Intern Guide v2" next to the original, without `--force`.
