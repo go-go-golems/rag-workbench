@@ -241,3 +241,81 @@ The `verbs` command (jsverbs over an app directory, with our runtime) is written
 ### Technical details
 - Module names: `ragwb`, `ragwb/gui`, `ragwb/kit` (constants in `pkg/ragjs/module.go`). `ragjs.Source(name)` serves the same bytes to the browser later.
 - `ScriptReport` JSON: `{build:{ok,ms,errors,nodes[{id,type,count,ms,reused,deferred}]}, run:{trigger,signals,ms,calls,errors,top[],trace[],answer}, evals?, variants?, app?{kind,id,title}, pending[]}`.
+
+## Step 7: P2 jsverbs runner + P3 `rag.source.dir`, and a corrected performance baseline
+
+I validated the `verbs` command with two split-file example apps. `examples/apps/reports` (lib/corpus, lib/plans, search, evals, index, app) reproduces the browser's worked example exactly, **12.6758**, through the new Go-native `rag.source.dir` → parse → chunk → BM25. `examples/apps/parc` indexes and searches subsets of the real Obsidian vault behind a roots allowlist.
+
+Two of my own earlier claims turned out wrong and are corrected here. First, BM25 in goja is not 0.12 s for 462 chunks but about 1.1 s; the 0.12 s figure was measured while the tokenizer was still broken and indexed nothing. Second, the honest goja build cost is about 5–6.5 s/MB, so a full vault build would take minutes and gigabytes in JS.
+
+### Prompt Context
+**User prompt (verbatim):** see Step 6 ("when you implement, commit at appropriate intervals and keep a detailed diary …").
+**Assistant interpretation:** Continue phases P2/P3 with tests, a diary entry and a commit.
+**Inferred user intent:** Saved scripts must run standalone over real corpora, which is the core of the request.
+**Commit (code):** see the commit made right after this entry ("RAGWB-001 P2/P3: …").
+
+### What I did
+- `pkg/natives/sourcedir.go`: `SourceDir{Roots, Base}` implementing `ragjs.Native`. It registers `rag.define('source.dir', {phase:'build', in:[], out:'files', args, describe, digest, all})`. Behavior:
+  - Walk: `filepath.WalkDir`, doublestar include (default `**/*.md`) and exclude (always `.git/** .obsidian/** node_modules/** .trash/**`), excluded directories pruned, symlinks not followed.
+  - Skips: `maxBytes` (default 4 MiB), and HTML documents with a text extension (`skipHtml`, default on). Skips are reported through `ctx.log`.
+  - Records: `{name: relpath, path, text (ToValidUTF8), size, mtime}`.
+  - Digest: sha256 over the resolved params plus `(relpath, size, mtimeNano)` of every match, via the engine digest hook from Step 6.
+  - Root resolution: `~` expansion, relative to `Base`, `Abs`, `EvalSymlinks`, and it must lie inside an allowlisted root.
+- `runner.Config{Roots, Base}` always installs `SourceDir`. CLI `--root` is a persistent, repeatable flag. `cmds.Roots(dirs...)` = cwd + verbs `--dir` + `--root` values.
+- `examples/apps/reports/`: `lib/corpus.js` (kit.reports weights over `source.dir({root: "corpus", include: ["*.md"]})`), `lib/plans.js` (`lexical`, `fused` = text+meta → rrf → filter.where → limit), `search.js` (`search`, `explain`), `evals.js` (`goldens`), `index.js` (`index`), `app.js` (`kit.searchApp(plans.fused)`, no verbs).
+- `examples/apps/parc/`: `lib/corpus.js` (`corpus(include)`/`plan(include)` over `~/code/wesen/go-go-golems/go-go-parc` with the survey's excludes), `parc.js` (`index`, `search`, a `subset` section with an `include` stringList).
+- `rag.js`: `RE_WORD`/`RE_NONWORD` now return regexes compiled once (`RE_WORD_G`/`RE_NONWORD_G`).
+- Tests: `pkg/natives/sourcedir_test.go` (include/exclude/skips, digest changes on edit and on globs, allowlist incl. parent escape and empty-deny, relative root via Base, relative allowlist entry); `cmd/ragwb/cmds/verbs_test.go` (`TestReportsAppVerbs`: real cobra tree → `verbs --dir … reports search "rebalance law" --output json` → top id `…#5-9-the-rebalance-law`, score 12.6758).
+
+### Why
+- The relative-root `Base` exists because jsverbs' overlay loader gives modules **virtual** paths. Module path is `/lib/corpus.js`, so `__dirname + "/../corpus"` resolved to `/corpus`. Apps should be relocatable without embedding absolute paths, so roots resolve against the host-known app directory instead.
+- The stat-based digest (not content hashes) keeps `digests(ir)` cheap. It is called several times per build (`dirty`, `pending`, `build`). Per-file content hashing already happens in the engine's per-item memo (`hash(item)`).
+
+### What worked
+- `ragwb verbs --dir examples/apps/reports list` → 4 verbs (`reports goldens|index|explain|search`).
+- `reports search "rebalance law" --k 3` → rank 1 `5. The core's modules › 5.9 The rebalance law` **12.6758**, then 7.3908 and 7.0051 (2.9 s wall).
+- `reports index` → files 11 (3 ms) · parse 526 ms · chunks 462 (1065 ms) · ix-text 1143 ms · ix-meta 23 ms.
+- `reports goldens` → lexical hit@5 1 / mrr 0.933 / ndcg 0.847; fused 1 / 0.892 / 0.818.
+- `reports explain "rebalance law" <id>` → `text` rank 1 12.6758 `{"law":7.08,"rebalanc":5.59}` → filter → limit.
+- `parc search "reciprocal rank fusion" --include 'Research/KB/**/*.md'` → rag-ttc textbook series, RAG Evaluation Pipeline Architecture, Bleve guide, goja-bleve (4.7 s).
+- Without `--root`: `source.dir: root "/home/manuel/code/wesen/go-go-golems/go-go-parc" is outside the allowed roots [...] (pass --root)`.
+- `go vet ./... && go test ./...` → all ok.
+- Regression gate after the rag.js regex change: `ragwb presets --dir examples/presets --files examples/apps/reports/corpus` exit 0, 30/30 `ok`. Diffed against the Step 6 sweep with the query-ms column normalized: **identical** (only one alignment-whitespace difference).
+
+Vault build measurements (this machine, commit e1707e9 + this step's changes, goja, single runtime):
+
+| subset | files | md size | chunks | parse | chunk | bm25 | total | max RSS |
+|---|---|---|---|---|---|---|---|---|
+| `Research/KB/**` | 96 | 834 KB | 1,107 | 0.98 s | 1.79 s | 1.81 s | 4.6 s | — |
+| `Research/**` | 572 | 10.7 MB | 11,926 | 12.2 s | 28.2 s | 28.4 s | **69.3 s** | **477 MB** |
+
+### What didn't work
+- `ragwb verbs --dir examples/apps/reports reports search …` (first attempt) → `Error: promise rejected: GoError: source.dir: lstat /corpus: no such file or directory`. The cause is the virtual `__dirname` described above. Fixed by `SourceDir.Base` and `root: "corpus"`.
+- My sed edit of `lib/corpus.js` put the comment inside the call and dropped `)`: `GoError: SyntaxError: /lib/corpus.js: Line 15:77 Unexpected token ; (and 4 more errors)`. Rewrote the line properly.
+- `TestReportsAppVerbs` (first run) → `source.dir: root ".../examples/apps/reports/corpus" is outside the allowed roots [.../cmd/ragwb/cmds ../../../examples/apps/reports]`. **This was a real allowlist bug:** `EvalSymlinks` on a relative allowlist entry returns a relative path, and `filepath.Rel(relative, absolute)` fails, so relative entries never matched. CLI runs only passed because the corpus also sat under the (absolute) cwd entry. Fixed by `filepath.Abs` before `EvalSymlinks`, with a unit test.
+- The same test (second run) → `decode "": unexpected end of JSON input`. Glazed writes rows to `os.Stdout`, not cobra's `OutOrStdout`. The test now captures the fd with a pipe.
+- **Hypothesis disproven:** I attributed BM25 = 1143 ms (vs. "115 ms" in Step 3) to per-call RegExp compilation in `RE_WORD()`. Caching the regexes changed nothing (1122 ms). Re-running spike 01 with its *own* old rewrite gave ix-text 1141.8 ms, and with the new assets 1607.5 ms. The Step 3 figure came from the broken-tokenizer runs, where nothing was indexed. Corrected the guide (§1 point 3, §7 table, D1 context: "about 5 s/MB") and analysis §3. The regex caching stays as a harmless improvement.
+
+### What I learned
+- The real goja cost is roughly parse 1 : chunk 2 : BM25 2, and it grows slightly superlinearly (5.6 s/MB at 0.8 MB, 6.5 s/MB at 10.7 MB). Extrapolated to the 81 MB vault: about 9–10 minutes and around 3–4 GB RSS. **P4 (native parse/chunk) and P8 (persisted Bleve) are required before whole-vault use**, and P8's persistence also matters for queries, because every `search` verb currently rebuilds.
+- jsverbs gives modules virtual paths (`/lib/corpus.js`), so file access must go through host-resolved bases, not `__dirname`.
+
+### What was tricky to build
+- **Directory exclusion with doublestar.** A pattern like `ttmp/**` matches files *below* `ttmp` but not the directory path `ttmp` itself. The walk therefore tests both `rel + "/"` against the pattern and `rel` against the pattern minus its `/**` suffix, and returns `SkipDir` on either match. Without that, excluded trees (e.g. `.pi/` with 54 skill files) would be walked and stat-ed on every digest.
+
+### What warrants a second pair of eyes
+- `source.dir` reads files synchronously on the VM goroutine. That's fine for the CLI, but it blocks a server runtime for about 70 ms per 570 files.
+- Two `matches()` walks happen per build (digest + walk), plus extra digest calls from `dirty`/`pending`. A short-lived per-build cache would remove the duplicated stat walks.
+- Default-allowing the cwd is convenient for the CLI. The server (P5+) should use explicit roots only.
+
+### What should be done in the future
+- P4: goldmark-based `parse.markdown` + `chunk.sections` natives with byte ranges, verified against the JS output on both example corpora.
+- P8: persist build outputs so the parc `search` verb doesn't rebuild 69 s per query.
+
+### Code review instructions
+- `pkg/natives/sourcedir.go` (`resolveRoot`, `matches`, `Walk`, `Digest`, `sourceDirJS`), `cmd/ragwb/cmds/roots.go`, `examples/apps/*/`.
+- Validate: `go test ./...`; `make presets`; `./dist/ragwb verbs --dir examples/apps/reports reports search "rebalance law"`; `./dist/ragwb --root ~/code/wesen/go-go-golems/go-go-parc verbs --dir examples/apps/parc parc index --include 'Research/KB/**/*.md'`.
+
+### Technical details
+- `rag.source.dir(o)` params: `root` (required), `include` (string or list, default `**/*.md`), `exclude` (list, added to the defaults), `maxBytes` (default 4194304), `skipHtml` (default true). Node id: `dir`.
+- The jsverbs `stringList` field accepts repeated `--include a --include b`.

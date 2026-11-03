@@ -96,7 +96,7 @@ Lambdas fall into two classes, and that gives a natural split:
 | custom-rerank | 4.4 s | 7 ms | 1.0 | 1.000 | 0.897 |
 | fields | 4.3 s | 5 ms | 1.0 | 0.933 | 0.847 |
 
-- ⚠️ **Performance**: about 3 s/MB to parse and chunk in goja (11 files / 540 KB → 462 chunks; chunking alone ~1.07 s). The real vault is ~81 MB, so expect minutes plus a large in-JS BM25. → Keep the grammar/IR/lambdas in JS and move the heavy build nodes to Go natives.
+- ⚠️ **Performance** (corrected in diary step 7): about 5 s/MB to parse, chunk and BM25-index in goja (11 files / 540 KB → 462 chunks; parse ~0.5 s, chunk ~1.07 s, BM25 ~1.1 s). The real vault is ~81 MB, so expect minutes plus a large in-JS BM25. → Keep the grammar/IR/lambdas in JS and move the heavy build nodes to Go natives.
 - Not verified yet: the LLM nodes (no `sample` shim in the spike), parity with browser scores, and whether the agent's `eval` scope works headless.
 
 ## 4. Target corpus: go-go-parc (survey)

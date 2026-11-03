@@ -51,7 +51,7 @@ Our spikes already show three things:
 
 1. The prototype's engine (`rag.js`) runs **unmodified** inside goja, the Go JavaScript engine. There is one exception: goja does not support Unicode property escapes in regular expressions (`\p{L}`), and the failure is silent. With a one-line rewrite it reproduces the browser's scores exactly (score 12.676 for the textbook's worked example).
 2. Pipeline, plans, query and evals can live in **separate files**. They share values through `require()`, and the existing **jsverbs** runner turns each query/eval function into a CLI command that emits tables, JSON or CSV.
-3. Indexing in pure JS costs about 3 s/MB. That is fine for a demo, and too slow and memory-hungry for an 81 MB vault. The heavy nodes must become **Go-native components**, which the grammar can host without changing its shape.
+3. Indexing in pure JS costs about 5 s/MB (parse + chunk + BM25; corrected 2026-11-02, see diary step 7). That is fine for a demo, and too slow and memory-hungry for an 81 MB vault. The heavy nodes must become **Go-native components**, which the grammar can host without changing its shape.
 
 The rest of this guide explains the pieces, how they connect, and a phased plan to build them.
 
@@ -466,7 +466,7 @@ All spike code is in this ticket's `scripts/`.
 |---|---|
 | `01-goja-smoke` (plain goja, same version as go-go-goja) | `rag.js`, `gui.js` and `kit.js` load unmodified. `new Function` and the `with(Proxy)` lambda guard work. Builds complete. App specs compile to JSON (`kind: gui`). |
 | `02-goja-regex-probe` | `"rebalance law".match(/[\p{L}\p{N}_]+/gu)` returns **`null`** in goja: no error, no match. Lookbehind works. This alone made every search return 0 hits. |
-| `01` with `RAGWB_COMPAT=1` | 5 presets: hit@5 = 1.0, MRR 0.933–1.0, query 4–9 ms, build 3.2–4.9 s for 540 KB / 462 chunks (parse ~0.55 s, chunk ~1.07 s, BM25 ~0.12 s). |
+| `01` with `RAGWB_COMPAT=1` | 5 presets: hit@5 = 1.0, MRR 0.933–1.0, query 4–9 ms, build 3.2–4.9 s for 540 KB / 462 chunks (parse ~0.55 s, chunk ~1.07 s, BM25 ~1.1 s; the 0.12 s BM25 figure first recorded was measured with the broken tokenizer, see diary step 7). |
 | `03-jsverbs-split` | `lib/corpus.js` + `lib/plans.js` + `search.js` + `evals.js` run through `jsverbs-example`. The "rebalance law" top score is **12.676**, the same as the browser value in the textbook (12.6758). `goldens` gives lexical nDCG 0.845 vs fused 0.899. |
 
 The interpretation drives three decisions below: keep the JS engine (D1), fix the regex at the source with feature detection (D6), and move heavy build nodes to Go (D2).
@@ -713,7 +713,7 @@ function remoteRag(base, sessionId) {
 
 ### Decision D1: Keep the engine in JS; move heavy nodes to Go
 
-- **Context:** rag.js (2k lines) runs in goja today with the browser's semantics. Its build phase is about 3 s/MB.
+- **Context:** rag.js (2k lines) runs in goja today with the browser's semantics. Its build phase is about 5 s/MB.
 - **Options considered:** (a) reimplement the engine in Go and keep JS builders only; (b) keep the JS engine and register Go-native components for heavy build nodes; (c) run JS everywhere.
 - **Decision:** (b).
 - **Rationale:** Query-time engine overhead is milliseconds, so the cost is in parse, chunk and index, which are exactly the nodes we replace. One engine means the browser workbench, the textbook and the server agree on semantics, ops and traces.

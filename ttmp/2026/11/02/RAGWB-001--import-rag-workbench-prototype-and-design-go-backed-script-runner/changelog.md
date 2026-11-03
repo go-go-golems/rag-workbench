@@ -20,3 +20,12 @@ P0+P1: ragwb Go module and CLI; rag.js/gui.js/kit.js vendored as goja modules (D
 
 - /home/manuel/code/wesen/go-go-golems/rag-workbench/pkg/ragjs/module.go — ragwb native modules
 - /home/manuel/code/wesen/go-go-golems/rag-workbench/pkg/runner/script.go — headless workbench-script harness
+
+## 2026-11-02
+
+P2+P3: ragwb verbs (jsverbs with ragwb runtime) validated on split-file examples/apps/reports (12.6758 parity) and examples/apps/parc; native rag.source.dir with roots allowlist; vault Research/ subset 572 files/10.7MB builds in 69s/477MB (motivates P4/P8); corrected BM25 baseline (1.1s, not 0.12s)
+
+### Related Files
+
+- /home/manuel/code/wesen/go-go-golems/rag-workbench/examples/apps/reports/search.js — split-file app verbs
+- /home/manuel/code/wesen/go-go-golems/rag-workbench/pkg/natives/sourcedir.go — source.dir native component

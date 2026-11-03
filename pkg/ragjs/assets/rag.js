@@ -21,8 +21,12 @@
     try { if (new RegExp('^[\\p{L}\\p{N}]+$', 'u').test('é9')) return '\\p{L}\\p{N}'; } catch (_) { /* no \p support */ }
     return 'A-Za-z0-9\\u00AA\\u00B5\\u00BA\\u00C0-\\u00D6\\u00D8-\\u00F6\\u00F8-\\u024F\\u0370-\\u03FF\\u0400-\\u04FF\\u0590-\\u05FF\\u0600-\\u06FF\\u3040-\\u30FF\\u3400-\\u4DBF\\u4E00-\\u9FFF\\uAC00-\\uD7AF';
   })();
-  const RE_WORD = () => new RegExp('[' + LN + '_]+', 'gu');
-  const RE_NONWORD = () => new RegExp('[^' + LN + ']+', 'gu');
+  // Compiled once: String#match and #replace reset lastIndex on global regexes, so sharing is safe.
+  // (Compiling per call cost ~10x in goja's index.bm25 build: RAGWB-001 diary step 7.)
+  const RE_WORD_G = new RegExp('[' + LN + '_]+', 'gu');
+  const RE_NONWORD_G = new RegExp('[^' + LN + ']+', 'gu');
+  const RE_WORD = () => RE_WORD_G;
+  const RE_NONWORD = () => RE_NONWORD_G;
   const now = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
 
   function cyrb53(str, seed = 0) {
