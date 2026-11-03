@@ -1004,3 +1004,93 @@ After fixing both, all 804,846 distinct vault lines tokenize identically, and th
 ### Technical details
 - go-go-goja v0.10.7 = `e9bc789` (the merge of #106, on top of c265ae0).
 - The rag-workbench go.mod now requires go-go-goja v0.10.7 and goja `v0.0.0-20261103151521-97b96e1e55f5`, with `golang.org/x/text v0.43.0` as a direct dependency.
+
+## Step 19: P6 backend: app store, /api/apps, and the CLI that runs saved apps
+
+The server-side half of P6 is done: saving a script now means a file in an app directory that the CLI runs directly.
+- `pkg/store`: files on disk plus a SQLite history.
+- `/api/apps…`: each save reports what the file is and how to run it.
+- `ragwb apps`, `ragwb verbs --app`, `ragwb run <app>/<file>`.
+
+Verified end to end against a running `ragwb workbench`: I PUT three files over HTTP, the verb ran with `ragwb verbs --app notes`, the workbench script ran with `ragwb run notes/pipeline.wb.js`, and the history showed both versions of the edited file.
+
+### Prompt Context
+**User prompt (verbatim):** "Ok, do it. commit at appropriate intervals and keep a detailed diary as you work (using the diary format from the skill) (diary format from skill is MANDATORY)" (answering my "Want me to start on P6?")
+**Assistant interpretation:** Implement P6 (app store: apps dir + history API, agent `wb.save/load`, the editor opening app files), so that "save from browser → file on disk → runnable via `ragwb verbs`" (the guide's P6 exit criterion).
+**Inferred user intent:** Close the loop between writing scripts with the agent in the workbench and running them standalone.
+**Commit (code):** `6a9e6df` (store), `48937e4` (API + `--apps`), `30ccd96` (CLI).
+
+### What I did
+- **Design decision D9 (new): a file's role comes from its name.**
+  - `*.wb.js`: workbench script (an async function body), run with `ragwb run`.
+  - `lib/**.js`: library.
+  - Other `.js`: verbs.
+  - `.json`: data. `.md`/`.txt`: doc.
+  - jsverbs scanning excludes `**/*.wb.js` (`store.VerbScanOptions`).
+  - Why: one app directory holds both kinds of file, and a workbench script is not a CommonJS module.
+- **`pkg/store/apps.go`:** `OpenApps(dir, dbPath)`.
+  - Table `app_history(app, path, version, sha256, source, comment, deleted, created)`.
+  - Methods: `ListApps`, `Files`, `Read`, `Save`, `Delete`, `History`, `ReadVersion`, `Role`, `CheckApp`, `CheckPath`.
+  - Writes go through `os.Root` (`MkdirAll`, `WriteFile` to a hidden temp, `Rename`), so a path or symlink can't escape the app dir.
+  - Extension allowlist (.js .cjs .json .md .markdown .txt); 1 MiB cap.
+  - Saving the same bytes is a no-op. A file changed on disk outside the store is recorded as a "changed on disk" version before being overwritten. Delete keeps the last content.
+- **`pkg/store/check.go`:** `Check(app, path, src)`:
+  - Syntax via `goja.Compile`, wrapped the way the file runs: workbench as `(async function (rag, gui, log, kit) {…})` with a line offset of 1; .js as a CommonJS wrapper on the same line; .json via `json.Unmarshal`.
+  - Then a jsverbs `ScanDir` of the whole app; `ScanError` diagnostics become problems.
+  - Run hints: `ragwb run <abs>` or `ragwb verbs --dir <abs> <verb>`.
+- **`pkg/server/apps.go`:** the routes from guide §9.7. `withApps` validates `{app}`/`{path...}` (400), maps `store.ErrNotFound` to 404, and answers 503 `apps_disabled` without a store. PUT returns `{saved, check}`. `/healthz` reports `apps`.
+- **`cmd/ragwb`:**
+  - `workbench --apps` (default `$RAGWB_APPS` or `~/.ragwb/apps`; history shares `ragwb.db`).
+  - New `apps.go`: Glazed `apps list|files|history`, plus cobra `apps show [--version]`.
+  - `verbs --app/-a` in `DiscoverVerbsDir`.
+  - `run` resolves `<app>/<file>` via `resolveScript`, and uses `Base`/`Roots(base)` = the script's directory.
+- **Tests:**
+  - `pkg/store`: 5 store tests, including the escaping-symlink write, plus 4 check tests.
+  - `pkg/server/apps_test.go`: 2 tests (save/list/read/version/history/delete; bad input → 400/404/503).
+  - `cmd/ragwb/cmds/apps_test.go`: `DiscoverVerbsDir --app`, `resolveScript`.
+
+### Why
+- Files on disk are what jsverbs and `ragwb run` consume (D7). Keeping history in SQLite means the agent can overwrite freely and nothing is lost.
+- The check runs at save time, so the agent sees a broken `__verb__` or a syntax error in the same tool result, not at the next CLI run.
+
+### What worked
+- `go test ./pkg/store ./pkg/server ./cmd/... -count=1`: all ok. `make lint`: ok.
+- **E2E** (`./dist/ragwb workbench --addr 127.0.0.1:8791 --apps $T/apps --db $T/wb.db`):
+  - `PUT /api/apps/notes/files/lib/corpus.js` → `{"check":{"role":"library","ok":true,…},"saved":{…"version":1…}}`.
+  - `PUT …/search.js` → check `verbs: [{"name":"notes search","source":"search.js#search"}]`, with a run hint.
+  - `PUT …/pipeline.wb.js` (the `pipeline.js` preset) → role workbench, ok.
+  - `RAGWB_APPS=$T/apps ./dist/ragwb verbs --app notes list` → only `notes search` (pipeline.wb.js not scanned).
+  - `ragwb verbs --app notes notes search "rebalance law"` → rank 1 "5. The core's modules › 5.9 The rebalance law", 12.5926.
+  - `ragwb run notes/pipeline.wb.js --files examples/apps/reports/corpus` → report with build ok (11 docs, 462 chunks, ix-text/ix-meta…).
+  - `ragwb apps files notes`: three rows with role and run hint. `apps history notes search.js`: v2 "fix plan builder", v1 "search verb". `apps show notes search.js --version 1` prints v1.
+
+### What didn't work
+- **jsverbs needs `__verb__`:** `TestCheckWorkbenchScript` expected a plain `function hello(name)` to be a verb; jsverbs returned none. `finalizeVerbs` in go-go-goja v0.10.7 `jsverbs/scan.go` only registers functions listed in `file.VerbMeta` (from `__verb__`). The `ragwb verbs` help text said "each top-level function (or __verb__)", which was wrong; I corrected it.
+- **Verb naming:** I expected `notes search`, got `search search`. Without `__package__`, jsverbs names the parent after the file, so I updated the test.
+- **Syntax-error line:** `function bad( {` reported "Line 5:3 Unexpected end of input", because the error is at EOF. The test now uses an error mid-file (`const b = ;` → line 3).
+- **My own e2e script:** I first wrote the plan with an invented API (`rag.plan(...).signals({q: rag.signal.text(q)…}).use(corpus).retrieve(rag.from("text")…)`), which failed: `promise rejected: TypeError: Cannot read property 'text' of undefined or null`. I fixed it to the real idiom from `examples/apps/reports/lib/plans.js` (`rag.plan(id).over(corpus).signals({q:"",k:10}).retrieve("text",{k:20}).limit()`). The second save became v2, which conveniently exercised history.
+- **Two command slips:**
+  - A Python replace in `run.go` matched the identical `runner.NewFactory(...)` line in the `presets` command too (`undefined: path`). Fixed by restoring the second occurrence.
+  - `pkill -f "ragwb workbench --addr 127.0.0.1:8791"` matched the shell running it: exit 144, the same trap as Step 12. The preceding `kill <pid>` had already stopped the server (healthz: "server stopped"). Rule: never use `pkill -f` from the tool shell; kill by pid or use TaskStop.
+
+### What I learned
+- go-go-goja ≥ v0.10.7 jsverbs is explicit-only (`__verb__`), so helper functions in verb files are safe. Workbench scripts are still excluded, because they aren't modules.
+
+### What was tricky to build
+- Telling "changed on disk" apart from "unchanged": compare the disk digest with the latest history digest, and the disk digest with the new source. Only a disk version that differs from both gets its own version.
+
+### What warrants a second pair of eyes
+- No authentication. The server must stay on loopback (the default). Anyone who can reach it can write `.js` files that `ragwb verbs` will later run as trusted code.
+- The `Check` run hints use absolute `--dir` paths, which are right even when `--apps` differs from `$RAGWB_APPS`. `ragwb apps files` prints the shorter `--app` form.
+
+### What should be done in the future
+- The page side (next step): `wb.apps/save/open` in agent scope, a Save button and an Apps menu, agent prompt docs.
+
+### Code review instructions
+- `pkg/store/apps.go` (`Save`), `pkg/store/check.go`, `pkg/server/apps.go`, `cmd/ragwb/cmds/apps.go`, `verbs.go` (`DiscoverVerbsDir`), `run.go` (`resolveScript`).
+- Validate:
+  - `go test ./pkg/store ./pkg/server ./cmd/...`
+  - Manually: `ragwb workbench --apps /tmp/apps`, PUT a file, `RAGWB_APPS=/tmp/apps ragwb verbs --app <app> list`.
+
+### Technical details
+- PUT body `{source, comment}` → `{saved: {app, path, version, sha256, unchanged}, check: {role, ok, problems[{path, line, severity, message}], verbs[{name, source}], run[]}}`.
