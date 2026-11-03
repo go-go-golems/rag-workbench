@@ -1,0 +1,243 @@
+{
+  "access": "public",
+  "created_at": "2026-10-16T20:48:44Z",
+  "downloaded_at": "2026-11-03T02:06:52Z",
+  "files": [
+    {
+      "path": "agent.js",
+      "contentType": "text/javascript",
+      "bytes": 38232,
+      "sha256": "7e6a5d4e0b05fada35dd47adc059ecf1a4bbc731c671a01068f71b24057c3ee6"
+    },
+    {
+      "path": "app.js",
+      "contentType": "text/javascript",
+      "bytes": 71810,
+      "sha256": "b5108de28b4b89e3e823b3f0ed565cf6748d2927f85ebdf28a816b6b86e309e2"
+    },
+    {
+      "path": "corpus.json",
+      "contentType": "application/json",
+      "bytes": 544707,
+      "sha256": "a4bef12fcdf130ad25e9da20532cbcfe709546d26d0559164b38b8f79ba0a02d"
+    },
+    {
+      "path": "gui.js",
+      "contentType": "text/javascript",
+      "bytes": 49485,
+      "sha256": "ccda5ada1656fc75e9a6b4aa230007a249982ad3a1355a2f60e2949c3142094b"
+    },
+    {
+      "path": "index.html",
+      "contentType": "text/html",
+      "bytes": 50531,
+      "sha256": "8a74d63320ef87f3b93156476c50c1ed3458125330936c8d4d913c844b5085aa"
+    },
+    {
+      "path": "kit.js",
+      "contentType": "text/javascript",
+      "bytes": 3308,
+      "sha256": "4cd146bbab85669c8a87c817cc0501e8e5ea9c9469aa3e112afc2eec67ca1daf"
+    },
+    {
+      "path": "presets/agentic.js",
+      "contentType": "text/javascript",
+      "bytes": 1704,
+      "sha256": "33a59e0bfc25d1fc68cc6808383a548df40e5f8435f9bacc2409954bbf649521"
+    },
+    {
+      "path": "presets/answer-first.js",
+      "contentType": "text/javascript",
+      "bytes": 1158,
+      "sha256": "2e4d21fd68ff0d6853e0c294a47ddeb9e03ece5124f6287379fc357a1a621fbd"
+    },
+    {
+      "path": "presets/canvas-map.js",
+      "contentType": "text/javascript",
+      "bytes": 1959,
+      "sha256": "bbe02b57b9864c61c9e3abffe2e4ec5ed8378da63b49bc6c5bf1a88a048c29bd"
+    },
+    {
+      "path": "presets/chunk-sizes.js",
+      "contentType": "text/javascript",
+      "bytes": 1361,
+      "sha256": "9ab15d7aa38f6ac1fd403ff805f3f2ea470f2753c1671f03860f919775a9f29e"
+    },
+    {
+      "path": "presets/code-blocks.js",
+      "contentType": "text/javascript",
+      "bytes": 1544,
+      "sha256": "171a7d80daadb6bda4d0a907ecd3e056a9bd4ed9c46edd820312840fb7753e50"
+    },
+    {
+      "path": "presets/compare-nodes.js",
+      "contentType": "text/javascript",
+      "bytes": 1422,
+      "sha256": "789e7e48161d7111d4cd79bd7e25be067902043edcd48040335cfb67348a4a28"
+    },
+    {
+      "path": "presets/context.js",
+      "contentType": "text/javascript",
+      "bytes": 864,
+      "sha256": "a39a06e799e2ab36d478f390fb516580aea36ab749c1a7e7935f1f32256ca85b"
+    },
+    {
+      "path": "presets/custom-rerank.js",
+      "contentType": "text/javascript",
+      "bytes": 1506,
+      "sha256": "988c8090f91f556e0da5bfb88765eaf87b619c3f050fe0493e96716a0f9d85ad"
+    },
+    {
+      "path": "presets/dashboard.js",
+      "contentType": "text/javascript",
+      "bytes": 2311,
+      "sha256": "2be62d5a619c17f1c9a8c65ffd1be0098d2c5b480f52e1d2789a74ee50468e57"
+    },
+    {
+      "path": "presets/define-components.js",
+      "contentType": "text/javascript",
+      "bytes": 1900,
+      "sha256": "8a257d17e5a0b93eec44bf2d4ea3e033331e159b0213315173de33471fa415d3"
+    },
+    {
+      "path": "presets/doc-browser.js",
+      "contentType": "text/javascript",
+      "bytes": 1630,
+      "sha256": "77eb4ed578d59e0d4c7a9743a34d3708aab6fcbf7bea5fa150015a77acb6b3a6"
+    },
+    {
+      "path": "presets/doc-cards.js",
+      "contentType": "text/javascript",
+      "bytes": 2044,
+      "sha256": "405c5a673cdb396b147347ad127567be0c81a342bf370ed3bc741ac8aecbfbcb"
+    },
+    {
+      "path": "presets/facets.js",
+      "contentType": "text/javascript",
+      "bytes": 1071,
+      "sha256": "20dcfd4a77b971de46e89a2e82ba2bb4cdd647ef9773dd78e62c285e635b96de"
+    },
+    {
+      "path": "presets/fields.js",
+      "contentType": "text/javascript",
+      "bytes": 1239,
+      "sha256": "ce9c886d3477f128abad4f17f92fc831417fc962c75658b4e07a2cbd9f5542b1"
+    },
+    {
+      "path": "presets/fusion.js",
+      "contentType": "text/javascript",
+      "bytes": 1405,
+      "sha256": "68c4f0795ccc10fca5d8ee66cfe70be5af1dfbd9f318c206092c1295bfeee712"
+    },
+    {
+      "path": "presets/graph.js",
+      "contentType": "text/javascript",
+      "bytes": 1219,
+      "sha256": "f4aa64d43c6640e755fe57bd0c7772b962f7210c840d32418abe3eff85ce47a8"
+    },
+    {
+      "path": "presets/hyde.js",
+      "contentType": "text/javascript",
+      "bytes": 1553,
+      "sha256": "68e7aefaa82fee89c66bc541826a1e19fa6bdbb91435890fe6cf3e7a617d45cc"
+    },
+    {
+      "path": "presets/index.json",
+      "contentType": "application/json",
+      "bytes": 6290,
+      "sha256": "3eba3bb8d5131dba76d17b4b199e952529ab501316f4e879d467e8045f214063"
+    },
+    {
+      "path": "presets/judged.js",
+      "contentType": "text/javascript",
+      "bytes": 1538,
+      "sha256": "e866faa4276cdc25f02bf039d2a3bbc63587b2e5ff678480461dec23fbfb3a09"
+    },
+    {
+      "path": "presets/llm-rerank.js",
+      "contentType": "text/javascript",
+      "bytes": 906,
+      "sha256": "9b93ec75a965ed8802cd0c7ddb05541811bf0a12e1a75a7b086ca97261722c0b"
+    },
+    {
+      "path": "presets/minimal.js",
+      "contentType": "text/javascript",
+      "bytes": 930,
+      "sha256": "63d720ebd463f885df0c0389752fff2ea29092f21a50ba97076e25d459b43629"
+    },
+    {
+      "path": "presets/outline.js",
+      "contentType": "text/javascript",
+      "bytes": 1055,
+      "sha256": "c9552f5c29d41d3dfe9930723fe3d0caece703616c9c8099937447a9429b0e65"
+    },
+    {
+      "path": "presets/per-doc.js",
+      "contentType": "text/javascript",
+      "bytes": 1266,
+      "sha256": "57fdb2bbc1a0cb9f025c1af2b37afb445112344f689f3dba7b8732c7f1079a51"
+    },
+    {
+      "path": "presets/playground.js",
+      "contentType": "text/javascript",
+      "bytes": 2274,
+      "sha256": "90542ed1528410c9504ae90d2e825c8ed05da266a7d0ea7e4beba65d43f62ddb"
+    },
+    {
+      "path": "presets/reports.js",
+      "contentType": "text/javascript",
+      "bytes": 5231,
+      "sha256": "29e882c4964080e08fccf591f9908d018eff71148fb49199b4a24cab8705ba56"
+    },
+    {
+      "path": "presets/sweep.js",
+      "contentType": "text/javascript",
+      "bytes": 1932,
+      "sha256": "8948a6bbc4b8fd8d5104bcd4df29f10cad40a085e72c6a864e98bca1210f8a2e"
+    },
+    {
+      "path": "presets/synonyms.js",
+      "contentType": "text/javascript",
+      "bytes": 1751,
+      "sha256": "29244053209f52e72bba5f91583f8fff18e1e5c5241121982fcd7bc07d110394"
+    },
+    {
+      "path": "presets/synthetic-evals.js",
+      "contentType": "text/javascript",
+      "bytes": 2018,
+      "sha256": "973e4f85a8cf7ea162abe2db16faf952a10f2d26ffe860e207ece85dae8ac547"
+    },
+    {
+      "path": "presets/table-rows.js",
+      "contentType": "text/javascript",
+      "bytes": 1257,
+      "sha256": "1347a6af9589a8e75677c5d3627e2350a8731936f2c768771605728c26f6aa8d"
+    },
+    {
+      "path": "presets/two-answers.js",
+      "contentType": "text/javascript",
+      "bytes": 1567,
+      "sha256": "a5337b37c81206d40f771a37bc21ef01de1afc39833504f446795354cdc5a186"
+    },
+    {
+      "path": "rag.js",
+      "contentType": "text/javascript",
+      "bytes": 113566,
+      "sha256": "68ee1aef09ca578dcb4e37b498621547372836fd67c65d9c45978195a52df20c"
+    }
+  ],
+  "history": [
+    "1792185211-ef50",
+    "1792183725-8794"
+  ],
+  "id": "e91acd68-e7cc-45ed-aef9-a09919f8b7f3",
+  "live": "1792185211-ef50",
+  "role": "owner",
+  "runtimeStripped": true,
+  "title": "RAG Workbench",
+  "typeInstance": false,
+  "typeTitle": "",
+  "updated_at": "2026-10-16T23:12:06Z",
+  "url": "https://claude.ai/artifact/VnWwS6PAuM4UD9Q81rCfGn",
+  "version": "1792185211-ef50"
+}

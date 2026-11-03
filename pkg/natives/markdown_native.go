@@ -1,0 +1,303 @@
+package natives
+
+import (
+	"fmt"
+
+	"github.com/dop251/goja"
+)
+
+// Markdown installs Go implementations of parse.markdown and chunk.sections
+// under their prototype type names, so existing scripts get them unchanged.
+// Outputs equal the JS implementations (see markdown_parity_test.go) plus
+// `range` objects on blocks and chunks.
+type Markdown struct{}
+
+func (Markdown) Name() string { return "markdown" }
+
+const goDocKey = "__go"
+
+const markdownJS = `(function (rag, h) {
+  // id: the op layer names inserted nodes def.id(p) || family; keep the built-ins' family ids.
+  rag.define('parse.markdown', {
+    id: () => 'parse', phase: 'build', in: ['files'], out: 'docs', describe: () => 'frontmatter · headings · fences · tables (Go)',
+    all: ([files], ctx, p) => h.parse(files || [], p || {}),
+  });
+  rag.define('chunk.sections', {
+    id: () => 'chunk', phase: 'build', in: ['docs'], out: 'chunks',
+    describe: p => 'depth ' + (p.depth ?? 3) + ' · ≤' + (p.maxTokens ?? 450) + ' tok (Go)',
+    all: ([docs], ctx, p) => h.chunk(docs || [], p || {}),
+  });
+})`
+
+func (m Markdown) Install(vm *goja.Runtime, rag *goja.Object) error {
+	h := vm.NewObject()
+	_ = h.Set("parse", func(call goja.FunctionCall) goja.Value {
+		files := call.Argument(0).ToObject(vm)
+		p := optObject(vm, call.Argument(1))
+		frontmatter := true
+		if v := p.Get("frontmatter"); v != nil && !goja.IsUndefined(v) && !v.ToBoolean() {
+			frontmatter = false
+		}
+		n := int(files.Get("length").ToInteger())
+		docs := make([]*Doc, 0, n)
+		for i := 0; i < n; i++ {
+			f := files.Get(fmt.Sprint(i)).ToObject(vm)
+			name, text := f.Get("name"), f.Get("text")
+			if name == nil || text == nil || goja.IsUndefined(text) {
+				panic(vm.NewTypeError("parse.markdown: file %d has no name/text", i))
+			}
+			docs = append(docs, ParseMarkdown(name.String(), text.String(), frontmatter))
+		}
+		return docsArray(vm, docs)
+	})
+	_ = h.Set("chunk", func(call goja.FunctionCall) goja.Value {
+		docs := call.Argument(0).ToObject(vm)
+		p := chunkParams(vm, optObject(vm, call.Argument(1)))
+		n := int(docs.Get("length").ToInteger())
+		all := []Chunk{}
+		for i := 0; i < n; i++ {
+			d := docs.Get(fmt.Sprint(i)).ToObject(vm)
+			all = append(all, ChunkSections(docFromJS(vm, d), p)...)
+		}
+		AssignIDs(all)
+		return chunksArray(vm, all)
+	})
+	v, err := vm.RunString(markdownJS)
+	if err != nil {
+		return err
+	}
+	fn, ok := goja.AssertFunction(v)
+	if !ok {
+		return fmt.Errorf("markdown installer is not a function")
+	}
+	_, err = fn(goja.Undefined(), rag, h)
+	return err
+}
+
+func optObject(vm *goja.Runtime, v goja.Value) *goja.Object {
+	if v == nil || goja.IsUndefined(v) || goja.IsNull(v) {
+		return vm.NewObject()
+	}
+	return v.ToObject(vm)
+}
+
+func present(v goja.Value) bool { return v != nil && !goja.IsUndefined(v) && !goja.IsNull(v) }
+
+func chunkParams(vm *goja.Runtime, p *goja.Object) ChunkParams {
+	cp := DefaultChunkParams()
+	if v := p.Get("depth"); present(v) { // p.depth ?? 3
+		cp.Depth = int(v.ToInteger())
+	}
+	if v := p.Get("maxTokens"); present(v) {
+		cp.MaxTokens = int(v.ToInteger())
+	}
+	if v := p.Get("minTokens"); present(v) {
+		cp.MinTokens = int(v.ToInteger())
+	}
+	if v := p.Get("dropMermaid"); v != nil && !goja.IsUndefined(v) { // p.dropMermaid !== false
+		cp.DropMermaid = !(v.ExportType() != nil && v.Export() == false)
+	}
+	if v := p.Get("prefixHeading"); v != nil {
+		cp.PrefixHeading = v.ToBoolean()
+	}
+	if v := p.Get("overlap"); present(v) && v.ToBoolean() {
+		cp.Overlap = int(v.ToInteger())
+	}
+	return cp
+}
+
+// ── Go → JS (plain JS objects, key order as in rag.js)
+
+func strArray(vm *goja.Runtime, xs []string) *goja.Object {
+	vals := make([]any, len(xs))
+	for i, x := range xs {
+		vals[i] = x
+	}
+	return vm.NewArray(vals...)
+}
+
+func metaToJS(vm *goja.Runtime, m Meta) *goja.Object {
+	o := vm.NewObject()
+	for _, k := range m.Keys {
+		_ = o.Set(k, scalarToJS(vm, m.Values[k]))
+	}
+	return o
+}
+
+func scalarToJS(vm *goja.Runtime, v any) goja.Value {
+	if arr, ok := v.([]any); ok {
+		vals := make([]any, len(arr))
+		for i, x := range arr {
+			vals[i] = scalarToJS(vm, x)
+		}
+		return vm.NewArray(vals...)
+	}
+	return vm.ToValue(v)
+}
+
+func rangeToJS(vm *goja.Runtime, r Range) *goja.Object {
+	o := vm.NewObject()
+	_ = o.Set("byteStart", r.ByteStart)
+	_ = o.Set("byteEnd", r.ByteEnd)
+	_ = o.Set("lineStart", r.LineStart)
+	_ = o.Set("lineEnd", r.LineEnd)
+	return o
+}
+
+func blockToJS(vm *goja.Runtime, b *Block) *goja.Object {
+	o := vm.NewObject()
+	_ = o.Set("kind", b.Kind)
+	switch b.Kind {
+	case "fence":
+		_ = o.Set("lang", b.Lang)
+	case "table":
+		_ = o.Set("header", strArray(vm, b.Header))
+		rows := make([]any, len(b.Rows))
+		for i, r := range b.Rows {
+			rows[i] = strArray(vm, r)
+		}
+		_ = o.Set("rows", vm.NewArray(rows...))
+	case "callout":
+		_ = o.Set("variant", b.Variant)
+	}
+	_ = o.Set("text", b.Text)
+	_ = o.Set("range", rangeToJS(vm, b.Range))
+	return o
+}
+
+func docToJS(vm *goja.Runtime, d *Doc) *goja.Object {
+	o := vm.NewObject()
+	_ = o.Set("id", d.ID)
+	_ = o.Set("name", d.Name)
+	_ = o.Set("title", d.Title)
+	_ = o.Set("meta", metaToJS(vm, d.Meta))
+	if d.H1 != nil {
+		_ = o.Set("h1", *d.H1)
+	} else {
+		_ = o.Set("h1", goja.Null())
+	}
+	secs := make([]any, len(d.Sections))
+	for i := range d.Sections {
+		s := &d.Sections[i]
+		so := vm.NewObject()
+		_ = so.Set("level", s.Level)
+		_ = so.Set("title", s.Title)
+		_ = so.Set("path", strArray(vm, s.Path))
+		blocks := make([]any, len(s.Blocks))
+		for j := range s.Blocks {
+			blocks[j] = blockToJS(vm, &s.Blocks[j])
+		}
+		_ = so.Set("blocks", vm.NewArray(blocks...))
+		_ = so.Set("id", s.ID)
+		_ = so.Set("text", s.Text)
+		secs[i] = so
+	}
+	_ = o.Set("sections", vm.NewArray(secs...))
+	_ = o.Set("links", strArray(vm, d.Links))
+	// Hidden fast path for chunk.sections: non-enumerable, so stable(), JSON and {...doc} ignore it.
+	_ = o.DefineDataProperty(goDocKey, vm.ToValue(d), goja.FLAG_FALSE, goja.FLAG_FALSE, goja.FLAG_FALSE)
+	return o
+}
+
+func chunkToJS(vm *goja.Runtime, c *Chunk) *goja.Object {
+	o := vm.NewObject()
+	_ = o.Set("id", c.ID)
+	_ = o.Set("docId", c.DocID)
+	_ = o.Set("title", c.Title)
+	_ = o.Set("headingPath", strArray(vm, c.HeadingPath))
+	_ = o.Set("kind", c.Kind)
+	_ = o.Set("text", c.Text)
+	_ = o.Set("meta", metaToJS(vm, c.Meta))
+	_ = o.Set("callout", c.Callout)
+	_ = o.Set("hasCode", c.HasCode)
+	_ = o.Set("hasTable", c.HasTable)
+	_ = o.Set("tokens", c.Tokens)
+	_ = o.Set("part", c.Part)
+	_ = o.Set("parts", c.Parts)
+	_ = o.Set("ord", c.Ord)
+	_ = o.Set("range", rangeToJS(vm, c.Range))
+	return o
+}
+
+// ── JS → Go (docs made by the JS parser, custom components or copies)
+
+func docFromJS(vm *goja.Runtime, o *goja.Object) *Doc {
+	if v := o.Get(goDocKey); v != nil {
+		if d, ok := v.Export().(*Doc); ok {
+			return d
+		}
+	}
+	d := &Doc{ID: str(o.Get("id")), Name: str(o.Get("name")), Title: str(o.Get("title")), Meta: metaFromJS(vm, o.Get("meta"))}
+	if secs := o.Get("sections"); present(secs) {
+		so := secs.ToObject(vm)
+		n := int(so.Get("length").ToInteger())
+		for i := 0; i < n; i++ {
+			s := so.Get(fmt.Sprint(i)).ToObject(vm)
+			sec := Section{Level: int(s.Get("level").ToInteger()), Title: str(s.Get("title")), Path: strsFromJS(vm, s.Get("path"))}
+			if bs := s.Get("blocks"); present(bs) {
+				bo := bs.ToObject(vm)
+				m := int(bo.Get("length").ToInteger())
+				for j := 0; j < m; j++ {
+					b := bo.Get(fmt.Sprint(j)).ToObject(vm)
+					sec.Blocks = append(sec.Blocks, Block{Kind: str(b.Get("kind")), Lang: str(b.Get("lang")), Variant: str(b.Get("variant")), Text: str(b.Get("text")), Range: rangeFromJS(vm, b.Get("range"))})
+				}
+			}
+			d.Sections = append(d.Sections, sec)
+		}
+	}
+	return d
+}
+
+func str(v goja.Value) string {
+	if !present(v) {
+		return ""
+	}
+	return v.String()
+}
+
+func strsFromJS(vm *goja.Runtime, v goja.Value) []string {
+	if !present(v) {
+		return []string{}
+	}
+	o := v.ToObject(vm)
+	n := int(o.Get("length").ToInteger())
+	out := make([]string, n)
+	for i := range out {
+		out[i] = str(o.Get(fmt.Sprint(i)))
+	}
+	return out
+}
+
+func rangeFromJS(vm *goja.Runtime, v goja.Value) Range {
+	if !present(v) {
+		return Range{}
+	}
+	o := v.ToObject(vm)
+	return Range{int(o.Get("byteStart").ToInteger()), int(o.Get("byteEnd").ToInteger()), int(o.Get("lineStart").ToInteger()), int(o.Get("lineEnd").ToInteger())}
+}
+
+func metaFromJS(vm *goja.Runtime, v goja.Value) Meta {
+	m := Meta{Values: map[string]any{}}
+	if !present(v) {
+		return m
+	}
+	o := v.ToObject(vm)
+	for _, k := range o.Keys() {
+		m.set(k, scalarFromJS(o.Get(k).Export()))
+	}
+	return m
+}
+
+func scalarFromJS(v any) any {
+	switch x := v.(type) {
+	case int64:
+		return float64(x)
+	case []any:
+		out := make([]any, len(x))
+		for i, e := range x {
+			out[i] = scalarFromJS(e)
+		}
+		return out
+	}
+	return v
+}

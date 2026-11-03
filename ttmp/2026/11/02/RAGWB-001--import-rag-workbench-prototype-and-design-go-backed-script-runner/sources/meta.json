@@ -1,0 +1,355 @@
+{
+  "artifacts": [
+    {
+      "bytes": 24839,
+      "file": "artifacts/rag-workbench-examples.js",
+      "path": "/home/claude/rag-workbench-examples.js",
+      "source": "file-tool"
+    },
+    {
+      "bytes": 45663,
+      "file": "artifacts/index.html",
+      "path": "/home/claude/ragwb/index.html",
+      "source": "file-tool"
+    }
+  ],
+  "created_at": "2026-10-16T18:46:31.028377Z",
+  "model": "claude-opus-5-5",
+  "name": "RAG workbench with fluent builder API",
+  "project_uuid": null,
+  "published": [
+    {
+      "id": "e91acd68-e7cc-45ed-aef9-a09919f8b7f3",
+      "url": "https://claude.ai/artifact/VnWwS6PAuM4UD9Q81rCfGn",
+      "source_path": "/home/claude/ragwb/index.html",
+      "version": 2,
+      "version_id": "1792185211-ef50",
+      "version_ids": [
+        "1792183725-8794",
+        "1792185211-ef50"
+      ],
+      "dir": "published/e91acd68-e7cc-45ed-aef9-a09919f8b7f3",
+      "status": "downloaded"
+    }
+  ],
+  "sent_files": [
+    {
+      "file_uuid": "9a184855-b5ae-407c-9ee6-982bd37a7107",
+      "name": "rag-workbench-examples.js",
+      "path": "/home/claude/rag-workbench-examples.js",
+      "bytes": 25106,
+      "file": "files/rag-workbench-examples.js",
+      "status": "downloaded"
+    },
+    {
+      "file_uuid": "31d82663-f471-524a-99b8-5fae8a18786d",
+      "name": "rag-workbench-examples.js",
+      "bytes": 24839,
+      "file": "files/rag-workbench-examples-1.js",
+      "status": "downloaded"
+    },
+    {
+      "file_uuid": "26385e55-0bb8-5ede-a722-d385a15f7361",
+      "name": "rag.js",
+      "bytes": 110813,
+      "file": "files/rag.js",
+      "status": "downloaded"
+    },
+    {
+      "file_uuid": "782321b5-20da-561d-9f32-a35d1b40037f",
+      "name": "gui.js",
+      "bytes": 48688,
+      "file": "files/gui.js",
+      "status": "downloaded"
+    },
+    {
+      "file_uuid": "a1e648b2-b535-5308-a64a-291fcd31f5a6",
+      "name": "agent.js",
+      "bytes": 36447,
+      "file": "files/agent.js",
+      "status": "downloaded"
+    },
+    {
+      "file_uuid": "72c20979-1f6e-5ad9-9d8c-5dcd5e806ee9",
+      "name": "index.html",
+      "bytes": 45663,
+      "file": "files/index.html",
+      "status": "downloaded"
+    },
+    {
+      "file_uuid": "1358bc82-847c-5977-9477-3ba10ba48718",
+      "name": "pipeline.js",
+      "bytes": 5076,
+      "file": "files/pipeline.js",
+      "status": "downloaded"
+    },
+    {
+      "file_uuid": "cafe5e05-39ab-56c1-b255-5d351e08ec66",
+      "name": "app.js",
+      "bytes": 63851,
+      "file": "files/app.js",
+      "status": "downloaded"
+    },
+    {
+      "file_uuid": "0b85b04a-42da-5336-a46a-b46fff4e015b",
+      "name": "kit.js",
+      "bytes": 3308,
+      "file": "files/kit.js",
+      "status": "downloaded"
+    },
+    {
+      "file_uuid": "75a7c761-fec1-4334-b349-0ffdf6ffe4fd",
+      "name": "rag-workbench.zip",
+      "path": "/tmp/claude-0/-home-claude/e2c66c76-6f37-5ff2-b5a3-1b8e27324b33/scratchpad/zip/rag-workbench.zip",
+      "bytes": 5855145,
+      "file": "files/rag-workbench.zip",
+      "status": "downloaded"
+    },
+    {
+      "file_uuid": "8899547e-ff02-410d-bedc-62d335a699c9",
+      "name": "rag-workbench-full.zip",
+      "path": "/tmp/claude-0/-home-claude/e2c66c76-6f37-5ff2-b5a3-1b8e27324b33/scratchpad/zip2/rag-workbench-full.zip",
+      "bytes": 14731871,
+      "file": "files/rag-workbench-full.zip",
+      "status": "downloaded"
+    },
+    {
+      "file_uuid": "80a94c03-a7aa-4466-a8c6-42740bf162fa",
+      "name": "Search-You-Can-See-Into.pdf",
+      "path": "/tmp/claude-0/-home-claude/e2c66c76-6f37-5ff2-b5a3-1b8e27324b33/scratchpad/pdf/Search-You-Can-See-Into.pdf",
+      "bytes": 4200862,
+      "file": "files/Search-You-Can-See-Into.pdf",
+      "status": "downloaded"
+    }
+  ],
+  "updated_at": "2026-10-27T05:15:03.128456Z",
+  "uuid": "b9cbc13e-53a9-47a0-bcc3-96c5102e2490",
+  "warnings": null,
+  "workspace": [
+    {
+      "bytes": 24839,
+      "file": "workspace/home/claude/rag-workbench-examples.js",
+      "path": "/home/claude/rag-workbench-examples.js"
+    },
+    {
+      "bytes": 110813,
+      "file": "workspace/home/claude/ragwb/rag.js",
+      "path": "/home/claude/ragwb/rag.js"
+    },
+    {
+      "bytes": 9905,
+      "file": "workspace/tmp/claude-0/-home-claude/e2c66c76-6f37-5ff2-b5a3-1b8e27324b33/scratchpad/t/test1.js",
+      "path": "/tmp/claude-0/-home-claude/e2c66c76-6f37-5ff2-b5a3-1b8e27324b33/scratchpad/t/test1.js"
+    },
+    {
+      "bytes": 1986,
+      "file": "workspace/tmp/claude-0/-home-claude/e2c66c76-6f37-5ff2-b5a3-1b8e27324b33/scratchpad/t/t2.js",
+      "path": "/tmp/claude-0/-home-claude/e2c66c76-6f37-5ff2-b5a3-1b8e27324b33/scratchpad/t/t2.js"
+    },
+    {
+      "bytes": 48688,
+      "file": "workspace/home/claude/ragwb/gui.js",
+      "path": "/home/claude/ragwb/gui.js"
+    },
+    {
+      "bytes": 36447,
+      "file": "workspace/home/claude/ragwb/agent.js",
+      "path": "/home/claude/ragwb/agent.js"
+    },
+    {
+      "bytes": 45663,
+      "file": "workspace/home/claude/ragwb/index.html",
+      "path": "/home/claude/ragwb/index.html"
+    },
+    {
+      "bytes": 5076,
+      "file": "workspace/home/claude/ragwb/pipeline.js",
+      "path": "/home/claude/ragwb/pipeline.js"
+    },
+    {
+      "bytes": 63851,
+      "file": "workspace/home/claude/ragwb/app.js",
+      "path": "/home/claude/ragwb/app.js"
+    },
+    {
+      "bytes": 4683,
+      "file": "workspace/tmp/claude-0/-home-claude/e2c66c76-6f37-5ff2-b5a3-1b8e27324b33/scratchpad/pw/mock.js",
+      "path": "/tmp/claude-0/-home-claude/e2c66c76-6f37-5ff2-b5a3-1b8e27324b33/scratchpad/pw/mock.js"
+    },
+    {
+      "bytes": 7314,
+      "file": "workspace/relative/$SP/run.py",
+      "path": "$SP/run.py"
+    },
+    {
+      "bytes": 930,
+      "file": "workspace/relative/minimal.js",
+      "path": "minimal.js"
+    },
+    {
+      "bytes": 1219,
+      "file": "workspace/relative/graph.js",
+      "path": "graph.js"
+    },
+    {
+      "bytes": 1361,
+      "file": "workspace/relative/chunk-sizes.js",
+      "path": "chunk-sizes.js"
+    },
+    {
+      "bytes": 1257,
+      "file": "workspace/relative/table-rows.js",
+      "path": "table-rows.js"
+    },
+    {
+      "bytes": 1544,
+      "file": "workspace/relative/code-blocks.js",
+      "path": "code-blocks.js"
+    },
+    {
+      "bytes": 1055,
+      "file": "workspace/relative/outline.js",
+      "path": "outline.js"
+    },
+    {
+      "bytes": 1266,
+      "file": "workspace/relative/per-doc.js",
+      "path": "per-doc.js"
+    },
+    {
+      "bytes": 1239,
+      "file": "workspace/relative/fields.js",
+      "path": "fields.js"
+    },
+    {
+      "bytes": 1405,
+      "file": "workspace/relative/fusion.js",
+      "path": "fusion.js"
+    },
+    {
+      "bytes": 1506,
+      "file": "workspace/relative/custom-rerank.js",
+      "path": "custom-rerank.js"
+    },
+    {
+      "bytes": 1900,
+      "file": "workspace/relative/define-components.js",
+      "path": "define-components.js"
+    },
+    {
+      "bytes": 864,
+      "file": "workspace/relative/context.js",
+      "path": "context.js"
+    },
+    {
+      "bytes": 1751,
+      "file": "workspace/relative/synonyms.js",
+      "path": "synonyms.js"
+    },
+    {
+      "bytes": 906,
+      "file": "workspace/relative/llm-rerank.js",
+      "path": "llm-rerank.js"
+    },
+    {
+      "bytes": 1553,
+      "file": "workspace/relative/hyde.js",
+      "path": "hyde.js"
+    },
+    {
+      "bytes": 2044,
+      "file": "workspace/relative/doc-cards.js",
+      "path": "doc-cards.js"
+    },
+    {
+      "bytes": 1704,
+      "file": "workspace/relative/agentic.js",
+      "path": "agentic.js"
+    },
+    {
+      "bytes": 1567,
+      "file": "workspace/relative/two-answers.js",
+      "path": "two-answers.js"
+    },
+    {
+      "bytes": 1538,
+      "file": "workspace/relative/judged.js",
+      "path": "judged.js"
+    },
+    {
+      "bytes": 1097,
+      "file": "workspace/relative/facets.js",
+      "path": "facets.js"
+    },
+    {
+      "bytes": 1158,
+      "file": "workspace/relative/answer-first.js",
+      "path": "answer-first.js"
+    },
+    {
+      "bytes": 1630,
+      "file": "workspace/relative/doc-browser.js",
+      "path": "doc-browser.js"
+    },
+    {
+      "bytes": 1422,
+      "file": "workspace/relative/compare-nodes.js",
+      "path": "compare-nodes.js"
+    },
+    {
+      "bytes": 2274,
+      "file": "workspace/relative/playground.js",
+      "path": "playground.js"
+    },
+    {
+      "bytes": 1959,
+      "file": "workspace/relative/canvas-map.js",
+      "path": "canvas-map.js"
+    },
+    {
+      "bytes": 2311,
+      "file": "workspace/relative/dashboard.js",
+      "path": "dashboard.js"
+    },
+    {
+      "bytes": 2018,
+      "file": "workspace/relative/synthetic-evals.js",
+      "path": "synthetic-evals.js"
+    },
+    {
+      "bytes": 1932,
+      "file": "workspace/relative/sweep.js",
+      "path": "sweep.js"
+    },
+    {
+      "bytes": 3308,
+      "file": "workspace/home/claude/ragwb/kit.js",
+      "path": "/home/claude/ragwb/kit.js"
+    },
+    {
+      "bytes": 3557,
+      "file": "workspace/tmp/claude-0/-home-claude/e2c66c76-6f37-5ff2-b5a3-1b8e27324b33/scratchpad/t/presets.js",
+      "path": "/tmp/claude-0/-home-claude/e2c66c76-6f37-5ff2-b5a3-1b8e27324b33/scratchpad/t/presets.js"
+    },
+    {
+      "bytes": 5841,
+      "file": "workspace/relative/$SP/run2.py",
+      "path": "$SP/run2.py"
+    },
+    {
+      "bytes": 24839,
+      "file": "workspace/relative/$OUT/api-examples",
+      "path": "$OUT/api-examples/"
+    },
+    {
+      "bytes": 1115,
+      "file": "workspace/relative/$OUT/README.md",
+      "path": "$OUT/README.md"
+    },
+    {
+      "bytes": 1157,
+      "file": "workspace/relative/$R/README.md",
+      "path": "$R/README.md"
+    }
+  ]
+}
