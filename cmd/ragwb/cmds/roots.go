@@ -33,6 +33,7 @@ func AddGlobalFlags(root *cobra.Command) {
 	f.IntVar(&maxRounds, "llm-max-rounds", llm.DefaultMaxRounds, "Most model rounds per sample() call with tools (the last is forced to answer)")
 	f.StringVar(&embedName, "embed", "none", "Embeddings/rerank backend for index.vector and rerank.model: none, lunaroute (cache: ~/.ragwb/cache/embeddings.db)")
 	f.BoolVar(&buildCalls, "build-calls", false, "Let LLM-costing build nodes (enrich.llm, doc cards) run instead of deferring them")
+	addStoreFlags(f)
 }
 
 // LLM returns the backend selected by --llm (nil for "none").

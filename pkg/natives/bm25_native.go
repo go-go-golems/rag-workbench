@@ -21,6 +21,16 @@ const bm25JS = `(function (rag, h) {
   const getPath = (obj, path) => { if (!path) return obj; let cur = obj; for (const k of String(path).split('.')) { if (cur == null) return undefined; cur = cur[k]; } return cur; };
   const fieldText = (c, f) => { let v = getPath(c, f); if (Array.isArray(v)) v = v.join(' '); if (v == null || v === '') return null; return typeof v === 'string' ? v : JSON.stringify(v); };
   const synList = s => (s ? Object.entries(s).map(([k, v]) => [k, [].concat(v == null ? [] : v).map(String)]) : null);
+  const wrap = (ix, fields) => {
+    const o = {
+      kind: 'bm25', N: ix.n, fields,
+      search: (q, k = 20, o = {}) => ix.search(String(q), Number(k), synList(o.synonyms), o.only ? [...o.only] : null),
+      searchIn: (docId, q, k = 3, o = {}) => ix.searchIn(String(docId), String(q), Number(k), synList(o.synonyms)),
+      toJSON: () => ({ kind: 'bm25', chunks: ix.n, terms: ix.terms, avgLen: +ix.avg.toFixed(1), fields }),
+    };
+    Object.defineProperty(o, '__ix', { value: ix }); // not enumerable: invisible to JSON and the inspector
+    return o;
+  };
   rag.define('index.bm25', {
     id: () => 'index', phase: 'build', in: ['chunks'], out: 'index',
     describe: p => Object.entries(p.fields || DEFAULT_FIELDS).map(([k, v]) => k + '×' + v).join(' ') + ' (Go)',
@@ -31,13 +41,10 @@ const bm25JS = `(function (rag, h) {
       const texts = chunks.map(c => names.map(f => fieldText(c, f)));
       const ix = h.build(chunks.map(c => c.id), chunks.map(c => c.docId), texts,
         names.map(f => [f, Number(fields[f])]), p.k1 ?? 1.2, p.b ?? 0.75, p.stem !== false);
-      return {
-        kind: 'bm25', N: ix.n, fields,
-        search: (q, k = 20, o = {}) => ix.search(String(q), Number(k), synList(o.synonyms), o.only ? [...o.only] : null),
-        searchIn: (docId, q, k = 3, o = {}) => ix.searchIn(String(docId), String(q), Number(k), synList(o.synonyms)),
-        toJSON: () => ({ kind: 'bm25', chunks: ix.n, terms: ix.terms, avgLen: +ix.avg.toFixed(1), fields }),
-      };
+      return wrap(ix, fields);
     },
+    // artifact store: the Go index travels as its handle (codec "bm25")
+    persist: { save: v => v.__ix, load: (ix, p) => wrap(ix, p.fields || DEFAULT_FIELDS) },
   });
 })`
 
@@ -133,8 +140,12 @@ func hitsToJS(vm *goja.Runtime, hits []Hit) goja.Value {
 	return vm.NewArray(out...)
 }
 
+// goHandleKey holds the Go value behind a JS handle (non-enumerable), for artifact codecs.
+const goHandleKey = goDocKey
+
 func bm25Object(vm *goja.Runtime, ix *Bm25) *goja.Object {
 	o := vm.NewObject()
+	_ = o.DefineDataProperty(goHandleKey, vm.ToValue(ix), goja.FLAG_FALSE, goja.FLAG_FALSE, goja.FLAG_FALSE)
 	_ = o.Set("n", ix.N)
 	_ = o.Set("terms", ix.terms)
 	_ = o.Set("avg", ix.Avg)

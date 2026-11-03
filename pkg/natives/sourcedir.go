@@ -278,6 +278,10 @@ const sourceDirJS = `(function (rag, h) {
       if (r.skipped.length) ctx.log('skipped ' + r.skipped.length + ' file(s): ' + r.skipped.slice(0, 5).map(s => s.name + ' (' + s.reason + ')').join('; '));
       return r.files;
     },
+    // artifact store: nothing is written; a stored marker makes the files a lazy
+    // re-read, valid because the digest covers every file's path, size and mtime.
+    // A run whose downstream nodes are all stored never reads the source.
+    persist: { save: () => 0, load: (_, p) => h.walk(p).files },
   });
 })`
 

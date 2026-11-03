@@ -540,6 +540,11 @@
   build('index.terms', {
     in: ['chunks'], out: 'index', args: optArgs, describe: p => (p.keys || ['type', 'tags', 'status']).join(' · '),
     all: ([chunks], ctx, p) => new TermsIndex(chunks, p),
+    // artifact store: the value → key → ids map (byDoc, which nothing reads, comes back empty)
+    persist: {
+      save: ix => ({ keys: ix.keys, N: ix.N, map: [...ix.map].map(([v, m]) => [v, [...m]]) }),
+      load: d => Object.assign(Object.create(TermsIndex.prototype), { kind: 'terms', keys: d.keys, map: new Map(d.map.map(([v, m]) => [v, new Map(m)])), byDoc: new Map(), N: d.N }),
+    },
   });
   build('synonyms', {
     in: ['docs'], out: 'value', args: t => ({ table: isBake(t) ? t : t || {} }), describe: () => 'query expansion table',
@@ -1237,6 +1242,23 @@
   }
 
   // ────────────────────────────────────────────────────────────── engine
+  // Persisted build outputs (env.artifacts, the Go artifact store): a node whose
+  // digest is stored becomes a Lazy memo entry, loaded only when something reads
+  // it (a node that must recompute, or artifacts()). What a node persists comes
+  // from def.persist ({ save(v) → data, load(data, p) → v } or false); docs
+  // and chunks default to JSON (sources are cheaper to re-read than to load).
+  // The store key adds the component's source
+  // text, so editing a rag.define'd component never reuses its old outputs.
+  class Lazy {
+    constructor(load) { this.load = load; this.done = false; this.v = undefined; }
+    force() { if (!this.done) { this.v = this.load(); this.done = true; this.load = null; } return this.v; }
+  }
+  class Outputs extends Map {
+    get(k) { const v = super.get(k); return v instanceof Lazy ? v.force() : v; }
+  }
+  const JSON_PERSIST = { save: v => v, load: x => x };
+  const persistOf = def => (!def || def.persist === false ? null : def.persist || (['docs', 'chunks'].includes(def.out) ? JSON_PERSIST : null));
+  const storeKey = (d, def) => hash([d, def.src || '']);
   class Engine {
     constructor(env = {}) {
       this.env = env;
@@ -1300,7 +1322,7 @@
       const t0 = now();
       const dg = this.digests(ir);
       const report = { ok: true, ms: 0, nodes: {}, errors: [] };
-      const outputs = new Map();
+      const outputs = new Outputs();
       const counter = { calls: 0 };
       for (const n of ir.nodes) {
         if (n.phase !== 'build') continue;
@@ -1309,9 +1331,18 @@
         report.nodes[n.id] = st;
         const allowCalls = opts.calls ?? (this.env.buildCalls !== 'explicit');
         const costly = costsCalls(n);
+        const store = this.env.artifacts, codec = store ? persistOf(REG.get(n.t)) : null;
+        if (codec && !this.memo.has(d) && !opts.force) {
+          const sk = storeKey(d, REG.get(n.t)), hit = store.has(sk);
+          if (hit) {
+            const lz = new Lazy(() => codec.load(store.load(sk), n.p));
+            this.memo.set(d, { get value() { return lz.force(); }, count: hit.count, lazy: lz });
+            st.stored = true;
+          }
+        }
         if (this.memo.has(d) && !opts.force) {
           const m = this.memo.get(d);
-          outputs.set(n.id, m.value);
+          outputs.set(n.id, m.lazy && !m.lazy.done ? m.lazy : m.value);
           Object.assign(st, { reused: true, count: m.count, ms: 0 });
           continue;
         }
@@ -1365,7 +1396,14 @@
           st.count = Array.isArray(value) ? value.length : value && value.N != null ? value.N : value ? Object.keys(value).length : 0;
           st.calls = counter.calls - c0;
           if (st.deferred || st.skipped) this.partial.set(d, { value, count: st.count, deferred: (st.deferred || 0) + (st.skipped || 0) });
-          else { this.memo.set(d, { value, count: st.count }); this.partial.delete(d); }
+          else {
+            this.memo.set(d, { value, count: st.count });
+            this.partial.delete(d);
+            const store = this.env.artifacts, codec = store ? persistOf(def) : null;
+            if (codec && opts.persist !== false) {
+              try { store.save(storeKey(d, def), n.t, codec.save(value), st.count); st.saved = true; } catch (e) { this.env.log && this.env.log(`[${n.id}] not persisted: ${e.message || e}`); }
+            }
+          }
         } catch (e) {
           report.ok = false;
           st.error = e.message || String(e.code || e);
@@ -1430,31 +1468,40 @@
       if (missing.length) return null;
       const key = [...dg.values()].map(d => d + (this.memo.has(d) ? '' : '~')).join(',');
       if (this._art && this._art.key === key) return this._art;
-      const byId = new Map();
-      for (const [id, d] of dg) byId.set(id, got(d).value);
-      const chunks = new Map(), docs = new Map(), order = new Map(), indexes = new Map();
+      const byId = new Outputs(); // stored outputs stay unloaded until read (sources usually never are)
+      for (const [id, d] of dg) { const m = got(d); byId.set(id, m.lazy && !m.lazy.done ? m.lazy : m.value); }
+      const chunks = new Map(), order = new Map(), indexes = new Map(), docNodes = [];
       let synonyms = null;
       for (const n of ir.nodes) {
         if (n.phase !== 'build') continue;
-        const v = byId.get(n.id);
-        if (n.out === 'docs') for (const d of v) docs.set(d.id, d);
-        if (n.out === 'chunks') for (const c of v) chunks.set(c.id, c);
-        if (n.out === 'index') indexes.set(n.p.name || n.id.replace(/^ix-/, ''), v);
-        if (n.t === 'synonyms') synonyms = v;
+        // read only what artifacts expose: a stored source or docs output stays unloaded
+        if (n.out === 'docs') docNodes.push(n.id); // docs load on first use (search rarely needs them)
+        else if (n.out === 'chunks') for (const c of byId.get(n.id)) chunks.set(c.id, c);
+        else if (n.out === 'index') indexes.set(n.p.name || n.id.replace(/^ix-/, ''), byId.get(n.id));
+        if (n.t === 'synonyms') synonyms = byId.get(n.id);
       }
+      let docs = null, links = null;
+      const docsMap = () => {
+        if (!docs) { docs = new Map(); for (const id of docNodes) for (const d of byId.get(id)) docs.set(d.id, d); }
+        return docs;
+      };
       // reading order per doc from the first chunk stream
       const primary = ir.nodes.find(n => n.phase === 'build' && n.out === 'chunks' && n.t !== 'enrich' && n.t !== 'enrich.llm');
       if (primary) for (const c of byId.get(primary.id)) { if (!order.has(c.docId)) order.set(c.docId, []); order.get(c.docId).push(c.id); }
-      // links: [[wiki]] targets and related notes resolved by title or alias
-      const norm = s => String(s).toLowerCase().replace(/^(proj|project report|project)\s*-\s*/i, '').replace(/[^a-z0-9]+/g, ' ').trim();
-      const names = new Map();
-      for (const d of docs.values()) for (const nm of [d.title, d.name.replace(/\.md$/, ''), ...arr(d.meta.aliases)]) names.set(norm(nm), d.id);
-      const links = new Map();
-      for (const d of docs.values()) {
-        const targets = [...d.links, ...arr(d.meta.related_vault_notes).map(x => String(x).replace(/^\[\[|\]\]$/g, ''))];
-        links.set(d.id, uniq(targets.map(t => names.get(norm(t))).filter(x => x && x !== d.id)));
-      }
-      this._art = { key, byId, chunks, docs, order, indexes, synonyms, links };
+      // links: [[wiki]] targets and related notes resolved by title or alias (computed on first use)
+      const linksMap = () => {
+        if (links) return links;
+        const norm = s => String(s).toLowerCase().replace(/^(proj|project report|project)\s*-\s*/i, '').replace(/[^a-z0-9]+/g, ' ').trim();
+        const names = new Map();
+        for (const d of docsMap().values()) for (const nm of [d.title, d.name.replace(/\.md$/, ''), ...arr(d.meta.aliases)]) names.set(norm(nm), d.id);
+        links = new Map();
+        for (const d of docsMap().values()) {
+          const targets = [...d.links, ...arr(d.meta.related_vault_notes).map(x => String(x).replace(/^\[\[|\]\]$/g, ''))];
+          links.set(d.id, uniq(targets.map(t => names.get(norm(t))).filter(x => x && x !== d.id)));
+        }
+        return links;
+      };
+      this._art = { key, byId, chunks, order, indexes, synonyms, get docs() { return docsMap(); }, get links() { return linksMap(); } };
       return this._art;
     }
     session(irOrGetter) { return new Session(this, typeof irOrGetter === 'function' ? irOrGetter : () => irOrGetter); }
@@ -1932,6 +1979,7 @@
     if (!/^[a-z][\w]*(\.[a-z][\w]*)?$/i.test(type)) throw new RagError('compile', `component type '${type}' should look like 'family' or 'family.variant'`);
     if (!def || !['build', 'live'].includes(def.phase)) throw new RagError('compile', "define needs phase: 'build' or 'live'");
     const d = { ...def, type };
+    d.src = String(def.map || def.all || def.run || '');
     d.in = arr(def.in || (def.phase === 'live' ? 'hits' : 'docs'));
     d.out = def.out || (def.phase === 'live' ? 'hits' : 'chunks');
     d.args = def.args || optArgs;

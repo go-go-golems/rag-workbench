@@ -39,17 +39,16 @@ func (m Markdown) Install(vm *goja.Runtime, rag *goja.Object) error {
 			frontmatter = false
 		}
 		n := int(files.Get("length").ToInteger())
-		out := make([]any, 0, n)
+		docs := make([]*Doc, 0, n)
 		for i := 0; i < n; i++ {
 			f := files.Get(fmt.Sprint(i)).ToObject(vm)
 			name, text := f.Get("name"), f.Get("text")
 			if name == nil || text == nil || goja.IsUndefined(text) {
 				panic(vm.NewTypeError("parse.markdown: file %d has no name/text", i))
 			}
-			doc := ParseMarkdown(name.String(), text.String(), frontmatter)
-			out = append(out, docToJS(vm, doc))
+			docs = append(docs, ParseMarkdown(name.String(), text.String(), frontmatter))
 		}
-		return vm.NewArray(out...)
+		return docsArray(vm, docs)
 	})
 	_ = h.Set("chunk", func(call goja.FunctionCall) goja.Value {
 		docs := call.Argument(0).ToObject(vm)
@@ -61,11 +60,7 @@ func (m Markdown) Install(vm *goja.Runtime, rag *goja.Object) error {
 			all = append(all, ChunkSections(docFromJS(vm, d), p)...)
 		}
 		AssignIDs(all)
-		out := make([]any, len(all))
-		for i := range all {
-			out[i] = chunkToJS(vm, &all[i])
-		}
-		return vm.NewArray(out...)
+		return chunksArray(vm, all)
 	})
 	v, err := vm.RunString(markdownJS)
 	if err != nil {

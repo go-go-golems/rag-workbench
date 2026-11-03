@@ -3,12 +3,15 @@
 package runner
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"os"
 
 	"github.com/dop251/goja_nodejs/require"
 	"github.com/go-go-golems/go-go-goja/pkg/engine"
 
+	"github.com/go-go-golems/rag-workbench/pkg/artifacts"
 	"github.com/go-go-golems/rag-workbench/pkg/llm"
 	"github.com/go-go-golems/rag-workbench/pkg/natives"
 	"github.com/go-go-golems/rag-workbench/pkg/ragjs"
@@ -40,6 +43,25 @@ type Config struct {
 	EmbedCache *natives.EmbedCache
 	// BuildCalls allows LLM-costing build nodes to run during build.
 	BuildCalls bool
+	// Artifacts persists build outputs by digest (docs, chunks, BM25 indexes), so a
+	// later run over an unchanged corpus loads them instead of rebuilding. Open it with
+	// ArtifactNamespace(JSComponents). Nil keeps everything in memory.
+	Artifacts *artifacts.Store
+}
+
+// ArtifactNamespace names the artifact namespace for this binary: the rag.js
+// source, the Go components' version and the component mode. Anything that can
+// change an output without changing its digest belongs here.
+func ArtifactNamespace(jsComponents bool) string {
+	src, _ := ragjs.Source("rag.js")
+	mode := "go"
+	if jsComponents {
+		mode = "js"
+	}
+	h := sha256.New()
+	_, _ = fmt.Fprintf(h, "%s\x00%s\x00", natives.Version, mode)
+	_, _ = h.Write(src)
+	return hex.EncodeToString(h.Sum(nil))[:16]
 }
 
 // excludedModules are default go-go-goja modules scripts must not get.
@@ -58,6 +80,9 @@ func NewFactory(cfg Config) (*engine.RuntimeFactory, error) {
 	}
 	nat = append(nat, &natives.Vectors{Embedder: cfg.Embedder, Cache: cfg.EmbedCache})
 	nat = append(nat, cfg.Natives...)
+	if cfg.Artifacts != nil {
+		nat = append(nat, natives.Persist{Store: cfg.Artifacts})
+	}
 	b := engine.NewRuntimeFactoryBuilder().
 		WithModules(ragjs.Modules(ragjs.Options{Log: logf, Natives: nat, Sample: cfg.LLM, BuildCalls: cfg.BuildCalls})...).
 		UseModuleMiddleware(engine.MiddlewareExclude(excludedModules...))
