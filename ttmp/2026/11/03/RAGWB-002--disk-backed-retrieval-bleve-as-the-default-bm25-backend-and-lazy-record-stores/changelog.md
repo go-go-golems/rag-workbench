@@ -15,3 +15,7 @@ Ticket opened; intern design/implementation guide written: bleve as the default 
 ## 2026-11-03
 
 Guide uploaded to reMarkable: /ai/2026/11/03/RAGWB-002/RAGWB-002 Disk-backed Retrieval Intern Guide.pdf
+
+## 2026-11-03
+
+Guide v2 (two browser pages section) uploaded: /ai/2026/11/03/RAGWB-002/RAGWB-002 Disk-backed Retrieval Intern Guide v2.pdf
