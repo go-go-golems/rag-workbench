@@ -9,6 +9,7 @@
     lastResult: null, lastEval: null, lastCompare: null, selectedNode: null, traceNode: null, explainId: null, corpusDoc: null,
     inspTab: 'dag', ideTab: 'code', surface: 'search', caps: {}, buildSeq: 0, scriptBuiltText: null, lastArt: null, lastBuild: null,
     lineOffset: 2, evalProgress: null, presets: [], preset: null, presetText: null, stash: null,
+    apps: null, appsIndex: [], file: null, // saved apps (/api/apps): availability, *.wb.js index, the file open in the editor
   };
   window.__wb = W;
 
@@ -112,7 +113,7 @@
     syncScroll();
     $('#code-dot').hidden = t === W.scriptBuiltText;
     const mod = $('#preset-mod');
-    if (mod) mod.hidden = !W.preset || t === W.presetText;
+    if (mod) mod.hidden = !(W.preset || W.file) || t === W.presetText;
     $('#script-meta').textContent = `${n} lines`;
   }
   function syncScroll() {
@@ -131,6 +132,7 @@
     });
     ta.addEventListener('scroll', syncScroll);
     ta.addEventListener('keydown', e => {
+      if ((e.metaKey || e.ctrlKey) && e.key === 's' && W.apps) { e.preventDefault(); saveButton(); return; }
       if ((e.metaKey || e.ctrlKey) && (e.key === 'Enter' || e.key === 's')) { e.preventDefault(); buildScript(); return; }
       if (e.key === 'Tab' && !e.metaKey && !e.ctrlKey) {
         e.preventDefault();
@@ -205,7 +207,7 @@
     const rep = await rebuildArtifacts();
     if (!rep.ok) return { ok: false, errors: rep.errors };
     mountSearch(appIr);
-    if (store.ready && !opts.restoring) store.saveState({ preset: W.preset ? W.preset.id : null, script: text === W.presetText ? '' : text });
+    if (store.ready && !opts.restoring) store.saveState({ preset: W.preset ? W.preset.id : null, file: W.file ? { app: W.file.app, path: W.file.path } : null, script: text === W.presetText ? '' : text });
     renderInspector();
     updateTop();
     clog('ok', `built ${ir.id}: ${ir.nodes.length} nodes · ${rep.ms} ms`);
@@ -274,6 +276,7 @@
     const cur = src().value;
     if (!opts.silent && cur.trim() && cur !== W.presetText) W.stash = { text: cur, label: W.preset ? W.preset.title : 'your script' };
     W.preset = p;
+    W.file = null;
     W.presetText = text;
     W.freshMount = true;
     setEditor(opts.script || text);
@@ -294,6 +297,15 @@
     await buildScript();
   }
   function updatePresetHead() {
+    if (W.file) {
+      const f = W.file;
+      $('#preset-k').textContent = `App · ${f.app}${f.version ? ' · v' + f.version : ''}`;
+      $('#preset-name').textContent = f.path;
+      $('#preset-mod').hidden = src().value === W.presetText;
+      $('#preset-desc').innerHTML = `Saved in ${esc((W.apps && W.apps.dir) || 'the apps directory')}/${esc(f.app)}. Run it headless: <code>ragwb run ${esc(f.app + '/' + f.path)}</code>`;
+      renderPresetMenu();
+      return;
+    }
     const p = W.preset;
     const i = p ? W.presets.indexOf(p) : -1;
     $('#preset-k').textContent = p ? `Preset ${String(i + 1).padStart(2, '0')} of ${W.presets.length} · ${p.group}` : 'Preset';
@@ -309,6 +321,14 @@
     const f = ($('#preset-filter').value || '').toLowerCase().trim();
     list.innerHTML = '';
     if (W.stash) list.append(h('button', { type: 'button', class: 'pm-stash', onclick: restoreStash }, `↺ Back to your edits of “${clip(W.stash.label, 40)}”`));
+    const saved = (W.appsIndex || []).filter(x => !f || `${x.app}/${x.path}`.toLowerCase().includes(f));
+    if (saved.length) {
+      list.append(h('div', { class: 'pm-group' }, h('div', { class: 'pm-h' }, h('span', { text: 'Saved apps' }), h('span', { class: 'meta', text: String(saved.length) })),
+        saved.map(x => h('button', { type: 'button', role: 'menuitem', class: 'pm-item' + (W.file && W.file.app === x.app && W.file.path === x.path ? ' on' : ''), onclick: () => openAppFile(x.app, x.path).catch(e => toast(e.message, 'bad')) },
+          h('span', { class: 'pm-n', text: 'v' + (x.version || '–') }),
+          h('span', { class: 'pm-t' }, h('b', { text: `${x.app}/${x.path}` }), h('span', { text: `saved ${new Date(x.updated).toLocaleString()}` })),
+          h('span', { class: 'pm-r' })))));
+    }
     const groups = new Map();
     W.presets.forEach((p, i) => {
       if (f && !`${p.title} ${p.blurb} ${p.group} ${p.id}`.toLowerCase().includes(f)) return;
@@ -323,12 +343,13 @@
           h('span', { class: 'pm-r' }, h('span', { class: 'cx', title: `complexity ${p.level} of 3` }, [1, 2, 3].map(n => h('i', { class: n <= p.level ? 'f' : '' }))),
             p.llm ? h('i', { class: 'tag llm', text: p.llm === 'build' ? 'build' : 'enter', title: p.llm === 'build' ? 'Build spends Claude calls' : 'Enter spends Claude calls' }) : null)))));
     }
-    if (!groups.size) list.append(h('div', { class: 'pm-empty', text: 'No preset matches.' }));
+    if (!groups.size && !saved.length) list.append(h('div', { class: 'pm-empty', text: 'No preset matches.' }));
   }
   function openPresetMenu() {
     $('#preset-menu').hidden = false;
     $('#preset-btn').setAttribute('aria-expanded', 'true');
     renderPresetMenu();
+    refreshAppsIndex();
     $('#preset-filter').focus();
   }
   function closePresetMenu() { $('#preset-menu').hidden = true; $('#preset-btn').setAttribute('aria-expanded', 'false'); }
@@ -344,6 +365,114 @@
     $('#preset-prev').addEventListener('click', () => step(-1));
     $('#preset-next').addEventListener('click', () => step(1));
     document.addEventListener('click', e => { if (!$('#preset-menu').hidden && !e.target.closest('#preset-menu, #preset-btn')) closePresetMenu(); });
+  }
+
+  // ────────────────────────────────────────────────────────────── saved apps (/api/apps)
+  // An app is a directory on the server (ragwb workbench --apps). The editor holds a
+  // workbench script (*.wb.js, run headless with `ragwb run app/file`); verb and library
+  // files are saved as text with wb.apps.save and run with `ragwb verbs --app app ...`.
+  async function appsFetch(p, o = {}) {
+    const init = o.body !== undefined ? { method: o.method || 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(o.body) } : { method: o.method || 'GET' };
+    const r = await fetch('/api/apps' + p, init);
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new rag.RagError((j.error && j.error.code) || 'apps', (j.error && j.error.message) || `HTTP ${r.status}`);
+    return j;
+  }
+  const encPath = p => String(p).split('/').map(encodeURIComponent).join('/');
+  const fileUrl = (app, path, version) => `/${encodeURIComponent(app)}/files/${encPath(path)}${version ? '?version=' + version : ''}`;
+  // 'app/path' or (app, path)
+  function splitTarget(app, path) {
+    if ((path === undefined || path === null) && typeof app === 'string' && app.includes('/')) { const i = app.indexOf('/'); return [app.slice(0, i), app.slice(i + 1)]; }
+    return [app, path];
+  }
+  async function probeApps() {
+    try { const j = await appsFetch(''); W.apps = { dir: j.dir }; W.appsIndex = await indexApps(j.apps); } catch (_) { W.apps = false; W.appsIndex = []; }
+    $('#save-btn').hidden = !W.apps;
+  }
+  async function indexApps(list) {
+    list = list || (await appsFetch('')).apps;
+    const out = [];
+    for (const a of list.slice(0, 40)) {
+      const j = await appsFetch('/' + encodeURIComponent(a.name)).catch(() => ({ files: [] }));
+      for (const f of j.files) if (f.role === 'workbench') out.push({ app: a.name, path: f.path, version: f.version, updated: f.updated });
+    }
+    return out;
+  }
+  function refreshAppsIndex() { if (W.apps) indexApps().then(x => { W.appsIndex = x; renderPresetMenu(); }).catch(() => {}); }
+  function needApps() {
+    if (!W.apps) throw new rag.RagError('apps_disabled', 'Saved apps need the ragwb server with an apps directory (ragwb workbench --apps <dir>).');
+  }
+  async function saveAppFile(app, path, text, comment = '') {
+    needApps();
+    [app, path] = splitTarget(app, path);
+    const j = await appsFetch(fileUrl(app, path), { body: { source: String(text), comment: comment || '' } });
+    refreshAppsIndex();
+    const c = j.check;
+    return { app, path, version: j.saved.version, unchanged: j.saved.unchanged, role: c.role, ok: c.ok, problems: c.problems, verbs: c.verbs || [], run: c.run || [] };
+  }
+  async function openAppFile(app, path, opts = {}) {
+    needApps();
+    [app, path] = splitTarget(app, path);
+    if (!/\.wb\.js$/.test(path)) throw new rag.RagError('not_workbench', `${app}/${path} is not a workbench script: only *.wb.js files open in the editor. Read other files with wb.apps.read(app, path).`);
+    const j = await appsFetch(fileUrl(app, path, opts.version));
+    const cur = src().value;
+    if (!opts.silent && cur.trim() && cur !== W.presetText) W.stash = { text: cur, label: W.file ? `${W.file.app}/${W.file.path}` : W.preset ? W.preset.title : 'your script' };
+    W.preset = null;
+    W.presetText = j.source;
+    W.file = { app, path, version: j.version };
+    W.freshMount = true;
+    setEditor(opts.script || j.source);
+    updatePresetHead();
+    closePresetMenu();
+    if (opts.build === false) return { ok: true, opened: `${app}/${path}`, version: j.version };
+    const r = await buildScript({ restoring: !!opts.restoring });
+    if (r.ok && !opts.restoring) toast(`Opened ${app}/${path}`, 'ok');
+    return { opened: `${app}/${path}`, version: j.version, ...r };
+  }
+  // Save the editor's script. Without a target it goes to the open file, or asks for one.
+  async function saveEditor(app, path, comment, opts = {}) {
+    needApps();
+    [app, path] = splitTarget(app, path);
+    if (!app) {
+      if (W.file) ({ app, path } = W.file);
+      else if (opts.ask) {
+        const guess = (W.preset ? rag.util.slug(W.preset.id || W.preset.title) : 'my-app') + '/pipeline.wb.js';
+        const ans = window.prompt('Save the script as app/file in the apps directory:', guess);
+        if (!ans) return { ok: false, cancelled: true };
+        [app, path] = splitTarget(ans.trim());
+      } else throw new rag.RagError('needs_target', 'No app file is open: call wb.save(app, path), e.g. wb.save("notes", "pipeline.wb.js").');
+    }
+    if (!path) path = 'pipeline.wb.js';
+    if (!/\.[A-Za-z]+$/.test(path)) path += '.wb.js';
+    if (!/\.wb\.js$/.test(path)) throw new rag.RagError('not_workbench', `The editor holds a workbench script: save it as *.wb.js (got ${path}). Save verb and library files with wb.apps.save(app, path, text).`);
+    const text = src().value;
+    const r = await saveAppFile(app, path, text, comment);
+    W.file = { app, path, version: r.version };
+    W.preset = null;
+    W.presetText = text;
+    updatePresetHead();
+    paintEditor();
+    if (!r.ok) showErrors(r.problems.map(p => ({ text: `${p.path}${p.line ? ':' + p.line : ''} ${p.message}`, line: p.line })));
+    clog(r.ok ? 'ok' : 'warn', `${r.unchanged ? 'unchanged' : 'saved'} ${app}/${path} v${r.version}${r.run.length ? ' · run: ' + r.run[0] : ''}`);
+    toast(r.unchanged ? `No changes to ${app}/${path}` : `Saved ${app}/${path} · v${r.version}`, r.ok ? 'ok' : 'bad');
+    store.saveState({ file: { app, path }, preset: null, script: '' });
+    return r;
+  }
+  function saveButton() {
+    saveEditor(undefined, undefined, '', { ask: true })
+      .then(r => { if (!r.cancelled && src().value !== W.scriptBuiltText) buildScript(); })
+      .catch(e => toast(e.message, 'bad'));
+  }
+  function appsApi(readonly) {
+    const block = name => () => { throw new rag.RagError('readonly', `${name} is blocked in Read-only mode.`); };
+    return {
+      list: async () => { needApps(); return (await appsFetch('')).apps; },
+      files: async app => { needApps(); return (await appsFetch('/' + encodeURIComponent(app))).files; },
+      read: async (app, path, o = {}) => { needApps(); [app, path] = splitTarget(app, path); return (await appsFetch(fileUrl(app, path, o.version))).source; },
+      history: async (app, path) => { needApps(); return (await appsFetch(`/${encodeURIComponent(app)}/history${path ? '?path=' + encodeURIComponent(path) : ''}`)).versions; },
+      save: readonly ? block('wb.apps.save') : (app, path, text, comment) => saveAppFile(app, path, text, comment),
+      remove: readonly ? block('wb.apps.remove') : async (app, path) => { needApps(); [app, path] = splitTarget(app, path); await appsFetch(fileUrl(app, path), { method: 'DELETE' }); refreshAppsIndex(); return `removed ${app}/${path}`; },
+    };
   }
 
   // ────────────────────────────────────────────────────────────── surfaces
@@ -863,6 +992,10 @@
         load: readonly ? block('wb.presets.load') : async id => { const r = await loadPreset(id); return { loaded: id, ...r }; },
       },
       build: readonly ? block('wb.build') : () => buildButton(),
+      apps: appsApi(readonly),
+      file: () => (W.file ? { ...W.file, edited: src().value !== W.presetText } : null),
+      open: readonly ? block('wb.open') : (app, path, o) => openAppFile(app, path, o),
+      save: readonly ? block('wb.save') : (app, path, comment) => saveEditor(app, path, comment),
     };
     return api;
   }
@@ -886,7 +1019,9 @@
       lastSearch: r ? { trigger: r.trigger, ms: r.ms, top: r.top(3).map(x => `${x.id} (${x.heading})`), errors: r.errors } : null,
       evals: W.built && W.built.evals ? { id: W.built.evals.id, cases: W.built.evals.cases.length, last: W.lastEval ? { trigger: W.lastEval.trigger, summary: W.lastEval.summary, misses: W.lastEval.misses.map(m => `${m.q} → rank ${m.rank ?? '—'}`) } : 'not run yet' } : null,
       variants: W.built ? W.built.variants.map(v => v.id) : [], branches: Object.keys(W.ws.branches), appTab: W.appIr ? W.appIr.title : null,
-      script: { lines: src().value.split('\n').length, built: src().value === W.scriptBuiltText, preset: W.preset ? W.preset.id + (src().value !== W.presetText ? ' (edited)' : '') : 'none' },
+      script: { lines: src().value.split('\n').length, built: src().value === W.scriptBuiltText, preset: W.preset ? W.preset.id + (src().value !== W.presetText ? ' (edited)' : '') : 'none',
+        file: W.file ? `${W.file.app}/${W.file.path} v${W.file.version}${src().value !== W.presetText ? ' (edited)' : ''}` : 'none' },
+      apps: W.apps ? `available (${W.appsIndex.length} saved workbench scripts)` : 'unavailable',
       pendingClaudeBuild: W.engine.pending(W.ws.ir),
       claude: W.caps.sample ? (W.caps.limits && W.caps.limits.tools ? 'available' : 'available, no tools') : 'unavailable',
     };
@@ -987,7 +1122,9 @@
     const [corpus] = await Promise.all([
       fetch('corpus.json').then(r => r.json()).catch(() => ({ files: [] })),
       loadPresetList(),
+      probeApps(),
     ]);
+    $('#save-btn').addEventListener('click', saveButton);
     W.bundled = (corpus.files || []).map(f => ({ ...f, source: 'bundled' }));
     rag.configure({ files: activeFiles, log: (...a) => clog('', ...a), librarySource: () => fetch('rag.js').then(r => r.text()), buildCalls: 'explicit' });
     W.engine = rag.engine();
@@ -1024,7 +1161,11 @@
           W.uploaded = files.map(f => ({ name: f.name, text: f.text, source: 'uploaded' }));
           const filesChanged = W.uploaded.length || W.disabled.size;
           const savedPreset = st.preset && W.presets.find(p => p.id === st.preset);
-          if (savedPreset && (savedPreset !== W.preset || st.script)) {
+          const reopened = st.file && W.apps
+            ? await openAppFile(st.file.app, st.file.path, { silent: true, restoring: true, script: st.script || undefined }).then(() => true, e => { clog('warn', `could not reopen ${st.file.app}/${st.file.path}: ${e.message}`); return false; })
+            : false;
+          if (reopened) clog('', `reopened ${st.file.app}/${st.file.path}${st.script ? ' with your edits' : ''}`);
+          else if (savedPreset && (savedPreset !== W.preset || st.script)) {
             await loadPreset(savedPreset.id, { silent: true, restoring: true, script: st.script || undefined });
             clog('', `restored preset “${savedPreset.title}”${st.script ? ' with your edits' : ''}`);
           } else if (!st.preset && st.script && st.script !== src().value) {

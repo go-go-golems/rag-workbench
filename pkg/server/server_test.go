@@ -162,6 +162,10 @@ func TestPageAssets(t *testing.T) {
 	if !strings.Contains(get("/"), `<head><script src="/_rt/claude.js"></script>`) {
 		t.Fatal("index.html must load the runtime shim first")
 	}
+	// P6: the page saves into the app store and the agent docs describe it
+	if !strings.Contains(get("/"), `id="save-btn"`) || !strings.Contains(get("/app.js"), "fetch('/api/apps'") || !strings.Contains(get("/agent.js"), "wb.apps") {
+		t.Error("the workbench page is missing the app store wiring (save button, /api/apps, agent docs)")
+	}
 	if !strings.Contains(get("/rag.js"), "const LN = ") {
 		t.Fatal("rag.js must be the patched engine (D6)")
 	}

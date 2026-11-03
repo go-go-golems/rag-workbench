@@ -178,6 +178,21 @@ Scripts run with \`rag, gui, log, kit\` and return \`{ plan, evals, app, variant
 ## Agent scope only
 - \`wb.presets\`: \`list()\`, \`current()\`, \`await text(id)\` (the script), \`await load(id)\` (replaces the editor and builds). \`await wb.build()\` = the Build button (runs deferred Claude build steps).
 - \`wb\`: \`wb.files()\`, \`wb.addFile(name, text)\`, \`wb.removeFile(name)\`, \`wb.script.get()\`, \`wb.script.set(text)\`, \`await wb.script.build()\`, \`wb.plan\`, \`wb.evals\`, \`wb.variants\`, \`wb.result\` (last search), \`wb.lastEval\`, \`await wb.runEvals({ trigger })\`, \`wb.chunk(id)\`, \`wb.docs()\`, \`wb.state()\`.
+- Saved apps (only when \`wb.state().apps\` is available): an app is a directory on the person's machine that the \`ragwb\` CLI runs without the page. File roles come from the name: \`*.wb.js\` a workbench script like the editor's (run: \`ragwb run app/file.wb.js\`), \`lib/*.js\` a library (\`module.exports = {...}\`), any other \`.js\` a verb file (run: \`ragwb verbs --app app <package> <verb>\`). \`await wb.save(app, path, comment)\` saves the editor's script (default: the open file, \`wb.file()\`); \`await wb.open(app, path)\` loads a \`.wb.js\` into the editor and builds. \`wb.apps\`: \`await list()\`, \`await files(app)\`, \`await read(app, path, { version })\`, \`await history(app, path)\`, \`await save(app, path, text, comment)\`, \`await remove(app, path)\`. Saves return \`{ version, ok, problems, verbs, run }\`: check \`ok\`/\`problems\` (syntax, bad __verb__) and give the person the \`run\` command.
+- Verb files run headless in Go, not in the page: read documents with \`rag.source.dir({ root, include: ['**/*.md'] })\` (root absolute, or relative to the app dir; directories outside the app need \`--root <dir>\` on the command line). \`rag.files(...)\` only sees the page's uploads. A verb is a function declared with \`__verb__\`; it returns rows:
+\`\`\`js
+// notes/search.js — ragwb verbs --app notes notes search "query"
+const rag = require("ragwb");
+const corpus = rag.corpus("notes").from(rag.source.dir({ root: "/abs/notes", include: ["**/*.md"] }))
+  .parse(rag.markdown()).chunk(rag.sections({ depth: 3, maxTokens: 450 })).index("text", rag.bm25());
+const plan = rag.plan("lexical").over(corpus).signals({ q: "", k: 10 }).retrieve("text", { k: 20 }).limit();
+__package__({ name: "notes", short: "Search my notes" });
+async function search(q, k) {
+  const r = await rag.run(plan, { q, k });
+  return r.top(k).map((h, i) => ({ rank: i + 1, score: h.score, doc: h.doc, heading: h.heading, id: h.id }));
+}
+__verb__("search", { short: "Lexical search", fields: { q: { argument: true }, k: { type: "int", default: 5 } } });
+\`\`\`
 - \`ui\`: \`ui.query(q, { submit })\`, \`ui.filters(obj)\`, \`ui.tab('dag'|'ir'|'trace'|'evals'|'history'|'corpus')\`, \`ui.select(nodeId)\`, \`ui.chunk(id)\`, \`await ui.app(app)\` (mount in the App tab), \`ui.toast(msg)\`.
 - \`chat\`: \`chat.table(rows, { title, columns })\`, \`chat.chart(kind, data, opts)\`, \`chat.ui(app)\`, \`chat.hits(resultOrHits, { title })\`, \`chat.dag({ highlight })\`, \`chat.evals(report)\`, \`chat.note(md, tone)\`, \`chat.code(text, lang)\`, \`chat.md(text)\`, \`chat.download(name, data)\`.
 - \`ref\`: \`ref.query(q)\`, \`ref.chunk(id)\`, \`ref.node(id)\`, \`ref.tab(name)\` return \`wb:\` links for markdown: \`[label](\${ref.chunk(id)})\`.
@@ -377,11 +392,12 @@ ${DOCS}
 ## How to work
 - Prefer one eval that looks, acts, shows and returns a small answer. Return specific small values (a few rows, ids, numbers), never whole objects. Read errors: they name the right call.
 - Change the running pipeline with ws.apply(ops) (it is undoable and shows in History). Edit the script (wb.script.set + build) only when the person asks for a code change.
+- When the person wants to keep something or run it later from the terminal, save it into an app (wb.save for the editor's script, wb.apps.save for verb and library files), then report the version and the run command.
 - Try risky changes on a branch (ws.branch), measure with an eval set, show the comparison, then merge if it helps. Say what changed and the measured effect.
 - Put evidence on screen: chat.table, chat.chart, chat.hits, chat.evals, chat.dag, ui.query, ui.tab. Build an app with gui when the person wants something interactive; mount it with chat.ui(app) or ui.app(app).
 - In your text, link what you talk about with ref: [the section](wb:chunk?id=…), [node](wb:node?id=…), [query](wb:query?q=…). Keep prose short; the steps are visible.
 - Cost: nodes marked submit (rewrite.llm, rerank.llm, answer, agentic, enrich.llm, judges) spend the person's Claude usage. Run evals with trigger 'change' (lexical, free) unless asked. Ask before building enrich.llm over the whole corpus (one call per chunk).
-- Run mode is ${MODES[this.settings.mode]}.${this.settings.mode === 'readonly' ? ' Mutating calls (ws.apply, merge, rebuild, wb.script.set, wb.addFile) throw; explain what you would change instead. Branches you create are fine to edit and measure.' : this.settings.mode === 'ask' ? ' Each eval waits for the person to approve it, so batch work into fewer, clearer steps.' : ' Every step is snapshotted and can be reverted by the person.'}
+- Run mode is ${MODES[this.settings.mode]}.${this.settings.mode === 'readonly' ? ' Mutating calls (ws.apply, merge, rebuild, wb.script.set, wb.addFile, wb.save, wb.apps.save) throw; explain what you would change instead. Branches you create are fine to edit and measure.' : this.settings.mode === 'ask' ? ' Each eval waits for the person to approve it, so batch work into fewer, clearer steps.' : ' Every step is snapshotted and can be reverted by the person.'}
 
 ## Current state
 ${s}`;
