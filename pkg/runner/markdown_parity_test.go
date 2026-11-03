@@ -36,7 +36,7 @@ func buildArtifacts(t *testing.T, jsMarkdown bool, root string, include []string
 	}
 	defer func() { _ = rt.Close(context.Background()) }()
 	// Long opt-in runs compare per-item hashes ("id hash" lines) instead of full JSON to bound memory.
-	hashed := os.Getenv("RAGWB_PARITY_INCLUDE") != ""
+	hashed := os.Getenv("RAGWB_PARITY_INCLUDE") != "" && os.Getenv("RAGWB_PARITY_FULLJSON") == ""
 	opts, _ := json.Marshal(map[string]any{"root": root, "include": include, "sections": sections, "hashed": hashed})
 	v, err := ragjs.Eval(ctx, rt, "parity", func(vm *goja.Runtime) (goja.Value, error) {
 		return vm.RunString(fmt.Sprintf(`(async (o) => {

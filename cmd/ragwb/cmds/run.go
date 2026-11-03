@@ -70,7 +70,11 @@ func NewRunCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			factory, err := runner.NewFactory(runner.Config{Verbose: f.verbose, Roots: Roots(), JSComponents: JSComponents(), LLM: backend, BuildCalls: BuildCalls()})
+			embedder, embedCache, err := Embedder()
+			if err != nil {
+				return err
+			}
+			factory, err := runner.NewFactory(runner.Config{Verbose: f.verbose, Roots: Roots(), JSComponents: JSComponents(), LLM: backend, BuildCalls: BuildCalls(), Embedder: embedder, EmbedCache: embedCache})
 			if err != nil {
 				return err
 			}
@@ -106,7 +110,11 @@ func NewPresetsCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			factory, err := runner.NewFactory(runner.Config{Verbose: f.verbose, Roots: Roots(), JSComponents: JSComponents(), LLM: backend, BuildCalls: BuildCalls()})
+			embedder, embedCache, err := Embedder()
+			if err != nil {
+				return err
+			}
+			factory, err := runner.NewFactory(runner.Config{Verbose: f.verbose, Roots: Roots(), JSComponents: JSComponents(), LLM: backend, BuildCalls: BuildCalls(), Embedder: embedder, EmbedCache: embedCache})
 			if err != nil {
 				return err
 			}

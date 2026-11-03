@@ -70,7 +70,11 @@ func NewVerbsCommand(dir string) (*cobra.Command, error) {
 		if err != nil {
 			return nil, err
 		}
-		factory, err := runner.NewFactory(runner.Config{SourceLoader: reg.RequireLoader(), Roots: Roots(dir), Base: dir, JSComponents: JSComponents(), LLM: backend, BuildCalls: BuildCalls()})
+		embedder, embedCache, err := Embedder()
+		if err != nil {
+			return nil, err
+		}
+		factory, err := runner.NewFactory(runner.Config{SourceLoader: reg.RequireLoader(), Roots: Roots(dir), Base: dir, JSComponents: JSComponents(), LLM: backend, BuildCalls: BuildCalls(), Embedder: embedder, EmbedCache: embedCache})
 		if err != nil {
 			return nil, err
 		}

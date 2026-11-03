@@ -48,3 +48,12 @@ P9: llm package (sample contract, LunaRoute client with tool loop, embeddings, r
 
 - /home/manuel/code/wesen/go-go-golems/rag-workbench/pkg/llm/lunaroute.go — LunaRoute chat/embeddings/rerank client
 - /home/manuel/code/wesen/go-go-golems/rag-workbench/pkg/ragjs/sample.go — sample contract bridge (promises across goroutines)
+
+## 2026-11-02
+
+Whole-vault parity (2282 notes) found and fixed the empty-fence token quirk; now byte-identical, JS 280s vs Go 4.4s. P8a: index.vector (LunaRoute emb-granite, SQLite embedding cache) + rerank.model (bge-rr-v2-m3); hybrid plan best on goldens (MRR 1.0, nDCG 0.915)
+
+### Related Files
+
+- /home/manuel/code/wesen/go-go-golems/rag-workbench/pkg/natives/embcache.go — persistent embedding cache
+- /home/manuel/code/wesen/go-go-golems/rag-workbench/pkg/natives/vector.go — index.vector + rerank.model components

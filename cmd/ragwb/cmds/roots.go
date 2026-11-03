@@ -7,6 +7,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/go-go-golems/rag-workbench/pkg/llm"
+	"github.com/go-go-golems/rag-workbench/pkg/natives"
 )
 
 var (
@@ -15,6 +16,7 @@ var (
 	llmName      string
 	llmTiers     = llm.DefaultTiers()
 	buildCalls   bool
+	embedName    string
 )
 
 // AddGlobalFlags registers persistent flags shared by run, presets and verbs.
@@ -27,6 +29,7 @@ func AddGlobalFlags(root *cobra.Command) {
 	f.StringVar(&llmTiers.Quick, "llm-quick", llmTiers.Quick, "Model for modelTier 'quick'")
 	f.StringVar(&llmTiers.Default, "llm-default", llmTiers.Default, "Model for modelTier 'default'")
 	f.StringVar(&llmTiers.Complex, "llm-complex", llmTiers.Complex, "Model for modelTier 'complex'")
+	f.StringVar(&embedName, "embed", "none", "Embeddings/rerank backend for index.vector and rerank.model: none, lunaroute (cache: ~/.ragwb/cache/embeddings.db)")
 	f.BoolVar(&buildCalls, "build-calls", false, "Let LLM-costing build nodes (enrich.llm, doc cards) run instead of deferring them")
 }
 
@@ -46,6 +49,26 @@ func LLM() (llm.Backend, error) {
 		return c, nil
 	}
 	return nil, fmt.Errorf("unknown --llm %q (none, fake, lunaroute)", llmName)
+}
+
+// Embedder returns the embeddings/rerank backend selected by --embed and the
+// persistent embedding cache (both nil for "none").
+func Embedder() (natives.Embedder, *natives.EmbedCache, error) {
+	switch embedName {
+	case "", "none":
+		return nil, nil, nil
+	case "lunaroute":
+		c, err := llm.NewLunaRoute()
+		if err != nil {
+			return nil, nil, err
+		}
+		cache, err := natives.OpenEmbedCache(natives.DefaultEmbedCachePath())
+		if err != nil {
+			return nil, nil, err
+		}
+		return c, cache, nil
+	}
+	return nil, nil, fmt.Errorf("unknown --embed %q (none, lunaroute)", embedName)
 }
 
 // BuildCalls reports --build-calls.

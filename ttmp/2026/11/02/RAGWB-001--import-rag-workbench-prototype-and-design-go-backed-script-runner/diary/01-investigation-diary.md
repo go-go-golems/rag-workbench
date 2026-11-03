@@ -525,3 +525,78 @@ All 30 presets also run with `--trigger submit` on the fake backend without erro
 
 ### Technical details
 - The JS-visible contract: `sample(input, {modelTier, model, onText({text, delta}), tools[{name, description, inputSchema, execute(input, {signal})}], signal})` → `{text, truncated, modelTierApplied, modelApplied?}`. `sample.json(...)` → the parsed value or `{code: 'invalid_json', text}`. `sample.limits()` → `{tools: {maxCount: 16}}`.
+
+## Step 11: Whole-vault parity finds one JS quirk; P8a dense retrieval and cross-encoder rerank on LunaRoute
+
+This step has two parts. First, the whole-vault parity run (opt-in, all 2,282 notes) found a real divergence the subset tests had missed. The cause was a quirk in rag.js's token counting, which I now replicate. After the fix, every doc and chunk in the vault is byte-identical between JS and Go, and the JS build takes 280 s against 4.4 s for Go. Second, I added the first P8 slice: `index.vector` (LunaRoute `emb-granite` embeddings with a persistent SQLite cache) and a `rerank.model` live node (`bge-rr-v2-m3`). With them the reports app gains semantic, hybrid and hybrid+rerank plans. **Hybrid (BM25 + vectors, RRF) is the best plan on the 12 goldens: MRR 1.0, nDCG@10 0.915, against lexical 0.933 / 0.847.**
+
+### Prompt Context
+**User prompt (verbatim):** see Step 9 (LunaRoute embeddings/rerank) and Step 6 (commit cadence, diary).
+**Assistant interpretation:** Finish validating P4 on the full vault, then build embeddings and rerank into the grammar as components.
+**Inferred user intent:** Better retrieval for the vault apps, measured rather than assumed.
+**Commit (code):** see the commit right after this entry ("RAGWB-001 P4 fix + P8a: …").
+
+### What I did
+- Whole-vault parity, first run: `RAGWB_PARITY_INCLUDE='**/*.md' RAGWB_PARITY_TIMEOUT=45m go test ./pkg/runner -run TestMarkdownParityVault -v -timeout 100m` → FAIL after 1034 s: `chunks differ at byte 5744886` in `transcripts-2026-07-21-chatgpt-transcript-branch-interpreter-con#12-immutable-artifacts-and-defensive-copies`. **Docs were identical** (they're compared first), so the problem was in chunking.
+- Narrowed it with the new `RAGWB_PARITY_FULLJSON=1` (full JSON on opt-in runs) plus `RAGWB_PARITY_INCLUDE='Transcripts/2026/07/21/CHATGPT TRANSCRIPT - Branch Interpreter Con*.md'`: JS `"parts":13`, Go `"parts":12` for the same group. A throwaway debug test (deleted afterwards) dumped part sizes: JS p2 436 + p3 83 tokens vs Go p2 **470** tokens, which is over `maxTokens` 450.
+- Root cause: rag.js `tokens(t)` for block arrays is `t.map(b => (b && b.text) || b).join('\n')`. A block whose `text` is `''` (an **empty code fence**) is falsy-coalesced to the block *object*, which joins as `"[object Object]"` (15 characters). Go counted 0, so Go packed one more block into the part. Fix: `blocksTokens` substitutes `"[object Object]"` for empty texts, with a comment; regression test `TestBlocksTokensEmptyTextQuirk`.
+- Whole-vault parity, second run → **PASS**: `9514966 bytes of chunks identical; build js=279822ms go=4357ms` (825 s total).
+- P8a:
+  - `pkg/natives/embcache.go`: SQLite cache, table `embeddings(model, dims, hash = sha256(text)[:16], vec BLOB float32 LE)`, at `~/.ragwb/cache/embeddings.db` (`$RAGWB_CACHE_DIR` overrides). WAL mode, batched `IN` lookups.
+  - `pkg/natives/vector.go`:
+    - `index.vector({model = 'emb-granite', over = ['title', 'headingPath', 'text'], dimensions})` embeds the joined fields of each chunk, misses only, with 4 concurrent batches of 64, and L2-normalizes. Exact cosine search; the query is embedded synchronously and cached per index.
+    - `rerank.model({model = 'bge-rr-v2-m3', k = 30, keepTail})` is a `submit`-trigger live node. It reranks the head k hits with the cross-encoder, sets `score` and `reason: 'cross-encoder …'`, and keeps the tail unless `keepTail: false`.
+    - `rag.vector(...)` is a late-bound shortcut.
+  - `runner.Config{Embedder, EmbedCache}`; CLI `--embed none|lunaroute`. Without a backend, a build fails with `index.vector: no embedding backend (run with --embed lunaroute)`.
+  - Examples: `reports` gains `corpusDense` and plans `semantic`, `hybrid`, `hybrid-rerank`; `search --plan … --trigger`; `goldens --names … --trigger`; `index --dense`. `parc` gains `corpus(include, dense)`, `plan(include, mode)` and `search --mode lexical|semantic|hybrid`.
+  - Tests `pkg/runner/vector_test.go`: a deterministic bag-of-words embedder and term-overlap reranker. The index is built through rag.js; the `submit` run applies `rerank.model`; and **a cached rebuild in a fresh runtime makes exactly one embed call** (the query). A test also checks the no-backend hint.
+
+### Why
+- I kept vectors as rag components (`index.vector`, `rerank.model`) rather than a separate API (D2), so plans compose dense and lexical retrieval with the existing `fuse.rrf`, `filter` and `limit`, and the inspector and evals see them.
+- The persistent cache is what makes vector indexes usable from short-lived CLI verbs.
+
+### What worked
+- Reports: first `index --dense` embedded 462 chunks in **2,457 ms** (wall 2.6 s); the second took **24 ms** (wall 0.24 s, cache). `sqlite3 … "select model, dims, count(*) …"` → `emb-granite|0|462`.
+- Semantic vs lexical on "how do agents get notified about new posts": semantic finds Agentforum "What was built" (the unified event inbox), while lexical's top hit is an unrelated PBUI section.
+- Goldens (12 cases, `goldens --names …`, 34.6 s wall for both commands):
+
+| plan | trigger | hit@5 | MRR | nDCG@10 |
+|---|---|---|---|---|
+| lexical | change | 1 | 0.933 | 0.847 |
+| fused (text+meta) | change | 1 | 0.892 | 0.818 |
+| semantic | change | 1 | 0.917 | 0.833 |
+| **hybrid** | change | 1 | **1.000** | **0.915** |
+| hybrid | submit | 1 | 1.000 | 0.915 |
+| hybrid-rerank | submit | 1 | 1.000 | 0.861 |
+
+- `go test ./pkg/runner -run Vector` → pass.
+
+### What didn't work
+- The first parity run's failure is above (it was real).
+- `reports index --dense` piped through `grep` first printed nothing. I'd passed `-v`, which is a flag of `run`, not a global flag, so the command errored inside the pipe. Reran without it.
+- `TestVectorIndexAndRerankModel` (first run) failed: `reranked top = [7. Phases 3–7: … 20. Primary source material › CoinVault Testing and validation]`. **My fake was bad**: 64 hash buckets collide too much for cosine, and the fake reranker's length normalization favoured short chunks. With 1024 buckets and a plain overlap score it passes. The components were fine.
+- My first edit of `examples/apps/parc/lib/corpus.js` (Python string replace) added the vector index unconditionally plus a meaningless placeholder fragment. Caught on read-back and rewritten.
+
+### What I learned
+- The cross-encoder *lowered* nDCG on the goldens (0.915 → 0.861) with MRR unchanged. With 12 questions this could be noise. It could also mean `bge-rr-v2-m3` with the title + heading + text input format reorders within the relevant set. It needs a larger golden set before concluding anything (the prototype textbook notes the same measurement weakness).
+- The empty-fence quirk shows why the parity bar needs the whole vault: 1 group in 85,880 chunks diverged, and no subset I'd chosen contained it.
+
+### What was tricky to build
+- **Finding a 1-in-85,880 divergence.** Hash-mode parity gives the id but no content. The FULLJSON switch plus an include glob over the three files sharing the truncated id prefix reduced it to a part-size dump. The 470 > 450 token part was the tell: Go believed the block fit because it under-counted.
+
+### What warrants a second pair of eyes
+- `index.vector` blocks the VM goroutine during corpus embedding (minutes for the vault) and during query embedding (~0.3–0.7 s on a cache miss). That's fine for CLI verbs, but the server needs per-session runtimes or an async index API (`await ix.search(...)` in `retrieve` would need a small engine change).
+- Vectors live in memory as float32: 85,880 × 768 × 4 B ≈ 264 MB for the vault, on top of the JS artifacts.
+
+### What should be done in the future
+- Record the whole-vault dense build (running at the time of writing) in Step 12.
+- Grow the golden sets (synthetic evals via `rag.evals.generate` on LunaRoute) before tuning rerank.
+- P8b: persist BM25/terms/vector artifacts by node digest (A5) so query verbs don't rebuild.
+
+### Code review instructions
+- `pkg/natives/chunk.go` `blocksTokens`; `pkg/natives/vector.go` (`vectorsJS`, `embedAll`, `search`); `pkg/natives/embcache.go`; `examples/apps/reports/lib/plans.js`.
+- Validate: `go test ./...`; `./dist/ragwb --embed lunaroute verbs --dir examples/apps/reports reports goldens --names lexical,semantic,hybrid`.
+
+### Technical details
+- Embedded text per chunk = `[title, headingPath.join(' › '), text].filter(Boolean).join('\n\n')`. Rerank document text uses the same composition.
+- LunaRoute limits respected: 64 inputs per request, max 99 docs per rerank (`k` capped at 99), and empty strings replaced by `" "`.

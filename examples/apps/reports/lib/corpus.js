@@ -9,4 +9,8 @@ const corpus = rag.corpus("reports")
   .index("text", rag.bm25({ fields: { title: 2, headingPath: 3, callout: 2, text: 1 } }))
   .index("meta", rag.terms({ keys: ["type", "tags", "status", "aliases"] }));
 
-module.exports = { rag, corpus };
+// The same corpus plus a dense index (needs --embed lunaroute). Builders are immutable,
+// so `corpus` itself stays lexical-only and runs without an embedding backend.
+const corpusDense = corpus.index("vec", rag.vector({ model: "emb-granite" }));
+
+module.exports = { rag, corpus, corpusDense };

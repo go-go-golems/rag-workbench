@@ -68,3 +68,14 @@ func TestFrontmatterAndTitle(t *testing.T) {
 		t.Fatalf("block = %+v", b)
 	}
 }
+
+// rag.js counts an empty-text block as "[object Object]" when sizing parts
+// (found by whole-vault parity: an empty code fence changed a split point).
+func TestBlocksTokensEmptyTextQuirk(t *testing.T) {
+	if got, want := blocksTokens([]Block{{Kind: "fence", Text: ""}}), tokens("[object Object]"); got != want {
+		t.Fatalf("blocksTokens(empty) = %d, want %d", got, want)
+	}
+	if got, want := blocksTokens([]Block{{Text: "abcd"}, {Text: ""}}), tokens("abcd\n[object Object]"); got != want {
+		t.Fatalf("blocksTokens(mixed) = %d, want %d", got, want)
+	}
+}

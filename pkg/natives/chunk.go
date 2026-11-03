@@ -71,10 +71,16 @@ func pickMeta(m Meta) Meta {
 	return out
 }
 
+// blocksTokens is rag.js tokens(blocks): t.map(b => (b && b.text) || b).join('\n').
+// Quirk kept for parity: a block with empty text (e.g. an empty code fence) is
+// falsy-coalesced to the block object itself, which joins as "[object Object]".
 func blocksTokens(bs []Block) int {
 	texts := make([]string, len(bs))
 	for i, b := range bs {
 		texts[i] = b.Text
+		if b.Text == "" {
+			texts[i] = "[object Object]"
+		}
 	}
 	return tokens(strings.Join(texts, "\n"))
 }

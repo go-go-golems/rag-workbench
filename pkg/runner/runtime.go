@@ -34,6 +34,10 @@ type Config struct {
 	Natives []ragjs.Native
 	// LLM backs ctx.sample for LLM nodes (nil = LLM nodes unavailable).
 	LLM llm.Backend
+	// Embedder backs index.vector and rerank.model (nil = those components fail with a hint).
+	Embedder natives.Embedder
+	// EmbedCache persists embeddings across runs (nil = no cache).
+	EmbedCache *natives.EmbedCache
 	// BuildCalls allows LLM-costing build nodes to run during build.
 	BuildCalls bool
 }
@@ -52,6 +56,7 @@ func NewFactory(cfg Config) (*engine.RuntimeFactory, error) {
 	if !cfg.JSComponents {
 		nat = append(nat, natives.Markdown{}, natives.Bm25Native{})
 	}
+	nat = append(nat, &natives.Vectors{Embedder: cfg.Embedder, Cache: cfg.EmbedCache})
 	nat = append(nat, cfg.Natives...)
 	b := engine.NewRuntimeFactoryBuilder().
 		WithModules(ragjs.Modules(ragjs.Options{Log: logf, Natives: nat, Sample: cfg.LLM, BuildCalls: cfg.BuildCalls})...).
