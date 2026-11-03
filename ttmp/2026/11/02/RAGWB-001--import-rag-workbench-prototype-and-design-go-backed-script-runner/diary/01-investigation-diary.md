@@ -914,3 +914,13 @@ Locally, tests, lint, govulncheck (0 affecting the code) and gosec all pass. go-
 ### Technical details
 - Bisect versions: `v0.0.0-20261023121931-6ace4dde0b29` (null) vs `v0.0.0-20261023113153-3c7039fb89af` (array).
 - Alert → fix map: grpc 32–35 → 1.85.0; excelize 31, 36–51 → 2.11.1; mongo-driver 17 → 1.17.10; go-jose 52 → 4.1.8; otel GO-2026-5158 → 1.45.0.
+
+## Step 17 (milestone): PR #106 CI is green, ready to merge
+
+CI on go-go-goja PR #106 head `3dfcc78` passed every check, including the two dependency-scanning jobs that had failed on `main` every week since 2026-07-26. GitHub reports the PR as `MERGEABLE` / `CLEAN`, so it is ready for the user to merge.
+
+- **Command:** `gh pr checks 106 -R go-go-golems/go-go-goja --watch` (background), then `gh pr view 106 --json mergeable,mergeStateStatus`.
+- **Result:**
+  - pass: Analyze, CodeQL, Dependency Review, **Go Vulnerability Check** (1m11s), **GoSec Security Scan** (4m16s), TruffleHog, docker, inspector-validation, lint (4m49s), test (4m51s);
+  - skipping: Open GitOps PR.
+- **Revision:** go-go-goja `3dfcc78`. Next: the user merges and tags v0.10.7, then the rag-workbench follow-up (tasks k4hx, de8c).
