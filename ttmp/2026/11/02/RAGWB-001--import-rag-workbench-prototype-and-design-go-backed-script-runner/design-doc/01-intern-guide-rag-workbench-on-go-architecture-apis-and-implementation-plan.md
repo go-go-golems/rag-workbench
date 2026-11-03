@@ -21,6 +21,10 @@ RelatedFiles:
       Note: xgoja runtime-package + hand-written main pattern (D5)
     - Path: abs:///home/manuel/code/wesen/slop-computer/pkg/server/sample.go
       Note: sample SSE + page-tool protocol to port (D4)
+    - Path: repo://pkg/natives/markdown.go
+      Note: P4 faithful Go port (status section)
+    - Path: repo://pkg/server/server.go
+      Note: P5 workbench server (status section)
     - Path: repo://ttmp/2026/11/02/RAGWB-001--import-rag-workbench-prototype-and-design-go-backed-script-runner/scripts/03-jsverbs-split/app/search.js
       Note: Working split-file jsverb example the guide's file conventions build on
     - Path: repo://ttmp/2026/11/02/RAGWB-001--import-rag-workbench-prototype-and-design-go-backed-script-runner/sources/prototype/rag.js
@@ -939,3 +943,29 @@ Each phase ends with a demo command and tests. Commit at each phase boundary.
 | `~/code/wesen/go-go-golems/rag-evaluation-system/packages/rag-evaluation-site/src/widgets/WidgetRenderer.tsx`, `registry.ts` | React renderer + adapter registry |
 | `~/code/wesen/go-go-golems/rag-evaluation-system/pkg/gojamodules/rag/module.go`, `pkg/ragcontract/` | rag v2 DSL + IR contracts (D8) |
 | `~/code/wesen/go-go-golems/upwork/verbs/upwork.js`, `verbs/lib/pages.js` | widget.dsl host: express page/action routes |
+
+## 17. Implementation status (updated 2026-11-02, end of first implementation session)
+
+This section records what exists now. The diary (`diary/01-investigation-diary.md`, Steps 6–12) has the evidence; commits are on branch `task/ragwb-001-go-backend`.
+
+| Phase | Status | Where | Notes |
+|---|---|---|---|
+| P0 scaffold | done | `cmd/ragwb`, `Makefile` | `make build test lint presets` |
+| P1 `ragwb` module | done | `pkg/ragjs` | rag.js/gui.js/kit.js vendored (`assets/PROVENANCE.md`); D6 implemented; parity score 12.6758 |
+| P2 jsverbs | done | `cmd/ragwb/cmds/verbs.go`, `examples/apps/reports` | jsverbs module paths are virtual, so relative roots resolve against the app dir (`SourceDir.Base`) |
+| P3 directory source | done | `pkg/natives/sourcedir.go` | roots allowlist (`--root`), stat digest via a new engine hook `def.digest` |
+| P4 native parse/chunk | done, **and BM25** | `pkg/natives/{markdown,chunk,bm25}.go` | Faithful ports, not goldmark/Bleve: byte-identical to rag.js on the **whole vault** (2,282 notes) and in BM25 results. Vault build is 17 s (it was ~10 min in JS). A2 ranges on blocks and chunks |
+| P5 workbench server | done | `pkg/server`, `web/workbench`, `ragwb workbench` | Browser-verified Ask + agent on LunaRoute |
+| P6 app store | **next** | — | apps dir + `wb.save` |
+| P7 remote pipeline / `ragwb serve` | open | — | §9.8 sync `host.rag.chunk` caveat still applies |
+| P8 persistence + vectors | partly | `pkg/natives/{vector,embcache}.go` | `index.vector` + `rerank.model` + SQLite embedding cache done. Persisting BM25/terms/build artifacts by digest (A5) is open |
+| P9 server-side LLM nodes | done | `pkg/llm`, `pkg/ragjs/sample.go` | the claude.ai `sample` contract on LunaRoute; tool loops; `--build-calls` |
+
+**Amendments to earlier sections (proposed):**
+
+- **§9.6 / D4, LLM bridge:** implemented as a direct OpenAI-compatible HTTP client for **LunaRoute** (`https://gw.lunaroute.com`, header `LUNAROUTE-API-KEY`, key from `$LUNAROUTE_API_KEY` or Pi's `~/.pi/agent/models.json`), behind `llm.Backend`. Geppetto remains a possible second backend. Tier defaults: quick `muse-spark-open`, default `glm-5.3-flash`, complex `glm-5.3`. GLM always reasons, and reasoning consumes `max_tokens` (budgets 2k/8k/16k).
+- **§9.5, natives:** natives replace built-in types (`parse.markdown`, `chunk.sections`, `index.bm25`) under the same names and with explicit family ids (`id: () => 'parse'|'chunk'|'index'`). `--js-components` restores the JS versions.
+- **§12.1, API:** implemented additions are `rag.source.dir({root, include, exclude, maxBytes, skipHtml})`, `rag.vector({model, over, dimensions})` / `index.vector`, and `plan.rerank.model({model, k, keepTail})`. `corpus.store`, `rag.open` and `corpus.represent` are not yet implemented.
+- **CLI surface:** global flags `--root`, `--llm none|fake|lunaroute`, `--llm-quick|default|complex`, `--llm-max-rounds`, `--embed none|lunaroute`, `--build-calls`, `--js-components`. Commands `run`, `presets`, `verbs`, `workbench`.
+
+**Known open issues:** intermittent `invalid_json` from `rerank.llm` on the quick tier; vault-scale memory (3.5–3.8 GB RSS; A6); query verbs rebuild every invocation (A5); synchronous embedding blocks the VM goroutine (fine for CLI, needs per-session runtimes in the server); the leaked LunaRoute OAuth token from Step 9 (rotate).
