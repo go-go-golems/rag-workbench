@@ -319,3 +319,78 @@ Vault build measurements (this machine, commit e1707e9 + this step's changes, go
 ### Technical details
 - `rag.source.dir(o)` params: `root` (required), `include` (string or list, default `**/*.md`), `exclude` (list, added to the defaults), `maxBytes` (default 4194304), `skipHtml` (default true). Node id: `dir`.
 - The jsverbs `stringList` field accepts repeated `--include a --include b`.
+
+## Step 8: P4 — Go ports of parse.markdown, chunk.sections and index.bm25 (byte-identical, 28× faster on the vault)
+
+I replaced the three heavy build components with Go ports registered under their **original type names**, so every script and preset gets them without edits. These are faithful line-by-line ports of the prototype's own algorithms, not goldmark or Bleve, because the acceptance bar is that outputs stay identical. Parse and chunk outputs are byte-identical to the JS implementation as JSON across three chunking configurations, on the 11 reports and 144 vault notes. BM25 search results (scores, `why` terms, tie order, synonyms, `searchIn`, `toJSON`) are byte-identical across three index configurations. The tokenizer matches on 20,328 real lines. All 30 presets give identical metrics. The vault's `Research/` subset now builds in 2.5 s instead of 69.3 s, and **the whole vault (2,282 notes, 85,880 chunks) builds in 17.4 s**. Memory (3.47 GB RSS) is now the limiting factor.
+
+Blocks and chunks also gained `range: {byteStart, byteEnd, lineStart, lineEnd}` (API adjustment A2), and a test verifies all 1,168 block ranges in the reports corpus against the source bytes.
+
+### Prompt Context
+**User prompt (verbatim):** see Step 6. Mid-step the user added: "we can use embeddings models and reranking from https://docs.lunaroute.com/ and for llm calls, for testing (the same key through pi as the normal hosting)". That is recorded and acted on in Step 9.
+**Assistant interpretation:** Execute P4 with parity evidence. BM25 was pulled forward from P8 because after the parse/chunk ports it was 95% of build time.
+**Inferred user intent:** Scripts must index real vaults quickly without changing their semantics.
+**Commit (code):** see the commit made right after this entry ("RAGWB-001 P4: …").
+
+### What I did
+- `pkg/natives/jsstr.go`: JS semantics helpers. `jsWS` (the ECMAScript `\s` set), `jsTrim`, `len16` (UTF-16 length), `tokens` (= ceil(len16/4)), `slice16`, `clip`, `slug`, `jsString`, `jsTruthy`, and `splitSentences` (`split(/(?<=[.!?])\s+/)` without lookbehind, which RE2 lacks).
+- `pkg/natives/markdown.go`: `parseScalar`, `parseFrontmatter` (keeps the JS quirk where an unterminated last line yields the whole text as body), `plain`, `ParseMarkdown` with block ranges, an ordered `Meta` (insertion order, deletion of empty lists).
+- `pkg/natives/chunk.go`: `ChunkSections` with `splitBlock` (including the JS quirk `tokens(cur.join(' ') + u)`), `blocksText`, `makeChunk` (+ range union), `pickMeta`, `AssignIDs`.
+- `pkg/natives/bm25.go`: `Tokenize`/`stem`/stopwords, `NewBm25`, `Search` (stable sort on Map insertion order; `why` pre-ordered with array-index keys first because JS plain objects enumerate them first), `SearchIn`, and `jsToFixed`, which rounds the exact decimal expansion with ties away from zero.
+- `pkg/natives/markdown_native.go` and `bm25_native.go`: `rag.define` with explicit `id: () => 'parse' | 'chunk' | 'index'`. Go → JS builds real JS objects in prototype key order. JS → Go reads docs back, with a non-enumerable `__go` handle on natively parsed docs as a fast path. BM25 field texts are extracted in JS (exact `getPath`/join/JSON rules) in one pass.
+- `runner.Config.JSComponents` and CLI `--js-components` keep rag.js's implementations (parity tests, escape hatch).
+- Tests: `pkg/runner/markdown_parity_test.go` (JS vs Go JSON with `range` stripped; opt-in `RAGWB_PARITY_INCLUDE` / `RAGWB_PARITY_TIMEOUT` for long runs with per-item hashes), `pkg/runner/bm25_parity_test.go`, `pkg/runner/tokenize_parity_test.go`, `pkg/natives/markdown_test.go` (range invariants, frontmatter), `pkg/natives/bm25_test.go` (`jsToFixed` vs goja's `toFixed` on 400k random values + exact ties).
+
+### Why
+- A goldmark-based parser would segment blocks differently. Chunk ids, headings and scores would all shift, breaking every preset, eval and textbook number. A faithful port keeps semantics, and the parity tests make "faithful" checkable.
+- I ported BM25 ahead of Bleve (P8) because parity is provable and it kills the dominant cost now. Bleve remains the persistence and highlighting path.
+
+### What worked
+- `go test ./pkg/runner -run 'Bm25Parity|MarkdownParityReports' -v`:
+  - parse/chunk identical: 926,670 / 1,239,443 / 1,977,082 bytes of chunk JSON (three configs), JS 2.3–2.6 s vs Go 27–49 ms.
+  - BM25 identical: 156,011 / 156,055 / 153,384 bytes of results, full build JS ~4.0 s vs Go 67–96 ms.
+- `TestMarkdownParityVault` (`Research/KB/**` + `Logs/**`, 3 configs): identical; JS 5.1–5.3 s vs Go 101–130 ms.
+- `TestTokenizeParity`: 20,328 lines identical (stemmed and unstemmed). `TestToFixedMatchesGoja`: pass. `TestBlockRangesPointAtSource`: 1,168 ranges verified.
+- Presets sweep with all Go ports: 30/30 ok and **identical** to the P3 sweep (query-ms normalized). Wall time 133 s → 47 s.
+- `ragwb --js-components verbs --dir examples/apps/reports reports index` vs. without: parse 754 → 15 ms, chunks 1853 → 11 ms, ix-text 1678 → 67 ms.
+- Vault (this machine; a parity test was running concurrently, so these timings are pessimistic):
+
+| run | files | chunks | parse | chunk | bm25 | terms | total | max RSS |
+|---|---|---|---|---|---|---|---|---|
+| `Research/**`, Step 7 (all JS) | 572 | 11,926 | 12,155 ms | 28,173 ms | 28,443 ms | 426 ms | 69.3 s | 477 MB |
+| `Research/**`, Go parse+chunk only | 572 | 11,926 | 386 | 272 | 28,530 | 544 | 29.9 s | 587 MB |
+| `Research/**`, all Go ports | 572 | 11,926 | 366 | 293 | 1,138 | 551 | **2.5 s** | 534 MB |
+| **whole vault**, all Go ports | 2,282 | 85,880 | 2,631 | 2,121 | 8,761 | 3,382 | **17.4 s** | **3.47 GB** |
+
+- `parc search "goja module provider xgoja"` over the whole vault (rebuild + query, 22 s) → go-go-goja Protobuf Builders, xgoja provider architecture, XGoja third-party provider rollout, "Designing DSLs with go-go-goja", …
+
+### What didn't work
+- First whole-vault parity run: `markdown_parity_test.go:87: runtimeowner parity: runtime call canceled: context deadline exceeded` after 300 s. The JS side of the build exceeded the test's own 5-minute context, so the result is inconclusive, not a mismatch. Fixed by `RAGWB_PARITY_TIMEOUT` and per-item hash comparison for opt-in runs (full JSON of 81 MB would need gigabytes of UTF-16 strings). The rerun is in progress; its result goes in Step 9.
+- `TestTokenizeAndStem` (my first unit test) failed: `got [rebalanc law get httprespons gethttprespons snak case name snakecasenam index run v2 api v2api]`. My **hand-written expectation** was wrong: I'd assumed `getHTTPResponse` stays one token and `running` → `runn`. The real rules split at lower→upper boundaries only (`get` | `HTTPResponse`), and `running` loses `ing` (length > 6), then the doubled `n`, giving `run`. I replaced the guesses with JS-derived ground truth (`TestTokenizeParity`).
+
+### What I learned
+- After the ports, the whole vault fits in about 17 s of build. The remaining costs are the JS field-text pass for BM25 (inside ix-text), JS `index.terms` (3.4 s), and **memory**: every doc and chunk lives as JS objects plus the hidden Go `__go` structs. That's API adjustment A6 (artifact accessors) and P8 (persisted indexes).
+- goja's `Number#toFixed` (its own `ftoa`) matches the ECMAScript tie rule: half away from zero on the exact binary value. Go's `strconv` would round half to even, so I wrote `jsToFixed`.
+
+### What was tricky to build
+- **`define()` vs the built-ins.** `rag.define` assigns `d.id = def.id || (() => type.split('.').pop())`. The op layer (`rag.js:1186`, inserting nodes) names new nodes `def.id(p) || family`. Without explicit ids, an agent inserting `index.bm25` would get node id `bm25` instead of `index`. All natives now pass `id: () => '<family>'`. Corpus index ids (`'ix-' + name`, `rag.js:880`) were never affected.
+- **Ordering semantics, three of them:** JS `Map` insertion order for scores (first contributing term, then posting order); `Array#sort` stability; plain-object enumeration with array-index keys first (affects which 5 `why` terms survive ties). Each one would have produced rare, data-dependent diffs. The byte-level parity tests are what make me confident they're all handled.
+- **FMA.** The Go spec allows fusing `x*y+z`. The score expression wraps products in `float64(...)`, which the spec says forces rounding, so results match goja's (non-fused) arithmetic on any architecture.
+
+### What warrants a second pair of eyes
+- `docFromJS` trusts the `__go` handle. A JS lambda that mutates a parsed doc *in place* between parse and chunk would be ignored by the Go chunker. Copies (`{...doc}`) correctly fall back to the reader.
+- `jsToFixed` uses `big.Float` with 1100 digits per call. That's fine for ≤ k hits × 5 terms per query, but it's not free in a tight loop.
+- RSS went up (477 → 534–587 MB on `Research/`) because docs are held twice. Revisit with A6.
+
+### What should be done in the future
+- Step 9: record the whole-vault parity result. LunaRoute embeddings/rerank/LLM (P8/P9).
+- Port `index.terms` (3.4 s on the vault) the same way, or back it with SQLite.
+- Persist build artifacts (P8) so query verbs don't rebuild for 17 s.
+
+### Code review instructions
+- Read `pkg/natives/markdown.go` side by side with `pkg/ragjs/assets/rag.js` lines ~193–293 (parse) and ~306–360 (chunk). Read `bm25.go` with rag.js ~155–190 (tokenize/stem) and ~373–445 (Bm25Index).
+- Validate: `go test ./...`; `make presets`; `RAGWB_PARITY_INCLUDE='**/*.md' RAGWB_PARITY_TIMEOUT=45m go test ./pkg/runner -run TestMarkdownParityVault -v -timeout 100m`.
+
+### Technical details
+- Range: half-open bytes in the original file; 1-based inclusive lines. Fences include their marker lines. Chunk range = union of its blocks' ranges. Synthetic heading paragraphs (deeper sections folded into a group) have no range.
+- Native index object: `{kind: 'bm25', N, fields, search(q, k = 20, {synonyms, only}), searchIn(docId, q, k = 3, {synonyms}), toJSON()}`.

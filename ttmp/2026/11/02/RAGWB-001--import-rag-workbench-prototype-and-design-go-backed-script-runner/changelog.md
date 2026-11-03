@@ -29,3 +29,13 @@ P2+P3: ragwb verbs (jsverbs with ragwb runtime) validated on split-file examples
 
 - /home/manuel/code/wesen/go-go-golems/rag-workbench/examples/apps/reports/search.js — split-file app verbs
 - /home/manuel/code/wesen/go-go-golems/rag-workbench/pkg/natives/sourcedir.go — source.dir native component
+
+## 2026-11-02
+
+P4: Go ports of parse.markdown, chunk.sections, index.bm25 under original type names; byte-identical parity tests (markdown, BM25, tokenizer, toFixed); chunk/block ranges (A2); presets sweep identical; whole vault 2282 notes/85880 chunks builds in 17.4s (3.47GB RSS)
+
+### Related Files
+
+- /home/manuel/code/wesen/go-go-golems/rag-workbench/pkg/natives/bm25.go — Go port of tokenize/stem/Bm25Index
+- /home/manuel/code/wesen/go-go-golems/rag-workbench/pkg/natives/markdown.go — Go port of parseMarkdown with ranges
+- /home/manuel/code/wesen/go-go-golems/rag-workbench/pkg/runner/bm25_parity_test.go — JS-vs-Go parity tests

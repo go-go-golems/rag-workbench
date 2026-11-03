@@ -6,7 +6,20 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var extraRoots []string
+var (
+	extraRoots   []string
+	jsComponents bool
+)
+
+// AddGlobalFlags registers persistent flags shared by run, presets and verbs.
+func AddGlobalFlags(root *cobra.Command) {
+	AddRootsFlag(root)
+	root.PersistentFlags().BoolVar(&jsComponents, "js-components", false,
+		"Use rag.js's own parse.markdown, chunk.sections and index.bm25 instead of the Go ports (parity debugging)")
+}
+
+// JSComponents reports the --js-components flag.
+func JSComponents() bool { return jsComponents }
 
 // AddRootsFlag registers the persistent --root flag (repeatable): directories
 // scripts may read through rag.source.dir.

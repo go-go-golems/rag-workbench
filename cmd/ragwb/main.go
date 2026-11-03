@@ -25,7 +25,7 @@ func main() {
 		Short: "Print the version",
 		Run:   func(cmd *cobra.Command, args []string) { fmt.Fprintln(cmd.OutOrStdout(), version) },
 	})
-	cmds.AddRootsFlag(root)
+	cmds.AddGlobalFlags(root)
 	root.AddCommand(cmds.NewRunCommand(), cmds.NewPresetsCommand())
 
 	dir, _ := cmds.DiscoverVerbsDir(os.Args[1:])

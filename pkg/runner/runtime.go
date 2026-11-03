@@ -25,6 +25,10 @@ type Config struct {
 	Roots []string
 	// Base resolves relative rag.source.dir roots (app dir for verbs; "" = working directory).
 	Base string
+	// JSComponents keeps rag.js's own parse.markdown, chunk.sections and index.bm25
+	// instead of the Go ports (natives.Markdown, natives.Bm25Native). Used by parity
+	// tests and as an escape hatch (ragwb --js-components).
+	JSComponents bool
 	// Natives are extra Go-backed components installed into every ragwb module instance.
 	Natives []ragjs.Native
 }
@@ -39,7 +43,11 @@ func NewFactory(cfg Config) (*engine.RuntimeFactory, error) {
 	if logf == nil && cfg.Verbose {
 		logf = func(line string) { fmt.Fprintln(os.Stderr, "rag:", line) }
 	}
-	nat := append([]ragjs.Native{&natives.SourceDir{Roots: cfg.Roots, Base: cfg.Base}}, cfg.Natives...)
+	nat := []ragjs.Native{&natives.SourceDir{Roots: cfg.Roots, Base: cfg.Base}}
+	if !cfg.JSComponents {
+		nat = append(nat, natives.Markdown{}, natives.Bm25Native{})
+	}
+	nat = append(nat, cfg.Natives...)
 	b := engine.NewRuntimeFactoryBuilder().
 		WithModules(ragjs.Modules(ragjs.Options{Log: logf, Natives: nat})...).
 		UseModuleMiddleware(engine.MiddlewareExclude(excludedModules...))
