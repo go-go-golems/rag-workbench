@@ -272,9 +272,16 @@ type Synonym struct {
 }
 
 func (ix *Bm25) queryTerms(q string, syn []Synonym) []queryTerm {
+	return queryTermsFor(q, syn, ix.Stem)
+}
+
+// queryTermsFor is the query side shared by both BM25 backends: q's distinct
+// tokens (weight 1), then the tokens of synonym expansions whose key occurs in
+// q (weight 0.5), in first-seen order.
+func queryTermsFor(q string, syn []Synonym, stem bool) []queryTerm {
 	out := []queryTerm{}
 	idx := map[string]int{}
-	for _, t := range Tokenize(q, ix.Stem) {
+	for _, t := range Tokenize(q, stem) {
 		if _, ok := idx[t]; !ok {
 			idx[t] = len(out)
 			out = append(out, queryTerm{t, 1})
@@ -288,7 +295,7 @@ func (ix *Bm25) queryTerms(q string, syn []Synonym) []queryTerm {
 				continue
 			}
 			for _, v := range s.Vals {
-				for _, t := range Tokenize(v, ix.Stem) {
+				for _, t := range Tokenize(v, stem) {
 					if _, ok := idx[t]; !ok {
 						idx[t] = len(out)
 						out = append(out, queryTerm{t, 0.5})

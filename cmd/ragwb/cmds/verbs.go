@@ -98,7 +98,7 @@ func NewVerbsCommand(dir string) (*cobra.Command, error) {
 			return nil, err
 		}
 		rec.Phase("runtime (goja + modules)")
-		factory, err := runner.NewFactory(runner.Config{SourceLoader: reg.RequireLoader(), Roots: Roots(dir), Base: dir, JSComponents: JSComponents(), LLM: backend, BuildCalls: BuildCalls(), Embedder: embedder, EmbedCache: embedCache, Artifacts: store, Timing: rec})
+		factory, err := runner.NewFactory(runner.Config{SourceLoader: reg.RequireLoader(), Roots: Roots(dir), Base: dir, JSComponents: JSComponents(), IndexBackend: IndexBackend(), LLM: backend, BuildCalls: BuildCalls(), Embedder: embedder, EmbedCache: embedCache, Artifacts: store, Timing: rec})
 		if err != nil {
 			return nil, err
 		}

@@ -13,6 +13,7 @@ import (
 var (
 	extraRoots   []string
 	jsComponents bool
+	indexBackend string
 	llmName      string
 	llmTiers     = llm.DefaultTiers()
 	buildCalls   bool
@@ -26,6 +27,8 @@ func AddGlobalFlags(root *cobra.Command) {
 	root.PersistentFlags().BoolVar(&jsComponents, "js-components", false,
 		"Use rag.js's own parse.markdown, chunk.sections and index.bm25 instead of the Go ports (parity debugging)")
 	f := root.PersistentFlags()
+	f.StringVar(&indexBackend, "index-backend", "memory",
+		"Default backend of index.bm25 when a plan does not set one: memory (exact rag.js port) or bleve (disk-backed; rankings may differ)")
 	f.StringVar(&llmName, "llm", "none", "LLM backend for LLM nodes: none, fake, lunaroute (key: $LUNAROUTE_API_KEY or Pi's ~/.pi/agent/models.json)")
 	f.StringVar(&llmTiers.Quick, "llm-quick", llmTiers.Quick, "Model for modelTier 'quick'")
 	f.StringVar(&llmTiers.Default, "llm-default", llmTiers.Default, "Model for modelTier 'default'")
@@ -80,6 +83,9 @@ func Embedder() (natives.Embedder, *natives.EmbedCache, error) {
 
 // BuildCalls reports --build-calls.
 func BuildCalls() bool { return buildCalls }
+
+// IndexBackend reports --index-backend.
+func IndexBackend() string { return indexBackend }
 
 // JSComponents reports the --js-components flag.
 func JSComponents() bool { return jsComponents }
