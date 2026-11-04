@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 )
 
 // Fake is a deterministic backend for tests and offline runs. When tools are
@@ -16,6 +17,10 @@ type Fake struct {
 	Answer func(req Request) string
 	// FakeToolInput is passed to the first tool, default {}.
 	FakeToolInput json.RawMessage
+	// Pieces > 1 streams the reply in that many onText calls, Delay apart; the
+	// call honours ctx between pieces (cancellation tests).
+	Pieces int
+	Delay  time.Duration
 }
 
 func (f *Fake) Sample(ctx context.Context, req Request, onText OnText, exec ExecuteTool) (Result, error) {
@@ -53,6 +58,23 @@ func (f *Fake) Sample(ctx context.Context, req Request, onText OnText, exec Exec
 		text = fmt.Sprintf("[fake %s answer to %d chars%s]", tier, len(last), toolNote)
 	}
 	res.Text = text
+	if f.Pieces > 1 {
+		rs := []rune(text)
+		prev := 0
+		for i := 1; i <= f.Pieces; i++ {
+			end := len(rs) * i / f.Pieces
+			select {
+			case <-ctx.Done():
+				return res, ctx.Err()
+			case <-time.After(f.Delay):
+			}
+			if onText != nil && end > prev {
+				onText(string(rs[:end]), string(rs[prev:end]))
+			}
+			prev = end
+		}
+		return res, nil
+	}
 	if onText != nil {
 		onText(text, text)
 	}

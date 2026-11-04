@@ -103,3 +103,67 @@ Create  a detailed analysis / design / implementation guide that is for a new in
 
 ### Code review instructions
 - Read guide §3.2, then §6.3, then §6.4. Check the event table against the components in `rag.js`.
+
+## Step 3: Phase 1 — the engine event stream and request scopes (rag.js)
+
+The engine now produces the event model from guide §6.4. Every run started inside a scope reports:
+- `run` and `runEnd`;
+- `node` start and end;
+- `hits` (capped by `detail.top`, chunks only with `detail.chunks`);
+- `context`, `note` and `progress`;
+- `text` as deltas;
+- `tool` start and end around every tool call of an LLM node;
+- `build` and `built` when the run has to build first.
+
+Scopes are plain JS objects (`rag.newScope(emit, detail)`), made current only for the synchronous start of a call (`rag.withScope`). `Engine.run` and `rag.build` capture them through `scoped(opts)`. Two runs interleaving at awaits saw only their own events.
+
+I also decided against the upstream jsverbs change (guide D4). The host can wrap the verb function that jsverbs captures and hand it its scope; Phase 2 does this. jsverbs then stays as is, and its argument binding is reused unchanged.
+
+### Prompt Context
+**User prompt (verbatim):** "Impement. commit at appropriate intervals and keep a detailed diary as you work (using the diary format from the skill). (diary format from skill: manatory)"
+**Assistant interpretation:** Implement guide Phases 1–5 on a new branch, with milestone commits and investigation-format diary steps.
+**Inferred user intent:** Working query endpoints with SSE, built on the reviewed design.
+**Commit (code):** the commit for this step: "RAGWB-004 Phase 1: engine events and request scopes".
+
+### What I did
+- Branch `task/ragwb-004-query-api-sse`, from the RAGWB-003 branch.
+- `pkg/ragjs/assets/rag.js`:
+  - `newScope(emit, detail)` returns `{emit, signal, detail, nextRun, runs, close, abort}`. The signal is an `AbortSignal` look-alike (`aborted`, `addEventListener('abort')`), and `emit` becomes a no-op after `close()`;
+  - `withScope(scope, fn)`;
+  - `scoped(opts)` adds the scope's numbered `onEvent`, its `signal` and its `detail`, then sets `scope: null` so nested calls don't count twice;
+  - `hitsEvent`, `summarize`, and `eventSample`, which wraps tools' `execute` to emit `tool` start and end;
+  - `Engine.run` (still async; `scoped()` runs before the first await) and `rag.build` use `scoped`; `rag.scope`, `rag.withScope` and `rag.newScope` are exported;
+  - `Session.run`: `run`, node start/end (including cached and skipped nodes, which get only an end), `hits`, `context`, `runEnd`; a build it triggers gets `onEvent` with `scope: null`;
+  - `Engine.build`: `build` per node (reused or computed, with `incremental`/`delta`), `built`, and `progress` for map nodes;
+  - `ctx`: `emit(cumulative)` → `text` deltas (`reset` if a text ever doesn't extend the previous one); `note` → event; new `ctx.partial(hits)` and `ctx.progress(done, total, unit)`; `ctx.sample` is wrapped only when there is a listener.
+- `pkg/llm/fake.go`: `Pieces`/`Delay` stream a reply in parts and honour ctx between parts, for the delta and cancellation tests.
+- `pkg/ragjs/events_test.go`:
+  - `TestRunEventsInScope`: the event sequence (build, run, node pairs, hits capped at 2 without chunks, context, at least 2 text deltas that join to `answer.text`, runEnd), agentic `tool` start/end, no events after `close()` or from unscoped runs, and no implicit scope after an await;
+  - `TestInterleavedScopesStayIsolated`: two scoped runs over a streaming fake. Their sinks interleave (`/ab+a|ba+b/`), each sees only its own query, and `detail.chunks` applies per scope.
+
+### What worked
+```
+go test ./pkg/ragjs -count=1                       ok (3.3 s)
+go test ./pkg/ragjs ./pkg/runner -count=1          ok (runner 67.7 s) — existing onNode/onText users unchanged
+event types of a scoped first run: build@files progress@parse … build@ix-text built run node:start@text hits@text node:end@text node:start@pack context@pack node:end@pack node:start@answer text@answer ×4 node:end@answer runEnd
+```
+
+### What didn't work
+- The first test expected node `retrieve-text` (`missing node:start@retrieve-text in … node:start@text …`). A `retrieve('text')` node's id is `text` (`id: p => p.index`); only the test was wrong.
+
+### What I learned
+- A first query against an unbuilt plan streams its whole build (`build` per node, with `progress` from the parse and chunk map nodes) before `run`. That falls out of passing `onEvent` into the triggered build, and it's what the guide's §8.4 wanted.
+
+### What was tricky to build
+- **Not counting a run twice.** `rag.run` → `Engine.run` → `Session.run` → maybe `Engine.build`, and each could capture the scope. Only the public entry points call `scoped()`. The options it returns carry `scope: null`, and the internal build call passes `scope: null` explicitly, because it can run synchronously inside `withScope`.
+
+### What warrants a second pair of eyes
+- `Engine.run` lost and regained `async`; if it were synchronous, `compile` errors would throw instead of rejecting.
+- `ctx.emit` with text that doesn't extend the previous text sends `reset` plus the whole text. No component does that today.
+
+### What should be done in the future
+- `rerank.model` progress per batch needs a Go callback; it is not wired yet.
+
+### Code review instructions
+- Read `newScope`/`withScope`/`scoped` (search for `request scopes and events` in `rag.js`), then the `emit(` calls in `Session.run`.
+- Validate with `go test ./pkg/ragjs -run 'Events|Interleaved' -v`.
