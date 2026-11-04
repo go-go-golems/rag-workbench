@@ -10,6 +10,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/go-go-golems/go-go-goja/pkg/jsverbs"
+
 	"github.com/dop251/goja"
 	"github.com/go-go-golems/go-go-goja/pkg/engine"
 
@@ -23,6 +25,9 @@ type AppSpec struct {
 	Name  string // URL segment, e.g. "reports"
 	Path  string // app directory (with app.js) or a workbench script
 	Files []File // corpus for rag.files(...) sources (script form)
+	// Verbs are the app directory's jsverbs verbs (RAGWB-004 endpoints); the
+	// runtime factory must then use Verbs.RequireLoader(). Nil: no verb endpoints.
+	Verbs *jsverbs.Registry
 }
 
 // ServedApp is one opened app: a long-lived runtime holding the built plan and a
@@ -36,6 +41,9 @@ type ServedApp struct {
 	rt   *engine.Runtime
 	stop context.CancelFunc
 	once sync.Once
+	// verb endpoints
+	verbs  *jsverbs.Registry
+	verbMu sync.Mutex // held from announcing a scope until the verb took it (Invoke)
 }
 
 // The serve harness evaluates the app once and keeps a run/lookup API in
@@ -45,7 +53,7 @@ const serveHarness = `(async (__mode, __path, __src, __opts) => {
   rag.configure({ files: () => __opts.files || [] });
   const now = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
   let out;
-  if (__mode === 'module') out = require(__path) || {};
+  if (__mode === 'module') out = require(__opts.modulePath || __path) || {};
   else {
     const log = (...a) => console.log(...a);
     const fn = new Function('rag', 'gui', 'log', 'kit', '"use strict";return (async () => {\n' + __src + '\n})();');
@@ -90,7 +98,24 @@ const serveHarness = `(async (__mode, __path, __src, __opts) => {
   const NB_HITS = 40;
   // after a rebuild (a query found the sources changed, or refresh): release the old version
   let artKey = art0.key;
-  const collect = () => { const a = art(); if (a && a.key !== artKey) { artKey = a.key; return eng.gc(ir); } return null; };
+  // gc keeps the outputs of every plan run recently: the app's and those its verbs ran
+  const collect = () => { const a = art(); if (a && a.key !== artKey) { artKey = a.key; return eng.gc([ir, ...eng.recentIrs()]); } return null; };
+  // verb endpoints (RAGWB-004): a captured verb function is wrapped once, so that
+  // an invocation the host announced (__ragwbPending) runs in its request scope
+  globalThis.__ragwbWrapVerb = (entry, name) => {
+    const f = entry && entry[name];
+    if (typeof f !== 'function' || f.__ragwb) return typeof f === 'function';
+    const w = function (...args) {
+      const p = globalThis.__ragwbPending;
+      globalThis.__ragwbPending = null;
+      if (!p) return f.apply(this, args);
+      p.entered();
+      return rag.withScope(p.scope, () => f.apply(this, args));
+    };
+    w.__ragwb = true;
+    entry[name] = w;
+    return true;
+  };
   globalThis.__serve = {
     // refresh: rebuild now if the sources changed (serve --watch), so the next query doesn't wait
     refresh: async () => {
@@ -149,7 +174,16 @@ func OpenApp(ctx context.Context, factory *engine.RuntimeFactory, spec AppSpec) 
 		stop()
 		return nil, err
 	}
-	a := &ServedApp{Name: spec.Name, rt: rt, stop: stop}
+	a := &ServedApp{Name: spec.Name, rt: rt, stop: stop, verbs: spec.Verbs}
+	modulePath := ""
+	if spec.Verbs != nil && mode == "module" {
+		// the jsverbs loader knows the scanned files by module path (/app.js), and
+		// requiring app.js through it is what captures verbs declared there
+		root, _ := filepath.Abs(spec.Verbs.RootDir)
+		if rel, err := filepath.Rel(root, path); err == nil && !strings.HasPrefix(rel, "..") {
+			modulePath = "/" + filepath.ToSlash(rel)
+		}
+	}
 	files := make([]any, 0, len(spec.Files))
 	for _, f := range spec.Files {
 		files = append(files, map[string]any{"name": f.Name, "text": f.Text})
@@ -163,7 +197,7 @@ func OpenApp(ctx context.Context, factory *engine.RuntimeFactory, spec AppSpec) 
 		if !ok {
 			return nil, fmt.Errorf("serve harness is not a function")
 		}
-		return fn(goja.Undefined(), vm.ToValue(mode), vm.ToValue(path), vm.ToValue(src), vm.ToValue(map[string]any{"files": files}))
+		return fn(goja.Undefined(), vm.ToValue(mode), vm.ToValue(path), vm.ToValue(src), vm.ToValue(map[string]any{"files": files, "modulePath": modulePath}))
 	})
 	if err != nil {
 		a.Close()

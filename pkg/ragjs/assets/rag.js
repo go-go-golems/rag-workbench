@@ -1392,6 +1392,8 @@
       this.env = env;
       this.memo = new Map();   // build digest → { value, stats }
       this.retired = [];       // superseded outputs, closed by the next gc (RAGWB-003 §6.7)
+      this.recent = new Map(); // recently run plans (noteIr)
+      this.building = new Map(); // digest set → in-flight build promise (buildShared)
       this.items = new Map();  // item key → value
       this.bakes = new Map();
       this.fileDigests = new Map();
@@ -1612,9 +1614,9 @@
     // their Go handles (record views, bleve indexes) closed one gc later, so a
     // query that started before the rebuild keeps working. Values still reachable
     // from live entries are never closed.
-    gc(ir) {
-      ir = compile(ir);
-      const liveDigests = new Set(this.digests(ir).values());
+    gc(irs) {
+      const liveDigests = new Set();
+      for (const ir of arr(irs)) for (const d of this.digests(compile(ir)).values()) liveDigests.add(d);
       const live = new Set();
       for (const [d, m] of this.memo) if (liveDigests.has(d) && !(m.lazy && !m.lazy.done)) live.add(m.value);
       const closing = this.retired.filter(v => !live.has(v));
@@ -1761,7 +1763,29 @@
       return this._art;
     }
     session(irOrGetter) { return new Session(this, typeof irOrGetter === 'function' ? irOrGetter : () => irOrGetter); }
-    async run(ir, signals = {}, opts = {}) { return this.session(compile(ir)).run(signals, scoped(opts)); } // scoped() runs before the first await
+    async run(ir, signals = {}, opts = {}) { // scoped() runs before the first await
+      ir = compile(ir);
+      this.noteIr(ir);
+      return this.session(ir).run(signals, scoped(opts));
+    }
+    // plans this engine ran recently (serve: the app's plan plus those verbs ran),
+    // so gc keeps their outputs (RAGWB-004 §6.8)
+    noteIr(ir) {
+      const key = ir.id + ':' + hash(ir.nodes.map(n => [n.id, n.t, n.p]));
+      this.recent.delete(key);
+      this.recent.set(key, ir);
+      while (this.recent.size > 8) this.recent.delete(this.recent.keys().next().value);
+    }
+    recentIrs() { return [...this.recent.values()]; }
+    // one build per digest set at a time: a second query for a plan being built waits for it
+    buildShared(ir, opts = {}) {
+      const key = [...this.digests(ir).values()].join(',');
+      const cur = this.building.get(key);
+      if (cur) { if (opts.onEvent) try { opts.onEvent({ type: 'build', waiting: true }); } catch (_) { /* listener */ } return cur; }
+      const p = this.build(ir, opts).finally(() => this.building.delete(key));
+      this.building.set(key, p);
+      return p;
+    }
   }
 
   function passesOf(ir, report) {
@@ -1799,7 +1823,7 @@
       const engine = this.engine;
       const emit = safeEmit(opts) || (() => {});
       let art = engine.artifacts(ir);
-      if (!art) { const rep = await engine.build(ir, { signal: opts.signal, onProgress: opts.onProgress, onEvent: opts.onEvent, scope: null }); if (!rep.ok) throw new RagError('build', rep.errors.join('\n')); art = engine.artifacts(ir); }
+      if (!art) { const rep = await engine.buildShared(ir, { signal: opts.signal, onProgress: opts.onProgress, onEvent: opts.onEvent, scope: null }); if (!rep.ok) throw new RagError('build', rep.errors.join('\n')); art = engine.artifacts(ir); }
       // live outputs memoized against other artifacts (a rebuilt corpus) are stale
       if (this.artKey !== art.key) { this.memo.clear(); this.artKey = art.key; }
       const t0 = now();

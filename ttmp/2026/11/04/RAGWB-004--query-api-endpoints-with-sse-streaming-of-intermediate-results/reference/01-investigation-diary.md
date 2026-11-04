@@ -167,3 +167,76 @@ event types of a scoped first run: build@files progress@parse … build@ix-text 
 ### Code review instructions
 - Read `newScope`/`withScope`/`scoped` (search for `request scopes and events` in `rag.js`), then the `emit(` calls in `Session.run`.
 - Validate with `go test ./pkg/ragjs -run 'Events|Interleaved' -v`.
+
+## Step 4: Phase 2 — verbs run in the served runtime, in request scopes (ServedApp.Invoke)
+
+The host can now run an app's verbs in the app's long-lived runtime:
+- `ParseVerbParams` turns a JSON object (or query-string lists) into the verb's glazed values, the way the CLI parses flags;
+- `ServedApp.Invoke` runs the verb inside a request scope and returns its result and how many `rag.run`s it made.
+
+`app.js` may declare verbs. When it does, the harness requires it through the jsverbs loader (`/app.js`), which is what captures them.
+
+The scope handoff needed no go-go-goja change (Phase 0 dropped):
+1. under a per-app mutex, the host wraps the function jsverbs captured, once, and announces a pending scope;
+2. it starts `jsverbs.InvokeInRuntime` in a goroutine;
+3. it releases the mutex as soon as the wrapper has taken the scope.
+
+Verbs run, and interleave, without the lock. Four concurrent `answer` requests over a streaming fake LLM each received only their own events.
+
+### Prompt Context
+**User prompt (verbatim):** see Step 3.
+**Assistant interpretation:** Guide Phase 2 (host), with the D4 deviation recorded.
+**Inferred user intent:** see Step 3.
+**Commit (code):** the commit for this step: "RAGWB-004 Phase 2: served verbs in request scopes".
+
+### What I did
+- `pkg/runner/verbs.go` (new):
+  - `Event{Type, Data}`, `EventSink`, `SinkFunc`, `Detail{Top, Chunks}`, `ParamError{Fields}`;
+  - `kebab`, a copy of jsverbs' field-name normalization, so JSON keys may be `maxTokens` or `max-tokens`;
+  - `DescribeVerb` and `VerbField` (for `GET /verbs`);
+  - `ParseVerbParams`: field index from `CommandDescriptionForVerb(verb).Schema`; nested section objects; `coerce` from JSON numbers and arrays to the field type (an integer that isn't one is an error); `sources.Execute(schema, vals, FromMap(m), FromDefaults())`; a required check;
+  - `ServedApp.Verbs/Verb/Registry`;
+  - `ServedApp.Invoke(ctx, verb, vals, sink, detail) (result, runs, err)`. Events cross into Go as `JSON.stringify` strings, so key order is kept and no export walk is needed; a cancelled ctx aborts the scope (`waitVerb`); the scope is closed after the verb.
+- `pkg/runner/serve.go`:
+  - `AppSpec.Verbs` and `ServedApp.verbs/verbMu`;
+  - the module path (`/app.js`) is passed to the harness as `modulePath`;
+  - harness: `__ragwbWrapVerb(entry, name)`; `collect()` calls `eng.gc([ir, ...eng.recentIrs()])`.
+- `pkg/ragjs/assets/rag.js`:
+  - `Engine.run` records the IR (`noteIr`, an LRU of 8; `recentIrs()`);
+  - `Engine.gc(irs)` takes a list;
+  - `Engine.buildShared`: a second query for a plan being built waits for that build (`{type:'build', waiting:true}`); `Session.run` uses it.
+- `pkg/runner/verbs_test.go`:
+  - an app whose `app.js` declares `search`, `answer` and `late` (a verb that awaits before `rag.run` and passes `{scope}`, plus a custom `scope.emit`);
+  - `TestServedVerbInvokeStreamsEvents`: rows, 1 run, node/hits events, the default `k` from the field, deltas that join to the answer text, events from `late`;
+  - `TestServedVerbsConcurrentScopes`: four goroutines, each sink sees only its own `run.signals.q`;
+  - `TestServedVerbParams`: `k:"many"`, an unknown key and `k:2.5` are `ParamError`s; the query-string form `{"k":["4"]}` works; `DescribeVerb`.
+
+### What worked
+```
+go test ./pkg/runner -run TestServedVerb -v
+--- PASS: TestServedVerbInvokeStreamsEvents (0.18s)
+--- PASS: TestServedVerbsConcurrentScopes (0.19s)
+--- PASS: TestServedVerbParams (0.13s)
+go vet ./... && go test ./... -count=1                     all ok
+```
+
+### What didn't work
+- First compile: a function-local `type done struct` passed to `waitVerb`, which was declared with an anonymous struct type (`cannot use res (variable of type chan done) as <-chan struct{…}`). Fixed with a package type `verbDone`.
+
+### What I learned
+- jsverbs' loader replaces the require loader with one that knows only the scanned files, keyed `/rel/path.js`. The serve harness used to `require()` the absolute path of `app.js`, which that loader cannot resolve, so it must use the module path. Every other file the app requires is scanned too: all `.js` files except `*.wb.js`.
+- `InvokeInRuntime` returns `result.Export()`. An integer JS result comes back as `int64` (the `late` verb test), and objects as `map[string]any`, which is ready for JSON.
+
+### What was tricky to build
+- **The scope handoff without upstream changes.** The announce → enter window must be exclusive, but the verb's run must not be, or a slow LLM answer would block every search. The mutex covers only "announce, start invoking, wait until the wrapper takes the scope". If invoking fails before the wrapper runs (argument binding, require), the pending scope is withdrawn under the same lock.
+
+### What warrants a second pair of eyes
+- If something other than the host calls a wrapped verb function (another verb calling it directly, say), it runs unscoped, because there is no pending scope. That is correct but silent.
+- `Engine.buildShared` keys on the digest list; a build that fails is removed from the map (`finally`), so the next query retries.
+
+### What should be done in the future
+- Phase 3 (HTTP and SSE), and wiring the verb scan into `ragwb serve`.
+
+### Code review instructions
+- Read `Invoke` in `pkg/runner/verbs.go` and `__ragwbWrapVerb` in `serve.go`.
+- Validate with `go test ./pkg/runner -run TestServedVerb -v`.
