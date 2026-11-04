@@ -20,8 +20,9 @@ type Embedder interface {
 }
 
 // Vectors installs index.vector (dense retrieval) and rerank.model (cross-encoder
-// reranking). Both call the Embedder synchronously from the VM goroutine: fine for
-// CLI runs; a server should give each session its own runtime (see diary step 11).
+// reranking). Building and query embedding call the Embedder synchronously from
+// the VM goroutine; rerank.model runs its batched requests asynchronously
+// (rerank.go, RAGWB-005), so a served runtime keeps answering meanwhile.
 type Vectors struct {
 	Embedder Embedder
 	Cache    *EmbedCache // optional persistent embedding cache
@@ -65,14 +66,25 @@ const vectorsJS = `(function (rag, h) {
   rag.define('rerank.model', {
     id: () => 'rerank', phase: 'live', in: ['hits'], out: 'hits', trigger: 'submit',
     describe: p => (p.model || 'bge-rr-v2-m3') + ' · top ' + (p.k ?? 30),
-    run: (s, ctx, hits, p) => {
+    // asynchronous and batched (RAGWB-005): the model requests run off the
+    // runtime's goroutine, each finished batch reports progress and the ranking
+    // so far, and an aborted request cancels the rest
+    run: async (s, ctx, hits, p) => {
       hits = hits || [];
       const k = Math.min(hits.length, Number(p.k ?? 30), 99);
       if (!k || !s.q) return hits;
       const head = hits.slice(0, k), rest = hits.slice(k);
       const docs = head.map(x => { const c = ctx.chunk(x.id) || {}; return [c.title, (c.headingPath || []).join(' › '), c.text].filter(Boolean).join('\n\n'); });
-      const ranked = h.rerank(String(p.model || 'bge-rr-v2-m3'), String(s.q), docs);
-      const out = ranked.map(r => ({ ...head[r.index], score: +r.score.toFixed(4), reason: 'cross-encoder ' + r.score.toFixed(3) }));
+      const toHit = r => ({ ...head[r.index], score: +r.score.toFixed(4), reason: 'cross-encoder ' + r.score.toFixed(3) });
+      const scored = [];
+      const ranked = await h.rerankAsync(String(p.model || 'bge-rr-v2-m3'), String(s.q), docs,
+        { batch: Number(p.batch ?? 8), concurrency: Number(p.concurrency ?? 2) },
+        part => {
+          for (const r of part) scored.push(r);
+          if (ctx.progress) ctx.progress(scored.length, docs.length, 'passages');
+          if (ctx.partial && scored.length < docs.length) ctx.partial([...scored].sort((a, b) => b.score - a.score || a.index - b.index).map(toHit));
+        }, ctx.signal);
+      const out = ranked.map(toHit);
       return p.keepTail === false ? out : out.concat(rest);
     },
   });
@@ -191,20 +203,7 @@ func (v *Vectors) Install(vm *goja.Runtime, rag *goja.Object) error {
 		}
 		return v.object(vm, ix, len(ix.ids), 0, 0), nil
 	})
-	_ = h.Set("rerank", func(model, query string, docs []string) ([]map[string]any, error) {
-		if v.Embedder == nil {
-			return nil, fmt.Errorf("rerank.model: no rerank backend (run with --embed lunaroute)")
-		}
-		res, err := v.Embedder.Rerank(context.Background(), model, query, docs, len(docs))
-		if err != nil {
-			return nil, fmt.Errorf("rerank.model: %w", err)
-		}
-		out := make([]map[string]any, len(res))
-		for i, r := range res {
-			out[i] = map[string]any{"index": r.Index, "score": r.Score}
-		}
-		return out, nil
-	})
+	_ = h.Set("rerankAsync", v.rerankAsync(vm))
 	val, err := vm.RunString(vectorsJS)
 	if err != nil {
 		return err
