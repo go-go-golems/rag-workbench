@@ -19,6 +19,7 @@ type LineageEntry struct {
 	Lineage  string    `json:"lineage"`
 	StoreKey string    `json:"storeKey"`
 	Digest   string    `json:"digest"`
+	Inputs   []string  `json:"inputs,omitempty"` // build digests of the inputs it was computed from
 	Created  time.Time `json:"created"`
 }
 
@@ -67,6 +68,21 @@ func (s *Store) LineageLatest(lineage string) (*LineageEntry, error) {
 		}
 	}
 	return nil, nil
+}
+
+// LineageList returns the versions whose payloads are still stored, newest first.
+func (s *Store) LineageList(lineage string) ([]LineageEntry, error) {
+	es, err := s.lineageRead(lineage)
+	if err != nil {
+		return nil, err
+	}
+	out := es[:0]
+	for _, e := range es {
+		if m, _ := s.Has(e.StoreKey); m != nil {
+			out = append(out, e)
+		}
+	}
+	return out, nil
 }
 
 // LineageRecord makes e the newest version of its lineage (keeping LineageKeep).

@@ -1299,6 +1299,7 @@
   const isView = v => v != null && typeof v === 'object' && v.__records !== undefined;
   const asArray = v => (isView(v) ? v.toArray() : v);
   const JSON_PERSIST = { save: v => v, load: x => x };
+  const FULL_DELTA = Object.freeze({ full: true });
   const persistOf = def => (!def || def.persist === false ? null : def.persist || (['docs', 'chunks'].includes(def.out) ? JSON_PERSIST : null));
   const storeKey = (d, def) => hash([d, def.src || '']);
   class Engine {
@@ -1392,10 +1393,12 @@
       }
       const report = { ok: true, ms: 0, nodes: {}, errors: [] };
       const outputs = new Outputs();
+      const deltas = new Map(); // node id → its change since the base the next node continues from (RAGWB-003 §6.5)
       const counter = { calls: 0 };
       for (const n of ir.nodes) {
         if (n.phase !== 'build') continue;
         const d = dg.get(n.id);
+        deltas.set(n.id, FULL_DELTA);
         const st = { id: n.id, t: n.t, digest: d, reused: false, ms: 0, count: 0, computed: 0, cached: 0, calls: 0 };
         report.nodes[n.id] = st;
         const allowCalls = opts.calls ?? (this.env.buildCalls !== 'explicit');
@@ -1413,6 +1416,7 @@
           const m = this.memo.get(d);
           outputs.set(n.id, m.lazy && !m.lazy.done ? m.lazy : m.value);
           Object.assign(st, { reused: true, count: m.count, ms: 0 });
+          deltas.set(n.id, { none: true, from: d });
           continue;
         }
         if (costly && !allowCalls && this.partial.has(d)) {
@@ -1426,11 +1430,18 @@
         const c0 = counter.calls;
         try {
           const p = await this.resolveBakes(n, n.p, outputs, ir);
-          const inputs = n.in.map(i => asArray(outputs.get(i)));
+          const inputArrays = () => n.in.map(i => asArray(outputs.get(i))); // not before a delta build: it would read every input
           const ctx = this.buildCtx(n, ir, outputs, counter, opts.signal);
-          let value;
-          if (def.map) {
-            const items = inputs[0] || [];
+          let value, lazy = null;
+          const inc = def.delta && !def.map && !opts.full && !opts.force && opts.persist !== false
+            ? await this.tryDelta(n, def, d, lineages.get(n.id), deltas, outputs, ctx, p, opts) : null;
+          if (inc) {
+            if (inc.lazy) { lazy = new Lazy(inc.lazy, ms => timed('load', n.id, ms, n.t)); outputs.set(n.id, lazy); }
+            else value = inc.value;
+            deltas.set(n.id, { ...inc.delta, full: false, from: inc.base.digest });
+            Object.assign(st, { incremental: true, base: inc.base.storeKey, delta: inc.summary || {} });
+          } else if (def.map) {
+            const items = inputArrays()[0] || [];
             const fnKey = hash([n.t, p]);
             const results = new Array(items.length);
             let next = 0, budget = (p.budget && p.budget.calls) ?? Infinity;
@@ -1459,23 +1470,28 @@
             value = results.flat().filter(x => x != null);
             if (def.post) value = def.post(value);
           } else {
-            value = await def.all(inputs, ctx, p, n);
+            value = await def.all(inputArrays(), ctx, p, n);
           }
-          outputs.set(n.id, value);
-          st.count = Array.isArray(value) ? value.length : value && value.N != null ? value.N : value ? Object.keys(value).length : 0;
+          if (inc) st.count = inc.count ?? (lazy ? 0 : value.length ?? 0);
+          else {
+            outputs.set(n.id, value);
+            st.count = Array.isArray(value) ? value.length : value && value.N != null ? value.N : value ? Object.keys(value).length : 0;
+          }
+          if (inc && !lazy) outputs.set(n.id, value);
           st.calls = counter.calls - c0;
           if (st.deferred || st.skipped) this.partial.set(d, { value, count: st.count, deferred: (st.deferred || 0) + (st.skipped || 0) });
           else {
-            this.memo.set(d, { value, count: st.count });
+            if (lazy) { const lz = lazy, count = st.count; this.memo.set(d, { get value() { return lz.force(); }, count, lazy: lz }); }
+            else this.memo.set(d, { value, count: st.count });
             this.partial.delete(d);
             const store = this.env.artifacts, codec = store ? persistOf(def) : null;
             if (codec && opts.persist !== false) {
               try {
                 const sk = storeKey(d, def);
-                store.save(sk, n.t, codec.save(value, n.p), st.count);
+                store.save(sk, n.t, codec.save(lazy || value, n.p), st.count);
                 st.saved = true;
                 const lin = lineages.get(n.id);
-                if (lin && store.lineageRecord) store.lineageRecord(lin, sk, d);
+                if (lin && store.lineageRecord) store.lineageRecord(lin, sk, d, n.in.map(i => dg.get(i)));
               } catch (e) { this.env.log && this.env.log(`[${n.id}] not persisted: ${e.message || e}`); }
             }
           }
@@ -1499,6 +1515,31 @@
       this.lastBuild = report;
       this.emit({ type: 'built', report });
       return report;
+    }
+    // Delta build of one node (RAGWB-003 §6.5): continue from the newest stored
+    // version of this node's lineage that was computed from exactly the versions
+    // the input deltas start from. null (no base, an input without a delta, the
+    // component declined or threw) → the node is computed fully.
+    async tryDelta(n, def, d, lin, deltas, outputs, ctx, p, opts) {
+      const store = this.env.artifacts;
+      if (!lin || !store || !store.lineageList) return null;
+      const ins = n.in.map(i => deltas.get(i) || FULL_DELTA);
+      if (ins.some(x => x.full && !def.delta.acceptsFull)) return null;
+      const froms = ins.map(x => x.from);
+      const base = store.lineageList(lin).find(e => e.digest !== d && e.inputs.length === froms.length && e.inputs.every((x, i) => x === froms[i]));
+      if (!base) return null;
+      const codec = persistOf(def);
+      const b = { storeKey: base.storeKey, digest: base.digest, raw: () => store.load(base.storeKey), load: () => codec.load(store.load(base.storeKey), n.p) };
+      const inputs = n.in.map((id, i) => ({ get value() { return outputs.get(id); }, delta: ins[i] }));
+      // inherit, don't spread: ctx.docs/ctx.chunks are getters that read every doc and chunk
+      const dctx = Object.assign(Object.create(ctx), { store, deltaMaxFraction: opts.deltaMaxFraction ?? this.env.deltaMaxFraction ?? 0.2 });
+      try {
+        const r = await def.delta.apply(b, inputs, dctx, p);
+        return r ? { ...r, base: b } : null;
+      } catch (e) {
+        ctx.log(`delta build failed, building fully: ${e.message || e}`);
+        return null;
+      }
     }
     buildCtx(n, ir, outputs, counter, signal) {
       const firstOf = t => { const id = ir.nodes.find(x => x.phase === 'build' && x.out === t && outputs.has(x.id)); return id ? asArray(outputs.get(id.id)) : []; };

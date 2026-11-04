@@ -269,3 +269,104 @@ go vet ./pkg/... && go test ./pkg/... -count=1   all ok (runner 75 s)
 ### Code review instructions
 - Read `pkg/natives/manifest.go` `Diff`, then `Engine.lineages` in `rag.js`, then the runner test.
 - Validate with `go test ./pkg/natives ./pkg/artifacts ./pkg/runner -run 'Manifest|Lineage' -count=1 -v`.
+
+## Step 5: Phase 3 — records2, the delta protocol, and source/parse/chunk deltas (one-note edit: 21 + 23 + 24 ms)
+
+Phase 3 makes the first three nodes of the pipeline incremental. Docs and chunks are now stored as `records2`: 64 bbolt shards by document plus an `index.json` that holds the canonical order. A new version copies only the shards of the documents it touched and hard-links the rest.
+
+`Engine.build` gained the delta protocol. Each node gets a delta (`{none}`, `{full}`, or a component-specific change set). Each delta carries `from`, the digest of the version it diffs from. A node continues from the newest stored version of its lineage whose recorded input digests equal those `from`s, so a delta is never applied to a base built from different inputs.
+
+On a copy of the vault, after a one-line edit to one note:
+- `source.dir` takes 21 ms (a diff against the stored manifest);
+- `parse.markdown` takes 23 ms;
+- `chunk.sections` takes 24 ms.
+
+Before, they took 0.4 s, 2.5 s and 2.5 s. The two indexes still rebuild fully (ix-text 14–18 s, ix-meta 2–4.7 s); Phase 4 makes them incremental.
+
+### Prompt Context
+**User prompt (verbatim):** see Step 2.
+**Assistant interpretation:** Phase 3 of the guide: the copy-on-write record format, the engine protocol and the first three component deltas.
+**Inferred user intent:** see Step 2.
+**Commit (code):** the commit for this step: "RAGWB-003 Phase 3: records2, delta protocol, source/parse/chunk deltas".
+
+### What I did
+- `pkg/natives/records2.go` (new):
+  - `WriteRecords2(dir, kind, docs)` writes the 64 shards in parallel;
+  - `CowRecords2(base, dst, remove, upsert)`: kept documents and upserts are merged by name; untouched shards are hard-linked (`linkOrCopy`); a touched shard is copied, then its documents are deleted and re-put;
+  - the reader `Records2`: `Len`, `Get`, `Has`, `Slice` (ordinal ranges via prefix sums over the index), `DocRecords`, `Order`, `DocInfo`, `DocByName`, `Relocate` (reopen after the store moves the directory), `Close`.
+  - A record's shard comes from its id: the part before `#` is its document, and other ids go into `index.ext`.
+- `pkg/natives/records2_codec.go` (new):
+  - `ChunksToR2` and `DocsToR2` (a repeated doc id joins its first group);
+  - `R2Chunks` and `R2Docs`;
+  - `records2Object`, the JS side of a RecordView for docs or chunks, with the reader as a hidden handle;
+  - `records2Handle`, `docsHandle`.
+- `pkg/natives/persist.go`:
+  - docs and chunks are saved as `records2` directory payloads;
+  - a `records2` view (a delta output) is moved in from the store's temp area and reopened there. Any other `records2` view, such as an input passed through, is linked into a new directory first, so an artifact is never moved away from its key;
+  - `records2` loads as a view;
+  - a `manifest` codec;
+  - `env.artifacts` gains `lineageList(l)`, `lineageRecord(l, key, digest, inputs)`, `tempDir()` (unsaved temp directories are removed when the runtime closes) and `view(records)`.
+- `pkg/artifacts/lineage.go`: `LineageEntry.Inputs`, plus `LineageList`, which returns stored versions only.
+- `pkg/natives/manifest.go` and `sourcedir.go`:
+  - the manifest stays in Go (`manifestObject`/`manifestHandle`);
+  - `h.diff(p, base, maxFraction)`;
+  - the `source.dir` delta: its value is lazy (the files are re-read only if a downstream node needs all of them), and its delta is `{added, changed, removed}`.
+- `pkg/natives/delta.go` (new):
+  - `ParseDelta`: parse the added and changed files; removed files map to doc ids through the base index (`DocByName`). It declines (a full build) on doc-id collisions.
+  - `ChunkDelta`: chunk the upserted docs with per-doc `AssignIDs`; collect the old chunk ids of removed and upserted docs, for the index deltas in Phase 4; copy-on-write the base.
+- `pkg/natives/markdown_native.go`: the `delta.apply` hooks for `parse.markdown` and `chunk.sections`, `h.parseDelta` and `h.chunkDelta`. The full `h.chunk` sets `Chunk.DocName` (Go-only, `json:"-"`).
+- `pkg/ragjs/assets/rag.js`:
+  - `FULL_DELTA`;
+  - `Engine.build` keeps `deltas` and calls `tryDelta` before `map`/`all`;
+  - a component may return `lazy`;
+  - stats `incremental`, `base` and `delta`;
+  - lineage records carry the input digests;
+  - inputs are materialized only for a full computation (`inputArrays()`).
+- Tests:
+  - `pkg/natives/records2_test.go`: six random copy-on-write steps over 300 docs; each equals a fresh write (records, index, `Order`, `Get`, slices across doc boundaries), and at least 50 of 64 shards are hard links;
+  - `pkg/runner/delta_test.go`: eight edit steps on a temp corpus (51 notes): edit, append, add, remove, rename, touch, emptying a note, a new subfolder. After each step, an incremental build is compared with a full build in a fresh store: docs JSON, chunks JSON, reading order and top-8 search results (ties normalized) are equal, and all 8 steps ran incrementally.
+  - `records_test.go` now expects `records2`.
+
+### What worked
+```
+go test ./pkg/natives -run TestRecords2 -v                         PASS (0.18s)
+go test ./pkg/runner -run TestDeltaBuildEqualsFullBuild -v         PASS, 8/8 steps incremental
+  step 1 (edit n10.md, append n03.md): chunks inc=true {docs:2 removes:6 upserts:7}; files {upserts:2 unchanged:49}; parse {upserts:2}
+  step 3 (rename …, touch n23.md): files {removes:1 upserts:1 unchanged:50} — the touch is not a change
+go test ./pkg/... -count=1                                          all ok
+```
+Vault copy (2,287 notes, 85,882 chunks; `$S/vault` = markdown files rsynced into the scratchpad, parc app with `VAULT` pointed there):
+```
+cold (ragwb --timings … verbs --dir parc parc search):  23.0 s total — ix-text 15.4 s, parse 2.5 s, chunks 2.5 s, ix-meta 1.9 s, files 0.45 s
+one-line edit (ragwb run -v build.js):  files 21.4 ms INC {upserts:1, unchanged:2286} · parse 22.6 ms INC · chunks 24 ms INC {upserts:40, removes:40} · ix-text 18.4 s full · ix-meta 4.2 s full
+```
+- The whole-vault markdown parity run from Step 3 passed (`--- PASS: TestMarkdownParityVault (1051.93s)`; `11736345 bytes of chunks identical; build js=334854ms go=4198ms`).
+
+### What didn't work
+- The first vault run showed `chunks 2424.9 INC`: incremental, but 2.4 s. The cause was `const dctx = { ...ctx, … }`. Spreading invokes `ctx`'s `docs` and `chunks` getters (`firstOf('docs')` → `asArray(view)`), which materialized all 2,282 docs. The fix is `Object.assign(Object.create(ctx), …)`, and chunks dropped to 24 ms.
+- The first `Engine.build` change computed `inputs = n.in.map(i => asArray(outputs.get(i)))` before trying the delta. That forces the lazy files and materializes the views, so it became `inputArrays()`, called only on the full path.
+- The first manifest round trip went through JS (`JSON.parse(h.manifest(p))`). I caught before running it that nanosecond mtimes (~1.7e18) exceed 2^53: JS numbers would round them, every stat would mismatch, and every file would be re-hashed. The fix is the Go-only `manifest` codec.
+- `TestDeltaBuildEqualsFullBuild` first failed on top-8 results: the same scores, but a different order among three tied hits (0.1928). The guide's equivalence contract (§6.9) allows that, so the test sorts ties by id and drops the last tied group at the cut.
+- `ragwb -v …` is not a global flag (`unknown command`); `-v` belongs to `ragwb run`.
+
+### What I learned
+- Every engine-side convenience that reads "all docs" is a hazard for delta builds: getters, `asArray`, `{...spread}`. The delta path must touch only the handles.
+- Changing `rag.js` moves the store namespace, so after every `rag.js` edit the next vault build is full. That is expected, but it confuses measurements.
+- On disk, `du` counts hard links once. Incremental versions add 6–17 MB each, but a full records2 store is larger than v1: chunks 436 MB against 272 MB, docs 316 MB. The `i` and `o` buckets fill pages in random order, and 64 small files carry fixed overhead.
+
+### What was tricky to build
+- **Delta ↔ base consistency.** A delta says "changes since version X". The node's base must have been built from exactly X, or applying the delta yields a wrong output, for example after a build that failed between parse and chunks. Lineage entries now store the input digests, and `tryDelta` picks the newest entry whose inputs equal the deltas' `from`s. A reused input contributes `{none, from: currentDigest}`.
+- **Canonical order under copy-on-write.** Order lives in `index.json`, never in shard key order. Upserts are merged by source name into the kept docs, which reproduces the full build's order: files are sorted by name, and chunks follow docs.
+
+### What warrants a second pair of eyes
+- `saveRecords2`'s rule for moving versus linking, which keys on `.tmp-` under the namespace.
+- `Relocate` reopening after `SaveDir` found an equal output already stored (another process): the shard file names differ, so the reader must re-read the index. It does.
+- Docs are now a view when loaded from the store. `art.docs` iterates the view, and every runner test passes, but presets that index into `art.docs` like an array would see a Map.
+
+### What should be done in the future
+- Phase 4: bleve clone plus delta using `removeIds` and `upsert`; terms rows plus rebuild.
+- Shrink `records2`: `FillPercent` 1 on `r`, a sorted bulk load for `i`, perhaps compressing records.
+
+### Code review instructions
+- Read `tryDelta` and the changed `build` loop in `rag.js`, then `CowRecords2`, then `delta.go`.
+- Validate with `go test ./pkg/natives -run 'Records2|Manifest' -v` and `go test ./pkg/runner -run 'Delta|Lineage|Records' -v`.

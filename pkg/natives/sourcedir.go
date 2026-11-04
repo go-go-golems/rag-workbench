@@ -6,7 +6,6 @@ package natives
 import (
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"io/fs"
 	"os"
@@ -317,11 +316,23 @@ const sourceDirJS = `(function (rag, h) {
       if (r.skipped.length) ctx.log('skipped ' + r.skipped.length + ' file(s): ' + r.skipped.slice(0, 5).map(s => s.name + ' (' + s.reason + ')').join('; '));
       return r.files;
     },
-    // artifact store: the manifest (every file's size, mtime and hash, as a JSON
-    // string) is stored, not the files: loading re-reads them lazily, valid because
+    // artifact store: the manifest (every file's size, mtime and hash) is stored, not the files: loading re-reads them lazily, valid because
     // the digest covers every file's path, size and mtime; a run whose downstream
     // nodes are all stored never reads the source. The next build diffs against it.
-    persist: { save: (_, p) => JSON.parse(h.manifest(p)), load: (_, p) => h.walk(p).files },
+    persist: { save: (_, p) => h.manifest(p), load: (_, p) => h.walk(p).files },
+    // delta build (RAGWB-003 §6.5): diff the tree against the stored manifest;
+    // the files are re-read only if a downstream node needs all of them
+    delta: {
+      apply(base, inputs, ctx, p) {
+        const d = h.diff(p, base.raw(), ctx.deltaMaxFraction);
+        if (d.full) { ctx.log('full build: ' + d.reason); return null; }
+        return {
+          lazy: () => h.walk(p).files, count: d.count,
+          delta: { full: false, added: d.added, changed: d.changed, removed: d.removed },
+          summary: { upserts: d.added.length + d.changed.length, removes: d.removed.length, unchanged: d.unchanged },
+        };
+      },
+    },
   });
 })`
 
@@ -345,13 +356,46 @@ func (s *SourceDir) Install(vm *goja.Runtime, rag *goja.Object) error {
 	})
 	_ = h.Set("digest", s.Digest)
 	_ = h.Set("lineage", s.Lineage)
-	_ = h.Set("manifest", func(p map[string]any) (string, error) {
+	// the manifest stays in Go (codec "manifest"): nanosecond mtimes don't survive JS numbers
+	_ = h.Set("manifest", func(p map[string]any) (goja.Value, error) {
 		m, err := s.LastManifest(p)
 		if err != nil {
-			return "", err
+			return nil, err
 		}
-		b, err := json.Marshal(m)
-		return string(b), err
+		return manifestObject(vm, m), nil
+	})
+	fileJS := func(f FileRecord) map[string]any {
+		return map[string]any{"name": f.Name, "path": f.Path, "text": f.Text, "size": f.Size, "mtime": f.Mtime}
+	}
+	// diff(p, storedManifest, maxFraction) → {full, reason} | {full: false, added, changed, removed, unchanged, count}
+	_ = h.Set("diff", func(p map[string]any, base goja.Value, maxFraction float64) (map[string]any, error) {
+		d, err := s.Diff(p, manifestHandle(base), maxFraction)
+		if err != nil {
+			return nil, err
+		}
+		if d.Full {
+			return map[string]any{"full": true, "reason": d.Reason}, nil
+		}
+		added, changed := make([]any, len(d.Added)), make([]any, len(d.Changed))
+		for i, f := range d.Added {
+			added[i] = fileJS(f)
+		}
+		for i, f := range d.Changed {
+			changed[i] = fileJS(f)
+		}
+		removed := make([]any, len(d.Removed))
+		for i, n := range d.Removed {
+			removed[i] = n
+		}
+		count := 0
+		if m, err := s.LastManifest(p); err == nil {
+			for _, e := range m.Entries {
+				if e.Skipped == "" {
+					count++
+				}
+			}
+		}
+		return map[string]any{"full": false, "added": added, "changed": changed, "removed": removed, "unchanged": d.Unchanged, "count": count}, nil
 	})
 	v, err := vm.RunString(sourceDirJS)
 	if err != nil {

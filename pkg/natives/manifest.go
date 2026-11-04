@@ -2,12 +2,15 @@ package natives
 
 import (
 	"crypto/sha256"
+	"encoding/json"
 	"encoding/hex"
 	"fmt"
 	"io/fs"
 	"os"
 	"sort"
 	"strings"
+
+	"github.com/dop251/goja"
 )
 
 // Manifest is what source.dir stores (RAGWB-003 §6.3): every matched file's
@@ -171,4 +174,37 @@ func (s *SourceDir) Lineage(p map[string]any) (string, error) {
 		return "", err
 	}
 	return dp.key(), nil
+}
+
+// manifestObject is the JS side of a manifest: an opaque object with the Go
+// manifest as its handle (persist codec "manifest") and the entry count.
+func manifestObject(vm *goja.Runtime, m *Manifest) *goja.Object {
+	o := vm.NewObject()
+	_ = o.Set("entries", len(m.Entries))
+	_ = o.DefineDataProperty(goHandleKey, vm.ToValue(m), goja.FLAG_FALSE, goja.FLAG_FALSE, goja.FLAG_FALSE)
+	return o
+}
+
+// manifestHandle returns the Go manifest behind manifestObject, or nil.
+func manifestHandle(v goja.Value) *Manifest {
+	o, ok := v.(*goja.Object)
+	if !ok {
+		return nil
+	}
+	h := o.Get(goHandleKey)
+	if h == nil {
+		return nil
+	}
+	m, _ := h.Export().(*Manifest)
+	return m
+}
+
+func EncodeManifest(m *Manifest) ([]byte, error) { return json.Marshal(m) }
+
+func DecodeManifest(b []byte) (*Manifest, error) {
+	var m Manifest
+	if err := json.Unmarshal(b, &m); err != nil {
+		return nil, fmt.Errorf("manifest artifact: %w", err)
+	}
+	return &m, nil
 }

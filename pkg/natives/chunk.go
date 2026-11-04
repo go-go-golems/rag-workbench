@@ -27,6 +27,7 @@ func DefaultChunkParams() ChunkParams {
 type Chunk struct {
 	ID          string
 	DocID       string
+	DocName     string `json:"-"` // the source name (records2 order); not part of the JS chunk
 	Title       string
 	HeadingPath []string
 	Kind        string
