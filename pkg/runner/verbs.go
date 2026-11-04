@@ -253,17 +253,29 @@ func coerce(d *fields.Definition, v any) (any, error) {
 			}
 			return out, nil
 		}
+	case string:
+		return parseStrings(d, []string{x})
 	case []string:
-		switch d.Type {
-		case fields.TypeStringList, fields.TypeChoiceList, fields.TypeIntegerList, fields.TypeFloatList:
-			return x, nil
-		}
-		if len(x) == 1 {
-			return x[0], nil
-		}
-		return nil, fmt.Errorf("one value expected, got %d", len(x))
+		return parseStrings(d, x)
 	}
 	return v, nil
+}
+
+// parseStrings parses query-string (or JSON string) values with the field's own
+// parser, as the CLI parses a flag, so errors name the field.
+func parseStrings(d *fields.Definition, xs []string) (any, error) {
+	if len(xs) != 1 {
+		switch d.Type {
+		case fields.TypeStringList, fields.TypeChoiceList, fields.TypeIntegerList, fields.TypeFloatList:
+		default:
+			return nil, fmt.Errorf("one value expected, got %d", len(xs))
+		}
+	}
+	fv, err := d.ParseField(xs)
+	if err != nil {
+		return nil, err
+	}
+	return fv.Value, nil
 }
 
 // Verbs lists the app's verbs (none if it was opened without a registry).

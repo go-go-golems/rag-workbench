@@ -240,3 +240,82 @@ go vet ./... && go test ./... -count=1                     all ok
 ### Code review instructions
 - Read `Invoke` in `pkg/runner/verbs.go` and `__ragwbWrapVerb` in `serve.go`.
 - Validate with `go test ./pkg/runner -run TestServedVerb -v`.
+
+## Step 5: Phase 3 — verb endpoints over HTTP, JSON and SSE, in ragwb serve
+
+`ragwb serve` now exposes every verb of a served app:
+- `GET /api/rag/{app}/verbs` describes them;
+- `POST` or `GET /api/rag/{app}/verbs/{verb...}` runs one, answering with a JSON envelope or an SSE stream.
+
+SSE is selected by `Accept: text/event-stream` or `?stream=sse`, and the stream ends with `result` or `error`. Query options are `chunks=1`, `events=a,b` and `top=N`. A parameter error is a 400 that names the field, and more than `--max-inflight` concurrent requests get 503.
+
+Against the real binary on `examples/apps/reports`, `reports search` answers in 5–11 ms per request.
+
+### Prompt Context
+**User prompt (verbatim):** see Step 3.
+**Assistant interpretation:** Guide Phase 3.
+**Inferred user intent:** see Step 3.
+**Commit (code):** the commit for this step: "RAGWB-004 Phase 3: verb endpoints with JSON and SSE".
+
+### What I did
+- `pkg/server/sse.go` (new):
+  - `streamSink`: a queue of 256 events. When the queue is full, `Emit` waits at most 100 ms and then cancels the request (`slow_client`), so the runtime is never stalled long;
+  - `sseWriter`: `event:`/`id:`/`data:` framing with `seq` and `t` prepended, a flush per event, `: ping` heartbeats every 15 s;
+  - `pump`: text deltas of one node that arrive within 30 ms are merged into one event;
+  - `wantsSSE` and `eventFilter`; `start`, `result` and `error` always pass the filter.
+- `pkg/server/verbs.go` (new):
+  - `handleVerbs`: path, url, short, long, tags, fields;
+  - `findVerb`: the full path, or the bare name when it is unique. jsverbs names a file's verbs after the file, so `app.js`'s `answer` is `app answer`, while `/verbs/answer` also works;
+  - `requestParams`: the JSON body plus query strings, minus the control keys;
+  - `paramsOf`, `runSummary` (`runs[]` and `chunks` for the envelope, from `run`/`runEnd`/`hits` events), `handleVerb` (JSON or SSE), and `logVerb`, one line per request that says when a verb streamed no runs and why.
+- `pkg/server/rag.go`: routes; `RagApp.MaxInflight` with `acquire`/`release` (`DefaultMaxInflight = 8`).
+- `pkg/runner/verbs.go`: string and `[]string` values are parsed with the field's own `ParseField`, so `k="lots"` is reported under `k`.
+- `cmd/ragwb/cmds/serve.go`:
+  - every app's directory is scanned with jsverbs. Verbs make the runtime use the jsverbs loader and pass the registry to `OpenApp`; a scan failure means no endpoints, with a message;
+  - the startup line `N verb endpoint(s): …/verbs`;
+  - `--max-inflight`.
+- `pkg/ragjs/assets/rag.js`: `node` and `build` events carry `component` (the component type) instead of `t`, which collided with the writer's elapsed-time `t`.
+- `pkg/server/verbs_test.go`:
+  - `TestVerbEndpoints` (on the real `examples/apps/reports`): discovery, the JSON envelope, SSE (`start run …`, consecutive `seq`, hits capped by `top=4` with no chunk, `result` last), GET with query strings, `chunks=1` with `events=hits`, a 400 naming `k`, and a 404;
+  - `TestVerbSSEStreamsLLMText` (a temp app whose `app.js` has an `answer` verb, fake LLM in 12 pieces): concatenated deltas equal the answer.
+
+### What worked
+```
+go test ./pkg/server -run TestVerb -v
+--- PASS: TestVerbEndpoints (0.22s)
+    verbs_test.go:240: 12 deltas arrived as 2 text events
+--- PASS: TestVerbSSEStreamsLLMText (0.19s)
+go vet ./... && go test ./... -count=1        all ok
+ragwb serve examples/apps/reports:
+  ragwb serve: 4 verb endpoint(s): http://127.0.0.1:8796/api/rag/reports/verbs
+  curl -sN -H 'Accept: text/event-stream' ".../verbs/search?q=rebalance+law&k=3&plan=fused&top=2"
+    event: start … event: run … event: node {"node":"text","component":"retrieve","phase":"start"} … event: hits {"total":26,…}
+  curl -s -X POST …/verbs/search -d '{"q":"x","k":"a"}'
+    {"error":{"code":"bad_params","fields":{"k":"Could not parse argument k as integer: …"},…}}
+  log: reports verb reports search q="protojson" · 1 run(s) · 11 event(s) · 11.0 ms · ok
+```
+
+### What didn't work
+- `sseEvent redeclared in this block` (`server_test.go` already had one); the test types were renamed.
+- `panic: index out of range [0] with length 0` in the test: the `meta` retriever's `hits` event had zero hits. That is legitimate, and the test now guards it.
+- A 404 for `/verbs/answer`: the verb's path is `app answer`, and the list showed `url:/api/rag/qa/verbs/app/answer`. The unique-name fallback was added in `findVerb`.
+- The parameter error came back as `fields:{*: "Invalid value for field k: …"}`, from glazed's own parse error. Strings are now parsed per field (`parseStrings`).
+- Duplicate `"t"` keys in node events (`"t":4.8,"type":"node","node":"text","t":"retrieve"`), found with curl; renamed to `component`.
+- `pkill -f "serve --addr 127.0.0.1:8796"` killed my own shell, because the pattern matched the command line that contained it (exit 144), and the rename in the same command never ran. I now stop the server with the job's PID.
+
+### What I learned
+- The merge window works as intended: 12 deltas 3 ms apart become 2 events. A real model streams slower than 30 ms per token-batch, so most text events go out unmerged.
+
+### What was tricky to build
+- **Ordering the end of a stream.** The pump must drain everything the verb emitted before the final event is written. `Invoke` returns, the sink is closed, the handler waits for the pump to finish, and only then writes `result` or `error`, on the same writer and goroutine. There are no concurrent writes to the response.
+
+### What warrants a second pair of eyes
+- `streamSink.Emit` holds its mutex while it waits up to 100 ms on a full queue, so other emitters on the same request wait too. They are all on the owner goroutine, so there is only ever one.
+- `requestParams` lets a JSON body key win over the same key in the query string.
+
+### What should be done in the future
+- Phase 4 (the shell on SSE) and Phase 5 (LLM cancellation, examples, docs).
+
+### Code review instructions
+- Read `handleVerb`, then `sseWriter.pump`.
+- Validate with `go test ./pkg/server -run TestVerb -v`, then `ragwb serve examples/apps/reports` and the curl lines above.

@@ -1506,7 +1506,7 @@
           outputs.set(n.id, m.lazy && !m.lazy.done ? m.lazy : m.value);
           Object.assign(st, { reused: true, count: m.count, ms: 0 });
           deltas.set(n.id, { none: true, from: d });
-          if (bemit) bemit({ type: 'build', node: n.id, t: n.t, ms: 0, reused: true, stored: !!st.stored, count: st.count });
+          if (bemit) bemit({ type: 'build', node: n.id, component: n.t, ms: 0, reused: true, stored: !!st.stored, count: st.count });
           continue;
         }
         if (costly && !allowCalls && this.partial.has(d)) {
@@ -1595,7 +1595,7 @@
         st.ms = +(now() - t1).toFixed(1);
         timed('build', n.id, st.ms, n.t + ' · computed' + (st.saved ? ', saved' : ''));
         this.emit({ type: 'node-built', node: n.id, stats: st });
-        if (bemit) bemit({ type: 'build', node: n.id, t: n.t, ms: st.ms, count: st.count, incremental: !!st.incremental, ...(st.delta ? { delta: st.delta } : {}) });
+        if (bemit) bemit({ type: 'build', node: n.id, component: n.t, ms: st.ms, count: st.count, incremental: !!st.incremental, ...(st.delta ? { delta: st.delta } : {}) });
       }
       // bake params of live nodes
       if (report.ok) for (const n of ir.nodes) if (n.phase === 'live') {
@@ -1857,7 +1857,7 @@
           entry.out = countOf(m.out);
           if (m.notes) entry.notes = m.notes;
           trace.push(entry);
-          emit({ type: 'node', node: n.id, t: n.t, phase: 'end', status: entry.status, ms: 0, in: entry.in, out: entry.out });
+          emit({ type: 'node', node: n.id, component: n.t, phase: 'end', status: entry.status, ms: 0, in: entry.in, out: entry.out });
           continue;
         }
         if (!wants) {
@@ -1865,7 +1865,7 @@
           entry.status = 'skipped';
           entry.out = countOf(outputs[n.id]);
           trace.push(entry);
-          emit({ type: 'node', node: n.id, t: n.t, phase: 'end', status: 'skipped', ms: 0, in: entry.in, out: entry.out });
+          emit({ type: 'node', node: n.id, component: n.t, phase: 'end', status: 'skipped', ms: 0, in: entry.in, out: entry.out });
           this.memo.set(n.id, { digest: nd, inputs, reads: {}, out: outputs[n.id], full: false });
           continue;
         }
@@ -1875,7 +1875,7 @@
         const c0 = counter.calls;
         const ctx = this.ctx(n, ir, art, sample, s, notes, opts, opts.onEvent ? emit : null);
         const t1 = now();
-        emit({ type: 'node', node: n.id, t: n.t, phase: 'start' });
+        emit({ type: 'node', node: n.id, component: n.t, phase: 'start' });
         try {
           const p = await this.params(n, sp, ctx, art, ir);
           let out = await def.run(sp, ctx, input, p);
@@ -1900,7 +1900,7 @@
         if (notes.length) entry.notes = notes;
         trace.push(entry);
         if (opts.onNode) opts.onNode(entry);
-        emit({ type: 'node', node: n.id, t: n.t, phase: 'end', status: entry.status, ms: entry.ms, in: entry.in, out: entry.out, calls: entry.calls,
+        emit({ type: 'node', node: n.id, component: n.t, phase: 'end', status: entry.status, ms: entry.ms, in: entry.in, out: entry.out, calls: entry.calls,
           ...(entry.notes ? { notes: entry.notes } : {}), ...(entry.error ? { error: entry.error } : {}) });
       }
       const o = ir.outputs;

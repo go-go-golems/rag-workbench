@@ -26,6 +26,8 @@ import (
 //	GET  /api/rag/{app}/chunk?id=       → {chunks, neighbors}   (a cache miss in the shell)
 //	GET  /api/rag/{app}/doc?id=         → doc metadata | null
 //	GET  /api/rag/{app}/timings         → recorder entries since the app was opened
+//	GET  /api/rag/{app}/verbs           → the app's verbs and their parameters (RAGWB-004, verbs.go)
+//	POST /api/rag/{app}/verbs/{verb...} → run a verb: JSON, or SSE events (sse.go)
 //	GET  /apps/{app}/                   → the app shell
 type RagServer struct {
 	apps  map[string]*RagApp
@@ -37,7 +39,32 @@ type RagServer struct {
 type RagApp struct {
 	*runner.ServedApp
 	Timing *timing.Recorder
+	// MaxInflight caps concurrent verb requests (0 = DefaultMaxInflight); more get 503 busy.
+	MaxInflight int
+	once        sync.Once
+	inflight    chan struct{}
 }
+
+// DefaultMaxInflight is the verb request cap per app when MaxInflight is 0.
+const DefaultMaxInflight = 8
+
+func (a *RagApp) acquire() bool {
+	a.once.Do(func() {
+		n := a.MaxInflight
+		if n <= 0 {
+			n = DefaultMaxInflight
+		}
+		a.inflight = make(chan struct{}, n)
+	})
+	select {
+	case a.inflight <- struct{}{}:
+		return true
+	default:
+		return false
+	}
+}
+
+func (a *RagApp) release() { <-a.inflight }
 
 func NewRagServer(apps ...*RagApp) *RagServer {
 	s := &RagServer{apps: map[string]*RagApp{}}
@@ -55,6 +82,9 @@ func (s *RagServer) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/rag/{app}/run", s.withApp(s.handleRun))
 	mux.HandleFunc("GET /api/rag/{app}/chunk", s.withApp(s.handleLookup("chunk")))
 	mux.HandleFunc("GET /api/rag/{app}/doc", s.withApp(s.handleLookup("doc")))
+	mux.HandleFunc("GET /api/rag/{app}/verbs", s.withApp(s.handleVerbs))
+	mux.HandleFunc("POST /api/rag/{app}/verbs/{verb...}", s.withApp(s.handleVerb))
+	mux.HandleFunc("GET /api/rag/{app}/verbs/{verb...}", s.withApp(s.handleVerb))
 	mux.HandleFunc("GET /api/rag/{app}/timings", s.withApp(func(w http.ResponseWriter, r *http.Request, a *RagApp) {
 		writeJSON(w, map[string]any{"entries": nonNil(a.Timing.Entries())})
 	}))
