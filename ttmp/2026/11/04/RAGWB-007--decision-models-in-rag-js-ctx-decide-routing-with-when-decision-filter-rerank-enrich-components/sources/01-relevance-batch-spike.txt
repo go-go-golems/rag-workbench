@@ -1,0 +1,6 @@
+{"sections": 184, "query": "how does the rebalance law preserve placements during incremental reindexing?"}
+5 {"status": 200, "ms": 1043, "bytes": 10774, "usage": {"input_tokens": 2257, "output_tokens": 24}, "top": [["p2", 0.026, "AGENT RUNTIME SPEC - Portable eval Agent"], ["p1", 0.001, "AGENT RUNTIME SPEC - Portable eval Agent"], ["p3", 0.001, "AGENT RUNTIME SPEC - Portable eval Agent"]], "above_0.5": 0}
+10 {"status": 200, "ms": 1301, "bytes": 19725, "usage": {"input_tokens": 4580, "output_tokens": 44}, "top": [["p2", 0.006, "AGENT RUNTIME SPEC - Portable eval Agent"], ["p1", 0.005, "AGENT RUNTIME SPEC - Portable eval Agent"], ["p7", 0.004, "AGENT RUNTIME SPEC - Portable eval Agent"]], "above_0.5": 0}
+20 {"status": 200, "ms": 1830, "bytes": 37757, "usage": {"input_tokens": 9248, "output_tokens": 94}, "top": [["p16", 0.037, "AGENT RUNTIME SPEC - Portable eval Agent"], ["p9", 0.022, "AGENT RUNTIME SPEC - Portable eval Agent"], ["p15", 0.012, "AGENT RUNTIME SPEC - Portable eval Agent"]], "above_0.5": 0}
+40 {"status": 400, "error": "{\"error\":{\"code\":\"systemone_invalid_request\",\"message\":\"\\\"questions\\\" exceeds this model's max_questions of 32\"}}", "ms": 288}
+80 {"status": 400, "error": "{\"error\":{\"code\":\"systemone_invalid_request\",\"message\":\"\\\"questions\\\" exceeds this model's max_questions of 32\"}}", "ms": 571}

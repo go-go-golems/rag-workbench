@@ -15,6 +15,8 @@ topics:
       description: Search indexes, retrieval backends and query execution
     - slug: llm
       description: Language-model backends, sampling and streaming
+    - slug: decisions
+      description: Decision models (noul/choice/score classification, routing, gating)
 docTypes:
     - slug: design-doc
       description: Structured rationale and architecture notes
