@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/dop251/goja_nodejs/require"
@@ -35,6 +36,10 @@ type Config struct {
 	// instead of the Go ports (natives.Markdown, natives.Bm25Native). Used by parity
 	// tests and as an escape hatch (ragwb --js-components).
 	JSComponents bool
+	// IndexBackend is index.bm25's default backend: "bleve" (default; disk-backed,
+	// natives.BleveBm25, RAGWB-002) or "memory" (the exact port of rag.js's BM25,
+	// for parity). Ignored with JSComponents.
+	IndexBackend string
 	// Natives are extra Go-backed components installed into every ragwb module instance.
 	Natives []ragjs.Native
 	// LLM backs ctx.sample for LLM nodes (nil = LLM nodes unavailable).
@@ -59,9 +64,20 @@ type Config struct {
 // ArtifactNamespace names the artifact namespace for this binary: the rag.js
 // source, the Go components' version and the component mode. Anything that can
 // change an output without changing its digest belongs here.
-func ArtifactNamespace(jsComponents bool) string {
+//
+// indexBackend (optional, default "bleve") is index.bm25's default backend: a
+// memory-built and a bleve-built index share a digest and component source, so
+// without it a run with the other backend would load the wrong kind of index.
+func ArtifactNamespace(jsComponents bool, indexBackend ...string) string {
 	src, _ := ragjs.Source("rag.js")
 	mode := "go"
+	backend := "bleve"
+	if len(indexBackend) > 0 && indexBackend[0] != "" {
+		backend = indexBackend[0]
+	}
+	if backend != "memory" {
+		mode = "go+" + backend
+	}
 	if jsComponents {
 		mode = "js"
 	}
@@ -83,7 +99,11 @@ func NewFactory(cfg Config) (*engine.RuntimeFactory, error) {
 	}
 	nat := []ragjs.Native{&natives.SourceDir{Roots: cfg.Roots, Base: cfg.Base, DigestTTL: cfg.SourceDigestTTL}}
 	if !cfg.JSComponents {
-		nat = append(nat, natives.Markdown{}, natives.Bm25Native{})
+		tempRoot := ""
+		if cfg.Artifacts != nil {
+			tempRoot = filepath.Join(cfg.Artifacts.Dir, cfg.Artifacts.NS) // storing a built index is then a rename
+		}
+		nat = append(nat, natives.Markdown{}, natives.Bm25Native{Backend: cfg.IndexBackend, TempRoot: tempRoot}, natives.TermsNative{})
 	}
 	nat = append(nat, &natives.Vectors{Embedder: cfg.Embedder, Cache: cfg.EmbedCache})
 	nat = append(nat, cfg.Natives...)
@@ -102,3 +122,9 @@ func NewFactory(cfg Config) (*engine.RuntimeFactory, error) {
 	}
 	return b.Build()
 }
+
+// Natives that hold resources get the runtime's closer hook.
+var (
+	_ ragjs.EnvNative = natives.Bm25Native{}
+	_ ragjs.EnvNative = natives.Persist{}
+)

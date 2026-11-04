@@ -87,7 +87,7 @@ func NewRunCommand() *cobra.Command {
 			base := filepath.Dir(path)
 			rec := timing.Default
 			rec.Phase("runtime + script (build, query, evals)")
-			factory, err := runner.NewFactory(runner.Config{Verbose: f.verbose, Roots: Roots(base), Base: base, JSComponents: JSComponents(), LLM: backend, BuildCalls: BuildCalls(), Embedder: embedder, EmbedCache: embedCache, Artifacts: store, Timing: rec})
+			factory, err := runner.NewFactory(runner.Config{Verbose: f.verbose, Roots: Roots(base), Base: base, JSComponents: JSComponents(), IndexBackend: IndexBackend(), LLM: backend, BuildCalls: BuildCalls(), Embedder: embedder, EmbedCache: embedCache, Artifacts: store, Timing: rec})
 			if err != nil {
 				return err
 			}
@@ -144,7 +144,7 @@ func NewPresetsCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			factory, err := runner.NewFactory(runner.Config{Verbose: f.verbose, Roots: Roots(), JSComponents: JSComponents(), LLM: backend, BuildCalls: BuildCalls(), Embedder: embedder, EmbedCache: embedCache, Artifacts: store})
+			factory, err := runner.NewFactory(runner.Config{Verbose: f.verbose, Roots: Roots(), JSComponents: JSComponents(), IndexBackend: IndexBackend(), LLM: backend, BuildCalls: BuildCalls(), Embedder: embedder, EmbedCache: embedCache, Artifacts: store})
 			if err != nil {
 				return err
 			}

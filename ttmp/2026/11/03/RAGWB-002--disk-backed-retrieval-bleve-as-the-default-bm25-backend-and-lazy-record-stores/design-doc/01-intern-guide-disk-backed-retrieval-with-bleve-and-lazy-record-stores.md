@@ -747,7 +747,14 @@ Each phase ends with a commit, a diary step (investigation format) and the liste
 - Step 2: build, persist, read-only open, closers, `searchIn`, synonyms, `only`, `why`.
 - Step 3: make it the default; namespace and `Version` bump.
 - Tests:
-  - the quality gate: on the reports goldens, hit@5 and MRR no more than 0.05 below the memory backend; on the presets sweep, no preset's HIT@5 drops by more than 0.1; on the vault sample, median top-10 overlap ≥ 0.5 with every query below 0.2 inspected by hand. The thresholds are revisited after the Step 1 spike;
+  - the quality gate (revised after the Step 1 spike, diary step 4):
+    - on the reports goldens across the presets, mean hit@5 and MRR no more than 0.05 below the memory backend;
+    - no preset's hit@5 drops by more than 0.1;
+    - on the vault, self-recall@10 (a chunk's own heading as the query retrieves it) no more than 0.05 below the memory backend.
+
+    Top-10 overlap with the memory backend is reported but not gated: on the vault it was 0.11 for a bleve mode whose recall was *higher*, because many chunks match generic queries almost equally well.
+    Spike result for the default (per-field) mode: hit@5 0.925 → 0.942, MRR 0.872 → 0.893, nDCG@10 0.783 → 0.770, no preset drop > 0.1; vault self-recall 0.725 → 0.755.
+    The `combined: true` mode (one BM25F-style field) stays closer to the memory backend (preset overlap 0.82) but has lower vault self-recall (0.635) and one preset drop > 0.1 (outline);
   - `bm25_parity_test.go` stays exact, pinned to the memory backend;
   - two processes opening one stored index read-only;
   - `--no-store` temp dir cleanup.
@@ -760,6 +767,33 @@ Each phase ends with a commit, a diary step (investigation format) and the liste
 - `ragwb presets` sweep: metrics unchanged.
 - Update the RAGWB-001 guide's §17 status, help text and the agent prompt's component notes.
 - Targets: vault open under 100 ms excluding first-touch page faults; RSS under 200 MB; median query unchanged (≤ 15 ms round trip).
+
+### 10.1 Implementation status (2026-11-04)
+
+| Phase | Status | Commit | Notes |
+|---|---|---|---|
+| 0 dependency + flag | done | `78321cb` | bleve v2.6.0; the `go` directive stays 1.26.1 |
+| 3a bleve backend + quality gate | done | `78321cb`, `4fa58a9` | per-field mode passes (diary step 4); `combined: true` available |
+| 1 file/dir payloads | done | `fc295ba` | cross-device copy fallback; `List` skips payload dirs |
+| 3b stored bleve indexes | done | `fc295ba` | built in the store namespace, `Relocate` into the store, read-only open |
+| 2 chunk records | done | `f463797` | **chunks only**: docs stay a gob blob (decoded on first `art.docs` use) |
+| 4 Go terms index | done | `ea4b359` | exact parity with rag.js's TermsIndex (ties by goja's `localeCompare`) |
+| default switch | done | `ea4b359` | bleve is the default everywhere; `memory` pinned in the exact-parity tests |
+| 5 measurements + docs | in progress | | diary step 6 |
+
+**Differences from the design above:**
+- **The record store holds chunks only.** Docs are not on the query path.
+- **One extra stored format:** the terms index is a gob blob (codec `terms`), not records.
+- **`why` for bleve hits** is approximated from term locations (§6.4.3). There is no `explain` mode yet.
+- **The closer hook** reaches natives through `pkg/rtenv.Env` plus a ragwb module registrar that captures go-go-goja's `AddCloser`. It is not an `Options` field.
+
+**Measured, vault (85,882 chunks), warm:**
+
+| | before RAGWB-002 | after |
+|---|---|---|
+| CLI `parc search` | 2.2 s, 1.4 GB RSS | **0.16 s, 90 MB RSS** |
+| served app open | 2.2 s | **77 ms** |
+| served app live heap | 838 MB | **15.3 MB** |
 
 ## 11. Risks, alternatives and open questions
 

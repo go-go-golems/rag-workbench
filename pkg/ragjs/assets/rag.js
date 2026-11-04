@@ -785,7 +785,7 @@
           execute: ({ id }) => {
             const c = ctx.chunk(String(id)), docId = c ? c.docId : String(id);
             rounds.push({ tool: 'outline', id: docId });
-            return ctx.chunks(x => x.docId === docId).map(x => ({ id: x.id, heading: x.headingPath.join(' › ') }));
+            return ctx.docChunks(docId).map(x => ({ id: x.id, heading: x.headingPath.join(' › ') }));
           },
         },
         {
@@ -1266,9 +1266,26 @@
   const timed = (kind, name, ms, detail) => {
     try { if (env0.timing) env0.timing(kind, String(name), +(+ms).toFixed(2), detail || ''); } catch (_) { /* timing (or env0 before init) never breaks a run */ }
   };
+  function unionChunks(map, views) {
+    const get = id => map.get(id) ?? views.reduce((hit, v) => hit ?? v.get(id), undefined);
+    return {
+      get, has: id => map.has(id) || views.some(v => v.has(id)),
+      get size() { return new Set([...map.keys(), ...views.flatMap(v => [...v.keys()])]).size; },
+      *values() { const seen = new Set(map.keys()); for (const v of views) for (const c of v.values()) if (!seen.has(c.id)) { seen.add(c.id); yield get(c.id); } yield* map.values(); },
+      *keys() { for (const c of this.values()) yield c.id; },
+      *entries() { for (const c of this.values()) yield [c.id, c]; },
+      forEach(f) { for (const c of this.values()) f(c, c.id, this); },
+      [Symbol.iterator]() { return this.entries(); },
+    };
+  }
   class Outputs extends Map {
     get(k) { const v = super.get(k); return v instanceof Lazy ? v.force() : v; }
   }
+  // A record view stands in for a stored chunks output in Go runtimes (RAGWB-002,
+  // natives/persist.go): it iterates like the array, get/has/size like art.chunks,
+  // order(docId) like art.order. Components that need the array get toArray().
+  const isView = v => v != null && typeof v === 'object' && v.__records !== undefined;
+  const asArray = v => (isView(v) ? v.toArray() : v);
   const JSON_PERSIST = { save: v => v, load: x => x };
   const persistOf = def => (!def || def.persist === false ? null : def.persist || (['docs', 'chunks'].includes(def.out) ? JSON_PERSIST : null));
   const storeKey = (d, def) => hash([d, def.src || '']);
@@ -1374,7 +1391,7 @@
         const c0 = counter.calls;
         try {
           const p = await this.resolveBakes(n, n.p, outputs, ir);
-          const inputs = n.in.map(i => outputs.get(i));
+          const inputs = n.in.map(i => asArray(outputs.get(i)));
           const ctx = this.buildCtx(n, ir, outputs, counter, opts.signal);
           let value;
           if (def.map) {
@@ -1443,7 +1460,7 @@
       return report;
     }
     buildCtx(n, ir, outputs, counter, signal) {
-      const firstOf = t => { const id = ir.nodes.find(x => x.phase === 'build' && x.out === t && outputs.has(x.id)); return id ? outputs.get(id.id) : []; };
+      const firstOf = t => { const id = ir.nodes.find(x => x.phase === 'build' && x.out === t && outputs.has(x.id)); return id ? asArray(outputs.get(id.id)) : []; };
       return {
         node: n, sample: this.sampler(counter, signal), tokens, slug, hash, clip,
         log: (...a) => this.env.log && this.env.log(`[${n.id}]`, ...a),
@@ -1489,13 +1506,14 @@
       const tArt = now();
       const byId = new Outputs(); // stored outputs stay unloaded until read (sources usually never are)
       for (const [id, d] of dg) { const m = got(d); byId.set(id, m.lazy && !m.lazy.done ? m.lazy : m.value); }
-      const chunks = new Map(), order = new Map(), indexes = new Map(), docNodes = [];
+      let chunks = new Map(), order = new Map();
+      const indexes = new Map(), docNodes = [], views = [];
       let synonyms = null;
       for (const n of ir.nodes) {
         if (n.phase !== 'build') continue;
         // read only what artifacts expose: a stored source or docs output stays unloaded
         if (n.out === 'docs') docNodes.push(n.id); // docs load on first use (search rarely needs them)
-        else if (n.out === 'chunks') for (const c of byId.get(n.id)) chunks.set(c.id, c);
+        else if (n.out === 'chunks') { const v = byId.get(n.id); if (isView(v)) views.push(v); else for (const c of v) chunks.set(c.id, c); }
         else if (n.out === 'index') indexes.set(n.p.name || n.id.replace(/^ix-/, ''), byId.get(n.id));
         if (n.t === 'synonyms') synonyms = byId.get(n.id);
       }
@@ -1506,7 +1524,12 @@
       };
       // reading order per doc from the first chunk stream
       const primary = ir.nodes.find(n => n.phase === 'build' && n.out === 'chunks' && n.t !== 'enrich' && n.t !== 'enrich.llm');
-      if (primary) for (const c of byId.get(primary.id)) { if (!order.has(c.docId)) order.set(c.docId, []); order.get(c.docId).push(c.id); }
+      const primaryOut = primary ? byId.get(primary.id) : null;
+      if (isView(primaryOut)) order = { get: docId => primaryOut.order(docId), has: docId => primaryOut.order(docId).length > 0 };
+      else if (primary) for (const c of primaryOut) { if (!order.has(c.docId)) order.set(c.docId, []); order.get(c.docId).push(c.id); }
+      // stored chunk streams stay on disk: the single view is art.chunks; with several
+      // streams, later ones win per id (as Map.set did) and the views answer the rest
+      if (views.length) chunks = !chunks.size && views.length === 1 ? views[0] : unionChunks(chunks, views);
       // links: [[wiki]] targets and related notes resolved by title or alias (computed on first use)
       const linksMap = () => {
         if (links) return links;
@@ -1652,14 +1675,16 @@
       return out;
     }
     ctx(n, ir, art, sample, s, notes, opts) {
-      const chunkList = [...art.chunks.values()];
+      let chunkList = null; // all chunks, only for components that ask (ctx.chunks)
+      const allChunks = () => chunkList || (chunkList = [...art.chunks.values()]);
       return {
         node: n, sample, signal: opts.signal, signals: Object.freeze({ ...s }), synonyms: art.synonyms, tokens, clip,
         index: name => art.indexes.get(String(name)) || null,
         indexNames: () => [...art.indexes.keys()],
         firstIndex: kind => [...art.indexes.values()].find(x => x.kind === kind) || null,
         chunk: id => art.chunks.get(id) || null,
-        chunks: f => (f ? chunkList.filter(f) : chunkList),
+        chunks: f => (f ? allChunks().filter(f) : allChunks()),
+        docChunks: docId => (art.order.get(docId) || []).map(id => art.chunks.get(id)).filter(Boolean),
         doc: id => art.docs.get(id) || null,
         docs: () => [...art.docs.values()],
         links: docId => art.links.get(docId) || [],
@@ -1752,6 +1777,8 @@
       if (!art) { const r = await engine.build(ir); if (!r.ok) throw new RagError('build', r.errors.join('\n')); art = engine.artifacts(ir); }
       const cases = [];
       let calls = 0;
+      let all = null; // every chunk, read once per evals run (not per case)
+      const allChunks = () => all || (all = [...art.chunks.values()]);
       for (const [i, c] of this.st.cases.entries()) {
         if (opts.signal && opts.signal.aborted) throw new RagError('run', 'evals stopped');
         const res = await session.run({ ...(opts.signals || {}), ...(c.signals || {}), q: c.q, k: opts.k ?? Math.max(k, ir.signals.k || 0) }, { trigger, signal: opts.signal });
@@ -1759,7 +1786,7 @@
         const hits = res.hits && res.hits.length ? res.hits : ((res.answer && res.answer.evidence) || []).map(e => ({ id: e.id }));
         const rel = hits.map(h => relevant(c.expect, art.chunks.get(h.id), art.docs.get((art.chunks.get(h.id) || {}).docId)));
         const rank = rel.indexOf(true) + 1 || null;
-        const R = [...art.chunks.values()].filter(ch => relevant(c.expect, ch, art.docs.get(ch.docId))).length;
+        const R = allChunks().filter(ch => relevant(c.expect, ch, art.docs.get(ch.docId))).length;
         const row = {
           i: i + 1, q: c.q, rank, synthetic: !!c.synthetic, R,
           expect: Object.fromEntries(Object.entries(c.expect).map(([kk, v]) => [kk, showPat(v)])),

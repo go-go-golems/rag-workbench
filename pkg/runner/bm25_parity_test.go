@@ -18,7 +18,8 @@ import (
 // search/searchIn results for a query set derived from the corpus itself.
 func searchDump(t *testing.T, jsComponents bool, root string, bm25 map[string]any) (string, float64) {
 	t.Helper()
-	factory, err := NewFactory(Config{Roots: []string{root}, JSComponents: jsComponents})
+	// exact parity is the memory backend's contract (bleve may rank differently: RAGWB-002 D2)
+	factory, err := NewFactory(Config{Roots: []string{root}, JSComponents: jsComponents, IndexBackend: "memory"})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -115,3 +115,7 @@ P7: ragwb serve — apps open once in a long-lived runtime (app.js {app} or *.wb
 - /home/manuel/code/wesen/go-go-golems/rag-workbench/pkg/runner/serve.go — serve harness and ServedApp
 - /home/manuel/code/wesen/go-go-golems/rag-workbench/pkg/server/rag.go — /api/rag routes
 - /home/manuel/code/wesen/go-go-golems/rag-workbench/web/app-shell/shell.js — RemoteRag host
+
+## 2026-11-03
+
+Ticket closed: P0–P9 implemented and merged to main via PR #1 (merge commit c97b2fa); follow-up work continues in RAGWB-002 (disk-backed retrieval) and RAGWB-003 (incremental re-indexing)

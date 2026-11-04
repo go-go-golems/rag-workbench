@@ -153,3 +153,249 @@ The user said rankings may change with bleve, "as long as it's not completely wr
 
 ### What should be done in the future
 - Re-upload the guide as v3 if the user wants the reMarkable copy current.
+
+## Step 4: PR #1 merged; Phase 0 + the bleve backend (opt-in); the quality check passes for the per-field mode
+
+PR #1 was merged with a merge commit (`c97b2fa`), so the diaries' commit hashes stay valid, and `main` became the repo's default branch. Work continues on `task/ragwb-002-disk-backed-retrieval`, branched from `main`.
+
+This step:
+- adds bleve and a working bleve backend for `index.bm25`, selectable with `--index-backend bleve` or `rag.bm25({ backend: 'bleve' })` (not the default yet, not persisted yet);
+- gives natives a runtime closer hook;
+- runs the quality check that decides whether bleve's own scoring is acceptable.
+
+The default per-field mode is acceptable. On the reports goldens across all 30 presets, it is slightly *better* than the in-memory engine (hit@5 0.925 → 0.942, MRR 0.872 → 0.893), and on the vault it retrieves a chunk from its own heading more often (0.725 → 0.755). Its top-10 lists differ a lot from the memory backend's on the vault, which is the expected effect of per-field IDF.
+
+### Prompt Context
+**User prompt (verbatim):** "merge it, merge commit. Then continue, commit at appropriate intervals and keep a detailed diary as you work (using the diary format from the skill)"
+**Assistant interpretation:** Merge PR #1 with a merge commit, then implement RAGWB-002 phase by phase, with commits and investigation-format diary steps.
+**Inferred user intent:** Get the disk-backed retrieval built, without losing the review trail.
+**Commit (code):** `78321cb` (P0 + backend); this step's commit adds the `combined` mode and the quality scripts.
+
+### What I did
+- `gh pr merge 1 --merge` → `c97b2fa`; `gh repo edit --default-branch main`; `git checkout -b task/ragwb-002-disk-backed-retrieval` from `main`.
+- **Phase 0:** `go get github.com/blevesearch/bleve/v2@v2.6.0`. The `go` directive stays at 1.26.1: only goja-bleve needed 1.26.4. bbolt v1.4.0 arrives as an indirect dependency.
+- **`pkg/natives/bleve_bm25.go`:**
+  - `BuildBleveBm25`/`OpenBleveBm25` (read-only: `OpenUsing(dir, {"read_only": true})`), `Search`, `SearchIn`, `Close`.
+  - Mapping: a custom analyzer `ragwb-pretokenized` (whitespace tokenizer, no filters) declared in the mapping itself, so an opened index needs no global registration. `ScoringModel = "bm25"`; one field per weighted plan field, named positionally (`f0`, `f1`, …) because plan paths like `meta.summary` contain dots, which bleve reads as nested documents. `docId` is a keyword field.
+  - Query: a disjunction of `TermQuery(term)` per field, boosted by field weight × query-term weight. Terms come from `queryTermsFor`, refactored out of `Bm25.queryTerms` and shared by both backends (synonym expansions at 0.5).
+  - `only` → a conjunction with `DocIDQuery`; `searchIn` → a conjunction with `docId:<id>`.
+  - `why` comes from term locations: matched terms are exact, shares are approximate.
+- **`pkg/natives/bm25_native.go`:** one `index.bm25` definition dispatching on `p.backend || Bm25Native.Backend`. Index objects gain `backend`. Unpersisted bleve indexes live in a temp dir, removed by a runtime closer.
+- **Closer hook:**
+  - `pkg/ragjs`: a ragwb registrar replacing `NativeModuleRegistrar`, which captures `RuntimeModuleRegistrationContext.AddCloser`, plus an optional `EnvNative` interface (`InstallEnv(vm, rag, rtenv.Env)`).
+  - `pkg/rtenv`: holds `Env`, so `natives` doesn't import `ragjs` (import cycle via ragjs's tests).
+  - `runner`: a compile-time assertion that `Bm25Native` is an `EnvNative`.
+- **Wiring:** `runner.Config.IndexBackend`, global `--index-backend memory|bleve` (default `memory` until the gate passes), and `ArtifactNamespace(js, backend)`: `"go+bleve"` for a non-default backend.
+- **Tests (`pkg/natives/bleve_bm25_test.go`):**
+  - same top hit as memory for 4 clear queries; `why` terms ⊆ query terms; empty and unknown queries;
+  - synonyms, `searchIn`, `only`;
+  - read-only reopen gives identical hits and scores;
+  - two simultaneous read-only opens;
+  - a closed index errors;
+  - a temp index is removed on Close.
+- **Quality scripts:**
+  - `scripts/01-presets-quality.py`: every preset × both backends via `ragwb --no-store --index-backend … run <preset> --evals --k 10`; result saved in `various/01-presets-quality-fields.txt`.
+  - `scripts/02-vault-quality/main.go`: builds both backends from the stored vault chunks (`~/.ragwb/store/a2b021016d5826fa/ed/edc1ece5955f1f.bin`) with parc's fields. It compares 208 queries (200 sampled section headings plus 8 hand-written), and `-show "q1|q2"` prints both top-5s.
+- Added `combined` mode (`BleveOptions.Combined`, `rag.bm25({ combined: true })`): one field with each field's tokens repeated `round(weight)` times, i.e. BM25F-style tf/length with one IDF.
+
+### Why
+- The design's ranking decision (D2) is only acceptable if the results are "not completely wrong". That had to be measured before persistence and the default switch were built on top of it.
+- The backend had to enter the artifact namespace now, not in Phase 3b. A memory-built and a bleve-built index share digest and component source, so with a store, `--index-backend bleve` would have silently loaded memory indexes and the comparison would have measured nothing.
+
+### What worked
+**Presets, reports goldens, 30 presets:**
+
+| mode | mean hit@5 | mean MRR | mean nDCG@10 | median top-10 overlap | hit@5 drops > 0.1 |
+|---|---|---|---|---|---|
+| memory | 0.925 | 0.872 | 0.783 | — | — |
+| bleve per-field (default) | **0.942** | **0.893** | 0.770 | 0.50 | none (largest: compare-nodes −0.083) |
+| bleve combined | 0.917 | 0.873 | 0.769 | 0.82 | outline |
+
+**Vault, 85,882 chunks, 208 queries:**
+
+| mode | build | disk | top-10 overlap with memory (median / p10) | self-recall@10 | mean query |
+|---|---|---|---|---|---|
+| memory | 4.2–4.8 s | — | — | 0.725 | 14–20 ms |
+| bleve per-field | 9.6–14.2 s | 153–159 MB | 0.11 / 0.05 | **0.755** | 7–10 ms |
+| bleve combined | 11.3 s | 167 MB | 0.43 / 0.18 | 0.635 | 6.9 ms |
+
+- Side by side (`-show`), "sqlite forum for agents" and "goja regexp unicode" agree at #1, and "Failure modes" gives failure-mode sections in both.
+- `go test ./... -count=1` and `make lint` pass.
+
+### What didn't work
+- First build of `bleve_bm25.go`: `undefined: bleve.IndexMapping` (the constructor returns `*mapping.IndexMappingImpl`) and `f.Name undefined` (`natives.Field` has `Path`). Fixed. The dotted-path problem was found while fixing `Name`, which led to positional field names.
+- First `InstallEnv` took an anonymous struct type mirroring `ragjs.Env`. It compiled, but would never have satisfied `ragjs.EnvNative`, so the closer would silently not be wired. Importing `ragjs` from `natives` then failed: `import cycle not allowed in test` (ragjs's tests import natives). Moving `Env` to `pkg/rtenv` plus the compile-time assertion in `runner` fixed both.
+- `cp … ttmp/2026/11/03/RAGWB-002--*/various/…`: `no matches found`. The ticket had no `various/` dir yet, and zsh failed the glob; fixed with `mkdir -p`.
+- **A per-field ranking weakness**, seen by hand for "lunaroute embeddings cache": memory ranks LunaRoute chunks first, while per-field bleve ranks "Cache Storage Analysis". "cache" is rare among *titles*, so its title-field IDF times the title boost outweighs the rare "lunaroute" in the text. Combined mode removes per-field IDF, but scored worse overall.
+
+### What I learned
+- Top-10 overlap with the old engine is a poor quality proxy on a big corpus with many near-equivalent chunks: per-field had 0.11 overlap yet higher recall. Self-recall (heading → its chunk) needs no goldens and tracks quality better. It may favour per-field scoring because heading words get their own IDF; the presets' goldens point the same way, though.
+- bleve answered the vault queries about twice as fast as the in-memory Go BM25 (7–10 ms vs 14–20 ms). bleve's searcher skips postings; ours scores every posting of every query term.
+- Building the bleve index takes 2–3× longer than the memory BM25 (with no text stored: 153 MB versus the probe's 315 MB).
+
+### What was tricky to build
+- **The "default" must not leak into stored artifacts.** The backend default lives in the runtime, not the IR. Both the store key (component source plus digest) and the namespace were blind to it, until the namespace learned the backend.
+
+### What warrants a second pair of eyes
+- `approxWhy` splits a hit's score by occurrences × field weight × query weight. That is a presentation approximation. If the inspector's "why" must be exact for bleve, it needs `Explain`, which is costly.
+- Per-field IDF inflation (title words) is the main ranking risk. Levers if it bites: lower title weight for bleve, an additional combined field, or per-plan `combined: true`.
+
+### What should be done in the future
+- Phase 1 (artifact store file/dir payloads), then persist the bleve index (codec `bleve`, read-only open from the store), then Phase 2 (record store), then make `bleve` the default.
+
+### Code review instructions
+- `pkg/natives/bleve_bm25.go`, `bm25_native.go` (JS dispatch, `InstallEnv`), `pkg/ragjs/module.go` (`ragRegistrar`), `pkg/rtenv`, `runner.ArtifactNamespace`.
+- Reproduce: `go test ./pkg/natives -run Bleve`; `python3 scripts/01-presets-quality.py`; `go run ./…/scripts/02-vault-quality -chunks <stored chunks .bin> [-combined]`.
+
+## Step 5: file/dir payloads, stored bleve indexes, chunk records — a warm vault search is 0.64 s / 195 MB
+
+This step lands three pieces:
+- **Phase 1:** the artifact store holds files and directories.
+- **Persisted bleve indexes:** built in the store's namespace, moved in, reopened read-only, and opened in place by later runtimes.
+- **Phase 2:** stored chunks become a bbolt record file that the engine reads one chunk at a time, through a JS view that stands in for both the chunks array and `art.chunks`.
+
+With the bleve backend, a warm `parc search` over the whole vault now takes **0.64 s at 195 MB RSS**, down from 2.2 s / 1.4 GB. Chunks open in 0.1 ms and the text index in 0.9 ms. The remaining 0.5 s is the terms index, decoded from JSON (Phase 4).
+
+### Prompt Context
+**User prompt (verbatim):** see Step 4.
+**Commit (code):** `fc295ba` (Phase 1 + persisted bleve), `f463797` (Phase 2).
+
+### What I did
+- **`pkg/artifacts/store.go`:**
+  - `Meta.Kind` ("" blob | `file` | `dir`); `TempDir`, `SaveFile`, `SaveDir` and `Path`.
+  - The payload is named `<key>.<codec>`. If a payload for the key already exists (another process, same digest), it is kept and the duplicate removed. A cross-device rename falls back to a copy.
+  - `Has` checks the file size or that the directory exists. `Load` refuses non-blob payloads.
+  - `List` skips directories with a dot in the name (payload dirs, which contain bleve's own `index_meta.json`) and `.tmp-*` build areas.
+- **`BleveBm25`:**
+  - `path`/`cleanup` instead of `Dir`/`temp`.
+  - `Relocate(move)`: close, move the directory, reopen read-only, so the same Go handle (and the JS object wrapping it) stays valid.
+  - `RWMutex` for searches versus close/relocate.
+- **Index builds:** `Bm25Native.TempRoot` is the store's namespace when there is a store (`runner.NewFactory`), so storing is a rename. Build areas are `.tmp-bm25-*`.
+- **`Persist`** (now an `EnvNative`):
+  - `save`: a bleve handle → `SaveDir(codec "bleve")`; a Go `[]Chunk` handle → `WriteChunkRecords` → `SaveFile(codec "records")`.
+  - `load`: a `dir`/`bleve` payload → `OpenBleveBm25`; a `file`/`records` payload → `OpenChunkRecords` plus a `RecordView`. Both close with the runtime.
+  - Timing details: `bleve · open …`, `records · open … · N chunks · MB`.
+- **`pkg/natives/records.go`:** bbolt buckets `c` (ordinal → JSON of the Go `Chunk`), `i` (id → ordinal), `d` (docId → ids in array order), `m` (version, count). Reads go through `chunkToJS`, so stored chunk objects equal computed ones.
+- **`RecordView`** (JS, installed by Persist): iterates values in batches of 512 (like the array); `get`/`has`/`size` (like the Map); `order(docId)`; `toArray()` (the Go-handle array, so Go natives keep their fast paths); a 4,096-entry insertion-order cache.
+- **rag.js:**
+  - `isView`/`asArray`: build inputs and the bake context get arrays.
+  - `artifacts()`: a single view becomes `art.chunks` and gives the order; several streams go through `unionChunks`, where later streams win per id, as `Map.set` did.
+  - `Session.ctx`: lazy `chunkList`, plus `ctx.docChunks(docId)`, which the agentic outline tool uses instead of filtering every chunk.
+  - Evals: every chunk is read once per run, not per case.
+- **Tests:** `pkg/artifacts` (payload kinds, duplicates, damaged payloads, List); `pkg/runner/bleve_store_test.go` (cold saves a dir payload, warm opens it with identical top 5, no `.tmp-` leftovers; without a store, the temp index is removed on runtime close); `pkg/runner/records_test.go` (warm `art.chunks` is a view, and its size, `get`, order, neighbors, filtered hits and the hash of all chunks equal the cold Map).
+
+### Why
+- Phase 2 is the biggest memory item from step 25 of RAGWB-001: 411 MB of chunk JS objects plus 204 MB of Go `[]Chunk`. Loading a record file costs nothing, and the query reads only the chunks it touches.
+- Directory and file payloads are what makes "open, don't decode" possible at all.
+
+### What worked
+- **Vault, `--index-backend bleve`, `parc search "goja regexp unicode"`:**
+
+| run | total | chunks | ix-text | ix-meta | query | wall / max RSS |
+|---|---|---|---|---|---|---|
+| cold (new namespace) | 28.3 s | build 6.84 s (incl. writing records) | build 15.5 s | build 2.96 s | 4.3 ms | 28.5 s / 4.0 GB |
+| warm | 0.62 s | **open 0.1 ms** | **open 0.7 ms** | decode 0.50 s (41.5 MB JSON) | 4.1 ms | **0.64 s / 196 MB** |
+| warm | 0.63 s | open 0.1 ms | open 0.9 ms | decode 0.51 s | 3.5 ms | 0.65 s / 195 MB |
+
+- On disk: chunk records 260 MB (JSON per record; the gob blob was 136 MB), bleve index 140 MB.
+- `go test ./... -count=1` and `make lint` pass.
+
+### What didn't work
+- `persist.go`, after making it an `EnvNative`: `no new variables on left side of :=` and type errors. The function already had a JS object named `env` (passed to `rag.configure`), and the new `err` from compiling the view collided with `_, err := configure(...)`. I renamed it to `cfg` and used `=`.
+- First draft of `ChunkRecords.Order`: it stored ordinals per document and then parsed whole chunk records just to read their ids. I changed the doc bucket to store the ids directly before running anything.
+
+### What I learned
+- Opening the record file and the bleve index takes under a millisecond each. On the vault, everything that is still slow on a warm run is a decode of JSON or gob, which is the remaining pattern to remove (terms index).
+- JSON records are about twice the size of the gob blob. That costs disk, not time: a query reads about 50 records.
+
+### What was tricky to build
+- **One object for two roles.** The view replaces both the *array* output of the chunks node (iterated by `artifacts()` and passed to build components) and the `art.chunks` *Map* (`get`/`has`/`size`/`values`). Iteration had to follow the array (values), because nothing iterates `art.chunks` as `[id, chunk]` (checked with grep). Build components get `toArray()`, the Go-handle array, so Go natives like `index.bm25` still take their Go path when they recompute.
+- **The bleve handle must survive being moved.** The JS index object created during build is the one the current runtime keeps using after `save`. So `Relocate` swaps the inner `bleve.Index` under a lock instead of returning a new object.
+
+### What warrants a second pair of eyes
+- `unionChunks.size` builds a set of every id across streams. Only plans with stored chunk views plus extra chunk streams (enrich) take that path, and only `.size` triggers it.
+- Docs are still a gob blob, decoded in full when something reads `art.docs` (evals, the serve doc endpoint, link expansion). That was a deliberate scope cut; docs records are the same pattern.
+
+### What should be done in the future
+- Phase 4: a Go-native compact terms index (the last 0.5 s and about 50 MB).
+- Make `bleve` the default; run the RAGWB-001 heap and latency scripts against `ragwb serve`; docs.
+
+### Code review instructions
+- `pkg/artifacts/store.go` (`savePath`, `Has`, `List`), `pkg/natives/persist.go` (save/load branches, `recordsViewJS`), `pkg/natives/records.go`, rag.js (`isView`, `unionChunks`, `artifacts()`, `Session.ctx`, evals).
+- Reproduce: `go test ./pkg/artifacts ./pkg/runner -run 'Payload|Bleve|Records'`; `ragwb --timings --index-backend bleve --root <vault> verbs --dir examples/apps/parc parc search "…"`, twice.
+
+## Step 6: Go terms index (exact parity), bleve made the default, final vault measurements
+
+The last decoded artifact on the query path, the terms index, is now Go. It matches rag.js's `TermsIndex` exactly, on the reports corpus and on a 642-query sample over the vault's 6,928 metadata values. bleve is now `index.bm25`'s default backend in every Go runtime.
+
+Final numbers on the vault (85,882 chunks), all warm:
+
+| | before RAGWB-002 | now |
+|---|---|---|
+| CLI search | 2.2 s at 1.4 GB RSS | **0.16 s at 90 MB** |
+| served app open | 2.2 s | **66–77 ms** |
+| served app live heap | 838 MB | **15 MB** |
+| served app RSS | 1.4 GB | **80 MB** after open, 131 MB after queries |
+| query round trip (median / max) | 14.7 / 45.5 ms | **10.7 / 29.7 ms** |
+
+### Prompt Context
+**User prompt (verbatim):** see Step 4.
+**Commit (code):** `ea4b359` (terms + default switch).
+
+### What I did
+- **`pkg/natives/terms.go`** (`Terms`, `NewTerms`, `Search`, `Values`, codec `terms`):
+  - Postings are chunk ordinals into an id table.
+  - Search walks values and keys in insertion order (as JS Maps iterate), so float sums happen in the same order. The skip rule is ported exactly: `len16(trim(words)) < 2`.
+  - The weight is `1/ln(2 + n/10)`. `why` keeps `{...why, [key]: val}` semantics: a new key is appended, an existing one keeps its place.
+  - Ties sort stably with goja's `localeCompare`: `collate.New(language.Und).CompareString` over NFD (goja `builtin_string.go:379-383`).
+- **`pkg/natives/terms_native.go`:** redefines `index.terms`. JS extracts `keys.map(key => arr(getPath(c.meta, key)).map(v => String(v).toLowerCase()))` with rag.js's own helpers, so the strings are rag.js's by construction. Installed by `runner.NewFactory` next to the other Go components.
+- **`pkg/runner/terms_parity_test.go`:** in one runtime, `new rag.util.TermsIndex(chunks, {keys})` against the Go component. It compares `search(q, 50)` as JSON on every value (or a 600-value sample for big corpora), 40 two-value queries, 20 uppercased/punctuated queries, empty/1-char/no-match queries and one mixed query, plus `values(key)` for each key. `RAGWB_PARITY_ROOT` points it at another corpus.
+- **Default switch:**
+  - `Bm25Native` "" → bleve; `--index-backend` defaults to bleve; `ArtifactNamespace` treats "" as bleve (`go+bleve`).
+  - The exact-parity tests pin `IndexBackend: "memory"` (`bm25_parity_test.go`, `empty_results_test.go`).
+  - `TestReportsAppVerbs` runs both backends: memory must give rag.js's 12.6758; bleve must give the same top section.
+- `natives.Version` → `2026-11-04.1`.
+- **Phase 5 measurements:**
+  - CLI `--timings` cold and warm.
+  - RAGWB-001's `scripts/06-serve-heap` (heap after open and after a query).
+  - RAGWB-001's `scripts/05-serve-latency-bench.py` against `ragwb serve` (16 typed queries).
+  - Presets sweep (`ragwb --no-store presets`: 30/30 ok).
+  - Browser check of the served vault app (screenshot `various/02-serve-parc-bleve-records.png`).
+- The guide gained §10.1 "Implementation status", listing the deviations: records hold chunks only; terms are a gob blob; `why` is approximate; the closer hook goes through `rtenv`.
+
+### Why
+- After Phase 2, the terms index was the only thing still decoded at open: 0.5 s and the largest remaining JS structure. Porting it with exact parity removes it without any ranking question (unlike BM25).
+- The default switch completes the user's request ("Make it the default").
+
+### What worked
+- **Terms parity:** reports, 158 queries over 94 values: identical. Vault (`RAGWB_PARITY_ROOT=~/…/go-go-parc`), 642 queries over 6,928 values: identical, 91 s.
+- **Warm CLI** (`ragwb --timings --root <vault> verbs --dir examples/apps/parc parc search "goja regexp unicode"`): total 150 ms; artifacts 22–24 ms (terms 9.1 MB gob decoded in 15–18 ms, bleve open 0.8–1.2 ms, records open 0.1–0.2 ms); query 4–7 ms; wall 0.16 s, max RSS 89–90 MB.
+- **Cold CLI** (new namespace after the version bump, run during the parity test, so its timings are inflated by contention): 28.6 s; bleve text index 17.0 s, chunks with records 5.4 s, Go terms 2.25 s.
+- **Served heap** (`06-serve-heap`, defaults): opened in 77 ms; live heap 15.3 MB after open, 15.8 MB after a query; the largest item is the terms id table (gob string slice, 8.7 MB).
+- **Serve latency** (`05-serve-latency-bench.py 8795`): engine 0.4–3.9 ms, except "go-go-goja module authoring" at 14.9 ms; pack 1.8–5.4 ms; median round trip 10.7 ms, max 29.7 ms (the first query, which warms the record cache). RSS 80 MB after open, 131 MB after the run.
+- **Browser:** typing "goja unicode regexp" gives the same #1 as before. Three "next →" steps walk the document's sections through the records' order bucket. The "go" tag facet re-runs with 10 results.
+- `go test ./... -count=1`, `make lint`, presets 30/30.
+
+### What didn't work
+- The first `TestTermsIndexParity` source had a misplaced parenthesis in the `Sprintf` call (`too many arguments in call to vm.RunString`). Then `go vet` caught `fmt.Sprintf format %q reads arg #3`: the JS template contained a modulo, `(i * 7) % vals.length`, which needed escaping as `%%`.
+- **The first vault parity run never finished in reasonable time.** I stopped it after 5.5 minutes with `TaskStop` plus a pid kill. It used every one of the 6,928 values as a query, and `TermsIndex.search` scans all values per query in goja, which is quadratic. Fixed by sampling at most 600 values as queries, deterministically by stride. `values()` is still compared in full.
+- `TestReportsAppVerbs` failed after the switch: `top row = …score:0.8075`. It pinned rag.js's exact score (12.6758). Under bleve the top section is the same but the score is on bleve's scale, as D2 expects. The test now checks both backends.
+
+### What I learned
+- With every stored structure either opened or small, the warm vault CLI is dominated by fixed costs: startup 7 ms, compile 1.3 ms, terms decode 16 ms, the query itself, and process exit. The 2 s of loading is gone.
+- Pack (reading about 50 chunk records and building their JS objects) is now the largest part of a served query after the engine, at 2–5 ms. That's the price of not holding 85k chunk objects. It is well inside the latency budget.
+
+### What was tricky to build
+- **Parity with goja, not with the browser.** `localeCompare` in the Go port must match goja (root collation, NFD), not V8's ICU. The parity that matters is with rag.js running in the same Go runtime.
+
+### What warrants a second pair of eyes
+- The terms index still decodes a 9.1 MB gob at open. It's 15 ms, but proportional to the corpus; it could become a records-style file if corpora grow 10×.
+- RSS grows from 80 to 131 MB over a query run: the record cache (4,096 chunks) plus bleve's mapped segments. It's bounded by the cache size, but worth watching in a long-running server.
+
+### What should be done in the future
+- Optional: re-upload the guide (v3) with §10.1.
+- Open a PR for `task/ragwb-002-disk-backed-retrieval`.
+
+### Code review instructions
+- `pkg/natives/terms.go`, `terms_native.go`, `pkg/runner/terms_parity_test.go`; the default switch in `bm25_native.go`, `runner/runtime.go`, `cmds/roots.go`; `cmds/verbs_test.go`.
+- Reproduce: `go test ./pkg/runner -run TestTermsIndexParity -v` (set `RAGWB_PARITY_ROOT` for the vault); `ragwb --timings --root <vault> verbs --dir examples/apps/parc parc search "…"` twice; `ragwb --root <vault> serve examples/apps/parc` plus `scripts/05-serve-latency-bench.py`.

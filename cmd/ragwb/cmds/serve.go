@@ -74,7 +74,7 @@ func NewServeCommand() *cobra.Command {
 					base = filepath.Dir(path)
 				}
 				rec := timing.New(time.Now(), "open "+name+" (runtime, require, build, load artifacts)")
-				factory, err := runner.NewFactory(runner.Config{Roots: Roots(base), Base: base, JSComponents: JSComponents(), LLM: backend, BuildCalls: BuildCalls(), Embedder: embedder, EmbedCache: embedCache, Artifacts: artStore, Timing: rec, SourceDigestTTL: sourceTTL(watch)})
+				factory, err := runner.NewFactory(runner.Config{Roots: Roots(base), Base: base, JSComponents: JSComponents(), IndexBackend: IndexBackend(), LLM: backend, BuildCalls: BuildCalls(), Embedder: embedder, EmbedCache: embedCache, Artifacts: artStore, Timing: rec, SourceDigestTTL: sourceTTL(watch)})
 				if err != nil {
 					return err
 				}

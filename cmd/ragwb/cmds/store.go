@@ -52,7 +52,7 @@ func Artifacts() (*artifacts.Store, error) {
 	if noStore {
 		return nil, nil
 	}
-	return artifacts.Open(storeRoot(), runner.ArtifactNamespace(jsComponents))
+	return artifacts.Open(storeRoot(), runner.ArtifactNamespace(jsComponents, indexBackend))
 }
 
 // NewStoreCommand is `ragwb store`: inspect and prune persisted build outputs.
@@ -76,7 +76,7 @@ func NewStoreCommand() (*cobra.Command, error) {
 		Use:   "prune",
 		Short: "Delete namespaces of other ragwb versions (--all: everything)",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			keep := runner.ArtifactNamespace(jsComponents)
+			keep := runner.ArtifactNamespace(jsComponents, indexBackend)
 			if all {
 				keep = ""
 			}
@@ -100,7 +100,7 @@ func (c *storeList) RunIntoGlazeProcessor(ctx context.Context, _ *values.Values,
 	if err != nil {
 		return err
 	}
-	cur := runner.ArtifactNamespace(jsComponents)
+	cur := runner.ArtifactNamespace(jsComponents, indexBackend)
 	for _, m := range ms {
 		if err := gp.AddRow(ctx, types.NewRow(types.MRP("ns", m.NS), types.MRP("current", m.NS == cur), types.MRP("type", m.Type), types.MRP("codec", m.Codec),
 			types.MRP("count", m.Count), types.MRP("mb", float64(m.Size*10/(1<<20))/10), types.MRP("created", m.Created.Format("2006-01-02 15:04:05")), types.MRP("key", m.Key[:12]))); err != nil {

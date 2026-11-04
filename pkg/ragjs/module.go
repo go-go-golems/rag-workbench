@@ -8,14 +8,17 @@
 package ragjs
 
 import (
+	"context"
 	"embed"
 	"fmt"
 	"sync"
 
 	"github.com/dop251/goja"
+	"github.com/dop251/goja_nodejs/require"
 	"github.com/go-go-golems/go-go-goja/pkg/engine"
 
 	"github.com/go-go-golems/rag-workbench/pkg/llm"
+	"github.com/go-go-golems/rag-workbench/pkg/rtenv"
 )
 
 //go:embed assets/rag.js assets/gui.js assets/kit.js
@@ -101,16 +104,45 @@ type Native interface {
 	Install(vm *goja.Runtime, rag *goja.Object) error
 }
 
+// Env is per-runtime host services for natives (see rtenv.Env). AddCloser is a
+// no-op when the module is loaded outside an engine runtime.
+type Env = rtenv.Env
+
+// EnvNative is a Native that needs Env; ragLoader calls InstallEnv instead of Install.
+type EnvNative interface {
+	Native
+	InstallEnv(vm *goja.Runtime, rag *goja.Object, env Env) error
+}
+
 // Modules returns the runtime module registrars for ragwb, ragwb/gui and ragwb/kit.
 func Modules(opts Options) []engine.RuntimeModuleRegistrar {
 	return []engine.RuntimeModuleRegistrar{
-		engine.NativeModuleRegistrar{ModuleName: ModuleRag, Loader: ragLoader(opts)},
+		ragRegistrar{opts: opts},
 		engine.NativeModuleRegistrar{ModuleName: ModuleGui, Loader: rootLoader(ModuleGui, "gui", func(p *programs) *goja.Program { return p.gui }, ModuleRag)},
 		engine.NativeModuleRegistrar{ModuleName: ModuleKit, Loader: rootLoader(ModuleKit, "kit", func(p *programs) *goja.Program { return p.kit }, ModuleRag, ModuleGui)},
 	}
 }
 
-func ragLoader(opts Options) func(*goja.Runtime, *goja.Object) {
+// ragRegistrar registers "ragwb" with the runtime's closer hook, so natives can
+// release what they open when the runtime closes.
+type ragRegistrar struct{ opts Options }
+
+func (ragRegistrar) ID() string { return "native:" + ModuleRag }
+
+func (r ragRegistrar) RegisterRuntimeModule(ctx *engine.RuntimeModuleRegistrationContext, reg *require.Registry) error {
+	if reg == nil {
+		return fmt.Errorf("require registry is nil")
+	}
+	env := Env{AddCloser: func(func() error) {}}
+	if ctx != nil && ctx.AddCloser != nil {
+		add := ctx.AddCloser
+		env.AddCloser = func(f func() error) { _ = add(func(context.Context) error { return f() }) }
+	}
+	reg.RegisterNativeModule(ModuleRag, ragLoader(r.opts, env))
+	return nil
+}
+
+func ragLoader(opts Options, env Env) func(*goja.Runtime, *goja.Object) {
 	return func(vm *goja.Runtime, moduleObj *goja.Object) {
 		p, err := load()
 		if err != nil {
@@ -128,7 +160,13 @@ func ragLoader(opts Options) func(*goja.Runtime, *goja.Object) {
 			panic(vm.NewGoError(err))
 		}
 		for _, n := range opts.Natives {
-			if err := n.Install(vm, rag); err != nil {
+			var err error
+			if en, ok := n.(EnvNative); ok {
+				err = en.InstallEnv(vm, rag, env)
+			} else {
+				err = n.Install(vm, rag)
+			}
+			if err != nil {
 				panic(vm.NewGoError(fmt.Errorf("install native %s: %w", n.Name(), err)))
 			}
 		}
