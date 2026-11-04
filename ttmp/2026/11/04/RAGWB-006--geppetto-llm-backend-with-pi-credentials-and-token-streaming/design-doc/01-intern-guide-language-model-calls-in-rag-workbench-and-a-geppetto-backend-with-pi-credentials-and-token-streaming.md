@@ -550,3 +550,26 @@ case "pi":
 | `/home/manuel/code/wesen/slop-computer/pkg/llm/gepp/{backend,sample,gepp_test}.go` | reference implementation |
 | `/home/manuel/code/wesen/go-go-golems/geppetto/pkg/steps/ai/providers/pi/` | Pi provider (agentdir, resolve, thinking, catalog) |
 | `ttmp/2026/11/04/RAGWB-006--…/scripts/01-geppetto-pi-spike/main.go` | the spike |
+
+## 16. Implementation status (2026-11-04)
+
+Implemented as designed on branch `task/ragwb-006-geppetto-llm`:
+
+| phase | commit | result |
+|---|---|---|
+| 0 | `645b882` | geppetto v0.13.13; glazed v1.4.3 (`--output` → `--format` in verbs); spike |
+| 1 | `1359767` | `pkg/llm/gepp` (`backend.go`, `sample.go`), 8 scripted-provider tests; `llm.TierBudget`, `llm.ForcedAnswer`, `llm.StripToolMarkup` exported for both backends |
+| 2 | `e5284f2` | `--llm pi`, `--pi-agent-dir`; tier flags default per backend (`tiersOr`); `DescribeLLM` in `serve` and `workbench` startup lines |
+| 3 | `cb8da58` | `pkg/llm/gepp/gepptest` (scripted provider + agent dir), `pkg/ragjs/stream_test.go`, `TestVerbSSEStreamsGeppettoDeltas` |
+
+Deviations from the plan:
+
+- The test fixture became a package (`gepptest`) instead of being copied into three test files.
+- `--llm-quick/-default/-complex` now default to "" in the flag set; the effective defaults are printed in their help text and filled per backend.
+
+Live measurements, with `--llm pi`:
+- **reports `ask` over SSE:** 23 `text` events from 4.7 s (after the LLM rerank) to 6.3 s; the joined deltas equal the answer.
+- **answer-first in the browser:** the answer grew from 25 to 1,266 characters in ten repaints.
+- **workbench `/_rt/sample`:** 35 `text` events for one call.
+
+Open: whether `--llm pi` should become the default when Pi's agent directory exists; streaming progress for the JSON `rerank.llm` step that precedes answers.
