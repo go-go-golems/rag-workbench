@@ -169,3 +169,61 @@ Browser, against
 ### Code review instructions
 - Start at `foldEvent`, `stepDetail` and `traceDetails` in `pkg/ragjs/assets/gui.js`, then `runNow` (the `onEvent`, ticker and `finally`), then `describe` in `rag.js`.
 - Validate with `go test ./pkg/ragjs -run 'TestTraceFolds|TestCachedSteps' -v`. Then serve the answer-first preset with `RAGWB_FAKE_STREAM="60,150ms" --llm fake`, open the Trace tab, press Ask, and expand rows while the rerank and the answer run.
+
+## Step 3: real-reranker benchmark and the vault report
+
+Before writing the vault report, I measured `rerank.model` against the real `bge-rr-v2-m3` reranker. Until then the only evidence for "batched equals one request" came from a deterministic fake ranker. The benchmark refined that claim. In all 12 batched runs the order of the 30 passages was the same as with one request, but the scores were not identical: they differed by up to 0.0006. The report states it that way.
+
+The report is in go-go-parc at `Projects/2026/11/04/PROJECT REPORT - rag-workbench - Per-Step Trace Details and an Asynchronous Batched Rerank - A Technical Deep Dive.md`, with three screenshots in `_assets/`. It was pushed as go-go-parc `eb7b821`.
+
+### Prompt Context
+**User prompt (verbatim):** see Step 1.
+**Assistant interpretation:** Write the textbook-style deep-dive report for the vault, then commit and push go-go-parc.
+**Inferred user intent:** A durable explanation of both features, grounded in real measurements and real traces.
+**Commit (code):** "RAGWB-005: real-reranker batching benchmark; diary step 3".
+
+### What I did
+- `scripts/01-rerank-batching-bench.js` (a `ragwb run` script body that returns `{plan}`):
+  - BM25 top 30 over the 462-chunk reports corpus, reranked with `bge-rr-v2-m3`;
+  - three configurations (batch 30×1, 8×2, 4×4), four queries, one warm-up and one measured run each;
+  - records total and rerank ms, ms to the first `progress` event, the number of progress events, whether the order and the top 10 match the one-request run, the largest score difference, and the latency of a lexical query issued during the rerank.
+- Results are in `scripts/01-rerank-batching-bench.result.json`.
+- Wrote the vault report and pushed go-go-parc, staging only the report and its three images.
+
+### What worked
+```
+./dist/ragwb --embed lunaroute --no-store run --files examples/apps/reports/corpus scripts/01-rerank-batching-bench.js
+config   median rerank   median first progress   lexical during rerank   order equal
+30x1     310 ms          332 ms (= end)          6–11 ms                 4/4 (reference)
+8x2      309 ms          158 ms                  6–8 ms                  4/4, max |Δscore| 0.0001
+4x4      558 ms          198 ms                  6–18 ms                 4/4, max |Δscore| 0.0006
+```
+go-go-parc: `aa65b55..eb7b821  main -> main`.
+
+### What didn't work
+- First attempt: `Error: script must return { plan, ... }`. A `ragwb run` file is an async function *body*, not a module with an IIFE.
+- Second attempt: `GoError: source.dir: lstat …/scripts/examples/apps/reports/corpus`. Relative `source.dir` roots resolve against the script's directory. Switched to `rag.files("*.md")` with `run --files examples/apps/reports/corpus`.
+- The first comparison used `id:score` strings and reported `sameRanking: False` for 3 of 8 batched runs. A diff script showed the cause:
+  - one request is deterministic (two runs gave identical scores);
+  - batched scores differ by ≤ 0.0003 in that run;
+  - no rank changed.
+
+  The benchmark now reports order, top 10 and score drift separately.
+- While writing the report, I had described `TestRerankBatchedEqualsOneRequest` from memory ("batch sizes 1, 3 and 7"). Reading the test showed it uses 11 passages, batch 3, concurrency 2. The report was corrected before the push.
+
+### What I learned
+- The rerank service's scores depend slightly on how passages are grouped into a request (fourth decimal). Order is stable at the top. Tail passages tie at four decimals (`0.0024`, `0.0024`), so a different grouping could swap them.
+- Smaller batches are not free. Eight requests of 4, four at a time, took a median of 558 ms, against about 310 ms for 1×30 and 4×8.
+
+### What was tricky to build
+- Telling the real effect (score drift) from a measurement artefact (string comparison of rounded scores). It needed a dedicated diff over all 30 passages and a repeat of the single-request run.
+
+### What warrants a second pair of eyes
+- The sample is small: 4 queries, one measured run each, over a network. The report says so.
+
+### What should be done in the future
+- See the report's "Near-term next steps": `parts` in the compact hits event, and asynchronous query embedding.
+
+### Code review instructions
+- Run the benchmark command above (needs LunaRoute credentials) and compare with `01-rerank-batching-bench.result.json`.
+- Read the vault report's "Measurements against the real reranker" section against the JSON.
