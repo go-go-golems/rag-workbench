@@ -30,9 +30,9 @@ func DefaultTiers() TierModels {
 // eval steps (a real session used 6 before answering), so allow ten.
 const DefaultMaxRounds = 10
 
-// stripToolMarkup removes tool-call syntax some models (GLM) emit as plain text
+// StripToolMarkup removes tool-call syntax some models (GLM) emit as plain text
 // when they want a tool but none is offered: everything from the first marker on.
-func stripToolMarkup(s string) string {
+func StripToolMarkup(s string) string {
 	for _, m := range []string{"<tool_call>", "<|tool_call|>", "<function_call>"} {
 		if i := strings.Index(s, m); i >= 0 {
 			s = strings.TrimRight(s[:i], " \n\t")
@@ -41,8 +41,12 @@ func stripToolMarkup(s string) string {
 	return s
 }
 
-// tierBudget is max_tokens per tier, sized so reasoning doesn't starve the answer.
-var tierBudget = map[string]int{"quick": 2048, "default": 8192, "complex": 16384}
+// ForcedAnswer is the user message added before the last tool-loop round, which
+// offers no tools: without it GLM emits its native tool-call markup as text.
+const ForcedAnswer = "(The tool budget for this answer is used up. Answer now from what you have, in plain text, without calling tools.)"
+
+// TierBudget is max_tokens per round per tier, sized so reasoning doesn't starve the answer.
+var TierBudget = map[string]int{"quick": 2048, "default": 8192, "complex": 16384}
 
 // Client talks to an OpenAI-compatible gateway (LunaRoute): chat, embeddings, rerank.
 type Client struct {
@@ -217,7 +221,7 @@ func (c *Client) Sample(ctx context.Context, req Request, onText OnText, exec Ex
 	model, tier := c.model(req)
 	maxTokens := req.MaxTokens
 	if maxTokens == 0 {
-		maxTokens = tierBudget[tier]
+		maxTokens = TierBudget[tier]
 	}
 	msgs := make([]oaMessage, 0, len(turns)+4)
 	for _, t := range turns {
@@ -242,7 +246,7 @@ func (c *Client) Sample(ctx context.Context, req Request, onText OnText, exec Ex
 		lastRound := round >= maxRounds
 		if lastRound && len(tools) > 0 && round > 1 {
 			// Forced answer: without this, GLM emits its native tool-call markup as text.
-			msgs = append(msgs, oaMessage{Role: "user", Content: "(The tool budget for this answer is used up. Answer now from what you have, in plain text, without calling tools.)"})
+			msgs = append(msgs, oaMessage{Role: "user", Content: ForcedAnswer})
 		}
 		body := map[string]any{"model": model, "messages": msgs, "max_tokens": maxTokens}
 		if len(tools) > 0 && !lastRound {
@@ -263,7 +267,7 @@ func (c *Client) Sample(ctx context.Context, req Request, onText OnText, exec Ex
 			return res, &Failure{Code: "upstream_error", Message: "no choices in response", Text: all.String()}
 		}
 		ch := r.Choices[0]
-		content := stripToolMarkup(ch.Message.Content)
+		content := StripToolMarkup(ch.Message.Content)
 		if content != "" {
 			delta := content
 			if all.Len() > 0 {
