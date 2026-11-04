@@ -2,6 +2,7 @@ package runner
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"math/rand"
@@ -31,7 +32,7 @@ type deltaRun struct {
 const deltaScript = `(async (root) => {
 	const rag = require("ragwb");
 	const corpus = rag.corpus("d").from(rag.source.dir({ root, include: ["**/*.md"] }))
-		.parse(rag.markdown()).chunk(rag.sections()).index("text", rag.bm25());
+		.parse(rag.markdown()).chunk(rag.sections()).index("text", rag.bm25()).index("meta", rag.terms({ keys: ["type", "tags", "status"] }));
 	const plan = rag.plan("d").over(corpus).signals({ q: "", k: 8 }).retrieve("text", { k: 20 }).limit();
 	const ir = rag.compile(plan), eng = rag.engine();
 	const rep = await eng.build(ir);
@@ -45,6 +46,9 @@ const deltaScript = `(async (root) => {
 		if (r.errors.length) throw new Error(r.errors.join("\n"));
 		top.push(r.top(8).map(h => [h.id, h.score]));
 	}
+	const meta = art.indexes.get("meta");
+	for (const q of ["note w1 edited1 marker zebra", "project-report done", "w3 added deep", "empty w0"]) top.push(meta.search(q, 50).map(h => [h.id, h.score]));
+	top.push(Object.entries(meta.values("tags")));
 	const nodes = {};
 	for (const [id, st] of Object.entries(rep.nodes)) nodes[id] = { incremental: !!st.incremental, reused: !!st.reused, count: st.count, delta: st.delta || null };
 	return JSON.stringify({ nodes, docs: JSON.stringify(docs), chunks: JSON.stringify(chunks), order: JSON.stringify(order), top: JSON.stringify(top), n: chunks.length });
@@ -103,6 +107,8 @@ func TestDeltaBuildEqualsFullBuild(t *testing.T) {
 	if first.Nodes["parse"]["incremental"] == true {
 		t.Fatal("first build cannot be incremental")
 	}
+	// stored artifacts are immutable: no later delta build may change the first build's files
+	frozen := treeHash(t, filepath.Join(store.Dir, store.NS))
 	list := func() []string {
 		var out []string
 		_ = filepath.WalkDir(root, func(p string, d os.DirEntry, err error) error {
@@ -166,7 +172,7 @@ func TestDeltaBuildEqualsFullBuild(t *testing.T) {
 		if full.Nodes["chunks"]["incremental"] == true {
 			t.Fatal("a fresh store cannot build incrementally")
 		}
-		if inc.Nodes["chunks"]["incremental"] == true {
+		if inc.Nodes["chunks"]["incremental"] == true && inc.Nodes["ix-text"]["incremental"] == true && inc.Nodes["ix-meta"]["incremental"] == true {
 			incremental++
 		}
 		ids := make([]string, 0, len(inc.Nodes))
@@ -181,9 +187,57 @@ func TestDeltaBuildEqualsFullBuild(t *testing.T) {
 			}
 		}
 	}
-	if incremental < 6 {
-		t.Fatalf("only %d of 8 steps were incremental", incremental)
+	if incremental < 8 {
+		t.Fatalf("only %d of 8 steps were incremental through the index", incremental)
 	}
+	after := treeHash(t, filepath.Join(store.Dir, store.NS))
+	for p, h := range frozen {
+		if after[p] != h {
+			t.Fatalf("stored file %s changed after delta builds", p)
+		}
+	}
+
+	// a broken base (here: the newest stored chunks' index) makes the delta fail; the
+	// node falls back to a full build and the result is still correct
+	ms, _ := artifacts.List(store.Dir)
+	for _, m := range ms {
+		if m.Type == "chunk.sections" && m.Kind == artifacts.KindDir {
+			_, dir, _ := store.Path(m.Key)
+			_ = os.WriteFile(filepath.Join(dir, "index.json"), []byte("{broken"), 0o644)
+			break // List is newest first
+		}
+	}
+	p := list()[0]
+	_ = os.WriteFile(p, []byte(note(999, "after the break")), 0o644)
+	bump(p)
+	inc := runDelta(t, root, store)
+	fresh, _ := artifacts.Open(t.TempDir(), ArtifactNamespace(false))
+	full := runDelta(t, root, fresh)
+	if inc.Nodes["chunks"]["incremental"] == true {
+		t.Fatalf("chunks continued from a broken base: %+v", inc.Nodes["chunks"])
+	}
+	if inc.Chunks != full.Chunks || tiesSorted(t, inc.Top) != tiesSorted(t, full.Top) {
+		t.Fatal("after a failed delta the full fallback differs from a full build")
+	}
+}
+
+// treeHash maps every file under dir (relative path) to its size and mtime.
+func treeHash(t *testing.T, dir string) map[string]string {
+	t.Helper()
+	out := map[string]string{}
+	_ = filepath.WalkDir(dir, func(p string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return nil
+		}
+		rel, _ := filepath.Rel(dir, p)
+		if strings.HasPrefix(rel, "lineage") || strings.HasPrefix(filepath.Base(filepath.Dir(p)), ".tmp-") {
+			return nil // the lineage index is the one mutable part
+		}
+		b, _ := os.ReadFile(p)
+		out[rel] = fmt.Sprintf("%x", sha256.Sum256(b))
+		return nil
+	})
+	return out
 }
 
 // tiesSorted orders hits of equal score by id and drops the last group of

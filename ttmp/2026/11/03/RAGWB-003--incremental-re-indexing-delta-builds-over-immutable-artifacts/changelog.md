@@ -34,3 +34,13 @@ Phase 3: records2 (64 COW shards) for docs and chunks, delta protocol in Engine.
 
 - /home/manuel/code/wesen/go-go-golems/rag-workbench/pkg/natives/delta.go — parse and chunk deltas
 - /home/manuel/code/wesen/go-go-golems/rag-workbench/pkg/natives/records2.go — copy-on-write sharded records
+
+## 2026-11-03
+
+Phase 4: bleve clone+delta and terms rows+rebuild; exact BM25 field statistics via PreSearchData (segment-independent; presets hit@5 0.944 / MRR 0.913, vault self-recall 0.730); vault one-note edit 0.45 s wall; diary step 6
+
+### Related Files
+
+- /home/manuel/code/wesen/go-go-golems/rag-workbench/pkg/natives/bleve_bm25.go — ApplyDelta and exact BM25 stats
+- /home/manuel/code/wesen/go-go-golems/rag-workbench/pkg/natives/terms.go — Terms.Delta from rows
+- /home/manuel/code/wesen/go-go-golems/rag-workbench/pkg/runner/delta_test.go — incremental vs full equivalence

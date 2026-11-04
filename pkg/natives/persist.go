@@ -18,7 +18,7 @@ import (
 // component's output changes for the same input (a port fix, a new field), so
 // persisted artifacts from the old version are not reused (it is part of the
 // artifact namespace, see runner.ArtifactNamespace).
-const Version = "2026-11-04.2" // RAGWB-003: path-derived doc ids, per-doc chunk ord
+const Version = "2026-11-04.3" // RAGWB-003: path-derived doc ids, per-doc chunk ord; bleve BM25 field statistics
 
 // Persist installs rag's env.artifacts hook backed by an artifact store:
 //

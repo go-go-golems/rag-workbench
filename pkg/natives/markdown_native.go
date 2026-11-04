@@ -54,7 +54,7 @@ const markdownJS = `(function (rag, h) {
         if (r.full) { ctx.log('full build: ' + r.full); return null; }
         return {
           value: ctx.store.view(r.records), count: r.count,
-          delta: { full: false, upsert: r.upsert, removeDocs: r.removeDocs, removeIds: r.removeIds },
+          delta: { full: false, upsert: r.upsert, removeDocs: r.removeDocs, removeIds: r.removeIds, removed: r.removed },
           summary: { upserts: r.upsert.length, removes: r.removeIds.length, docs: r.docs },
         };
       },
@@ -151,7 +151,7 @@ func (m Markdown) Install(vm *goja.Runtime, rag *goja.Object) error {
 		remove := strsFromJS(vm, call.Argument(2))
 		p := chunkParams(vm, optObject(vm, call.Argument(3)))
 		dir := call.Argument(4).String()
-		r, chunks, removeDocs, removeIDs, reason, err := ChunkDelta(base, docs, remove, p, dir)
+		r, chunks, removeDocs, removed, reason, err := ChunkDelta(base, docs, remove, p, dir)
 		if err != nil {
 			panic(vm.NewGoError(err))
 		}
@@ -163,7 +163,12 @@ func (m Markdown) Install(vm *goja.Runtime, rag *goja.Object) error {
 		_ = o.Set("count", r.Len())
 		_ = o.Set("upsert", chunksArray(vm, chunks))
 		_ = o.Set("removeDocs", strArray(vm, removeDocs))
+		removeIDs := make([]string, len(removed))
+		for i := range removed {
+			removeIDs[i] = removed[i].ID
+		}
 		_ = o.Set("removeIds", strArray(vm, removeIDs))
+		_ = o.Set("removed", chunksArray(vm, removed))
 		_ = o.Set("docs", len(docs))
 		return o
 	})

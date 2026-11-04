@@ -370,3 +370,112 @@ one-line edit (ragwb run -v build.js):  files 21.4 ms INC {upserts:1, unchanged:
 ### Code review instructions
 - Read `tryDelta` and the changed `build` loop in `rag.js`, then `CowRecords2`, then `delta.go`.
 - Validate with `go test ./pkg/natives -run 'Records2|Manifest' -v` and `go test ./pkg/runner -run 'Delta|Lineage|Records' -v`.
+
+## Step 6: Phase 4 — bleve and terms deltas; exact BM25 statistics; a one-note edit on the vault in 0.45 s wall
+
+Phase 4 makes both indexes incremental:
+- **bleve:** an index is cloned with its segments hard-linked, the touched documents' old chunks are deleted, and the new ones are indexed.
+- **terms:** the index is rebuilt from per-chunk rows kept in the artifact, per D6.
+
+On the vault copy, a one-note edit now runs in 0.45 s wall for the whole CLI process, against 22 s for a cold build:
+
+| node | time |
+|---|---|
+| files | 21 ms |
+| parse | 23 ms |
+| chunks | 27 ms |
+| ix-text (bleve) | 18 ms |
+| ix-meta (terms) | 215–263 ms |
+
+After three such edits, the incremental store answers seven BM25 queries and one terms query identically to a fresh full build of the same tree.
+
+The bleve delta exposed a real equivalence problem. bleve's BM25 average field length is `ceil(FieldCardinality / DocCount)`, and FieldCardinality is the *sum of each segment's dictionary size*. It depends on how scorch split the index into segments, so a clone plus delta, or even two fresh builds, can score differently. On the 583-chunk test corpus, a top hit scored 0.8293 incrementally against 0.5047 in a full build.
+
+The fix passes our own statistics through `req.PreSearchData`: DocCount N, plus the total token count per field. These are exact, independent of segments, and maintained through deltas; they also make this proper BM25, because the scorer's document length is the token count. Rankings shift:
+- presets improved: hit@5 0.942 → 0.944, MRR 0.893 → 0.913, nDCG 0.770 → 0.794;
+- vault self-recall fell from 0.755 to 0.730, still above the memory backend's 0.725.
+
+### Prompt Context
+**User prompt (verbatim):** see Step 2. The earlier rule from RAGWB-002 also applies: "ranking can change btw when adding bleve, as long as it's not completely wrong".
+**Assistant interpretation:** Phase 4 of the guide: index deltas, with equivalence to full builds.
+**Inferred user intent:** Make editing one note cheap end to end, not just for the first three nodes.
+**Commit (code):** the commit for this step: "RAGWB-003 Phase 4: bleve and terms deltas, exact BM25 field statistics".
+
+### What I did
+- `pkg/natives/bleve_bm25.go`:
+  - `bleveDoc` is extracted from `BuildBleveBm25` and also accumulates `FieldLen`, the token totals per bleve field;
+  - `cloneBleveDir` hard-links `*.zap` and copies the rest;
+  - `(*BleveBm25).ApplyDelta(dst, removeIDs, removedText, n, id, docID, text)`: clone, open writable, one batch (deletes, then indexes), check `DocCount` == N − removed + new, write the meta with the updated `FieldLen`;
+  - `search` sets `req.PreSearchData[BM25PreSearchDataKey] = &BM25Stats{DocCount: N, FieldCardinality: FieldLen}`. Every queried field gets an entry: plan fields, `all`, and `docId` = N for `searchIn`.
+- `pkg/natives/bm25_native.go`: the `index.bm25` `delta.apply` (bleve backend only; memory rebuilds) and `h.deltaBleve`.
+- `pkg/natives/delta.go`: `ChunkDelta` returns the removed old chunks, not just their ids, so the bleve delta can subtract their field lengths. Their texts come from the base records of the touched docs only.
+- `pkg/natives/terms.go`:
+  - `Terms.DocIDs` and `Terms.Rows`, the build input kept in the artifact;
+  - `NewTermsRows`;
+  - `(*Terms).Delta(docOrder, upserts, gone)` rebuilds from rows in the new canonical doc order: upserted docs' new rows, else the base rows.
+- `pkg/natives/terms_native.go`:
+  - `valsOf` holds the extraction;
+  - `h.build` takes doc ids;
+  - the `delta.apply`/`h.delta` hook takes the doc order from the new chunks view's records2 index.
+- `natives.Version` → `"2026-11-04.3"`, since scoring changed for the same input.
+- `pkg/runner/delta_test.go`:
+  - the plan gains `index.terms`; terms searches and `values("tags")` are compared;
+  - every step must be incremental through both indexes;
+  - stored files are byte-identical after all delta builds (immutability);
+  - corrupting the newest stored chunks' `index.json` makes the next build fall back to a full build, and the result equals a fresh full build.
+- `scripts/03-vault-delta-build.js` prints per-node timing and the incremental state; `scripts/04-vault-delta-vs-full-queries.js` prints top-10s for comparing stores.
+
+### What worked
+```
+go test ./pkg/runner -run TestDeltaBuildEqualsFullBuild -v
+  step 1 … ix-meta inc=true {removes:6 upserts:7}; ix-text inc=true {removes:6 upserts:7} … (8/8 steps incremental end to end)
+--- PASS: TestDeltaBuildEqualsFullBuild (4.27s)
+go test ./pkg/... -count=1                                             all ok
+python3 RAGWB-002/scripts/01-presets-quality.py                         mean hit5 memory 0.925 bleve 0.944 · mrr 0.872 / 0.913 · ndcg 0.783 / 0.794 · hit@5 drops > 0.1: none
+go run RAGWB-002/scripts/02-vault-quality -chunks …/edc1ece5955f1f.bin  self-recall@10 memory 0.725 · bleve 0.730 · mean query memory 18.29 ms · bleve 9.00 ms
+```
+Vault copy, fresh store, then three one-note edits (`ragwb --store $S/store --root $S/vault --root $S run -v scripts/03-vault-delta-build.js`):
+```
+cold:   chunks 2616 full · ix-text 14244.8 full · ix-meta 1999.1 full             wall 21.98 s, rss 4.1 GB
+edit 1: chunks 26.5 INC {upserts 29, removes 28} · ix-text 18.2 INC · ix-meta 263.5 INC   wall 0.45 s, rss 257 MB
+edit 2: chunks 29.9 INC · ix-text 17.5 INC · ix-meta 216.7 INC                             wall 0.45 s
+edit 3: chunks 27.7 INC · ix-text 19.6 INC · ix-meta 214.3 INC                             wall 0.43 s
+```
+Incremental store against a fresh full build of the same vault state (`scripts/04-…`):
+```
+chunks 85886 85886
+'zebra edit'                  ties-normalized equal=True exact=False top1 1.6858 / 1.6858
+'goja regexp unicode'         … exact=True   (and 5 more queries, all exact)
+terms equal: True
+```
+
+### What didn't work
+- **Score drift from bleve's FieldCardinality**:
+  ```
+  step 3: top differ between the incremental and the full build:
+   inc  …#5-9-the-rebalance-law",0.8293] …
+   full …#5-9-the-rebalance-law",0.5047] …
+  ```
+  `FieldCardinality` in `index/scorch/snapshot_index.go:151-200` sums `dict.Cardinality()` over segments. The Phase 0 spike hid this, because on 85k chunks the ceiling rounds both values to the same integer. The fix is explicit `BM25Stats` (above).
+- After the fix, `searchIn` returned nothing (`bleve_bm25_test.go:93: searchIn(a, law) = []`), and a custom chunker without heading text lost hits (`artifacts_test.go:169: first = "one,one|1"`). bleve errors with "field stat for bm25 not present" for any queried field missing from the map: `docId`, or a plan field with no tokens at all. Every field now gets an entry.
+- The first `ApplyDelta` count check subtracted re-indexed ids (`N − removed + new − overlap`). Every delta that kept a chunk id therefore failed, and the build silently fell back to full; the test still passed, because full builds are equivalent. The test now requires every step to be incremental, and the check is `N − removed + new`: removed ids are all of the touched docs' old chunks.
+
+### What I learned
+- bleve's default BM25 is not plain BM25. Its average field length is in "distinct terms per segment", while the document length is in tokens: about 3 against about 200 for vault chunks. It also depends on merge history. Supplying exact statistics fixes determinism and makes scores plain BM25. Preset quality went up and vault self-recall went down slightly.
+- A delta test that only checks results cannot see silent fallbacks. Requiring `incremental` on every node is what found the count bug.
+
+### What was tricky to build
+- Keeping `FieldLen` exact needs the removed chunks' texts, which the index itself doesn't store. `ChunkDelta` reads them from the base chunk records of the touched docs only. This works because the bleve base was built from exactly that chunk base: `tryDelta` matches lineage inputs to delta `from`s.
+
+### What warrants a second pair of eyes
+- `Meta.Terms` (distinct terms, display only) is not tracked through deletions; it keeps the base's count.
+- The terms delta rebuilds the whole index from rows, 215–263 ms on the vault, which is now the largest share of a one-note edit, and its artifact grew by the rows. Patching postings would be faster, but D6 chose rebuilding for exactness.
+- `index.vector` and `map` components (`enrich`) have no delta. They build fully (vectors: embedding cache hits for unchanged texts; map: item caches), and downstream nodes then see `FULL`. That is the documented fallback for now.
+
+### What should be done in the future
+- Phase 5: `serve --watch`, `Engine.gc` and deferred close; `--full`; `store gc`/`verify`.
+- Make the terms rebuild cheaper: keep the value table and patch only touched docs' postings in canonical order.
+
+### Code review instructions
+- Read `ApplyDelta` and the `PreSearchData` block in `bleve_bm25.go`, then `Terms.Delta`.
+- Validate with `go test ./pkg/runner -run TestDeltaBuildEqualsFullBuild -v`, then `go test ./pkg/natives -run Bleve -v`.

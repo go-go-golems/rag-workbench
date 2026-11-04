@@ -41,8 +41,8 @@ func ParseDelta(base *Records2, docs []*Doc, removedNames []string, dir string) 
 
 // ChunkDelta chunks the upserted docs and drops the removed ones. Returns the
 // new records, the new chunks, the docs whose old chunks are gone (removed or
-// upserted) and the ids of those old chunks.
-func ChunkDelta(base *Records2, docs []*Doc, removeDocs []string, p ChunkParams, dir string) (*Records2, []Chunk, []string, []string, string, error) {
+// upserted) and those old chunks (index deltas delete them and need their texts).
+func ChunkDelta(base *Records2, docs []*Doc, removeDocs []string, p ChunkParams, dir string) (*Records2, []Chunk, []string, []Chunk, string, error) {
 	var chunks []Chunk
 	gone := append([]string{}, removeDocs...)
 	upserts := make([]R2Doc, 0, len(docs))
@@ -69,19 +69,28 @@ func ChunkDelta(base *Records2, docs []*Doc, removeDocs []string, p ChunkParams,
 		chunks = append(chunks, cs...)
 		gone = append(gone, d.ID)
 	}
-	var removeIDs []string
+	var removed []Chunk
 	for _, id := range gone {
-		ids, err := base.Order(id)
-		if err != nil {
+		name := ""
+		if info, ok := base.DocInfo(id); ok {
+			name = info.Name
+		}
+		if err := base.DocRecords(id, func(b []byte) error {
+			c, err := decodeChunkR2(b, name)
+			removed = append(removed, c)
+			return err
+		}); err != nil {
 			return nil, nil, nil, nil, "", err
 		}
-		removeIDs = append(removeIDs, ids...)
 	}
 	r, err := cowOpen(base, dir, removeDocs, upserts)
 	if chunks == nil {
 		chunks = []Chunk{}
 	}
-	return r, chunks, gone, removeIDs, "", err
+	if removed == nil {
+		removed = []Chunk{}
+	}
+	return r, chunks, gone, removed, "", err
 }
 
 func cowOpen(base *Records2, dir string, remove []string, upsert []R2Doc) (*Records2, error) {

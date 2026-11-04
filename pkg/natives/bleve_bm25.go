@@ -3,8 +3,10 @@ package natives
 import (
 	"encoding/json"
 	"fmt"
+	"io/fs"
 	"math"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -43,6 +45,13 @@ type BleveMeta struct {
 	// IDF. Otherwise each field is its own bleve field (per-field IDF) and weights
 	// are query boosts.
 	Combined bool `json:"combined,omitempty"`
+	// FieldLen is the total token count per bleve field over the indexed chunks
+	// (RAGWB-003). Searches pass it to bleve's BM25 as the field statistics, so
+	// the average field length is ceil(tokens / N), exact, and independent of
+	// how scorch happens to have split the index into segments: bleve's own
+	// statistic sums each segment's distinct terms, which a delta build (or a
+	// different merge) changes. Absent in indexes from before RAGWB-003.
+	FieldLen map[string]int64 `json:"fieldLen,omitempty"`
 }
 
 // BleveOptions configures BuildBleveBm25.
@@ -117,40 +126,14 @@ func BuildBleveBm25(dir string, n int, id, docID func(i int) string, text func(i
 	if err != nil {
 		return nil, fmt.Errorf("index.bm25 (bleve): create %s: %w", dir, err)
 	}
-	b := &BleveBm25{idx: idx, path: dir, Meta: BleveMeta{N: n, Stem: doStem, Fields: fields, Combined: o.Combined}}
+	b := &BleveBm25{idx: idx, path: dir, Meta: BleveMeta{N: n, Stem: doStem, Fields: fields, Combined: o.Combined, FieldLen: map[string]int64{}}}
 	if temp {
 		b.cleanup = dir
 	}
 	batch := idx.NewBatch()
 	terms := map[string]struct{}{}
 	for i := 0; i < n; i++ {
-		d := map[string]any{bleveDocIDField: docID(i)}
-		var all strings.Builder
-		for fi := range fields {
-			v, ok := text(i, fi)
-			if !ok {
-				continue
-			}
-			toks := Tokenize(v, doStem)
-			if len(toks) == 0 {
-				continue
-			}
-			for _, t := range toks {
-				terms[t] = struct{}{}
-			}
-			joined := strings.Join(toks, " ")
-			if !o.Combined {
-				d[bleveField(fi)] = joined
-				continue
-			}
-			for r := 0; r < repeats(fields[fi].Weight); r++ {
-				all.WriteString(joined)
-				all.WriteByte(' ')
-			}
-		}
-		if o.Combined && all.Len() > 0 {
-			d[bleveAllField] = all.String()
-		}
+		d := bleveDoc(docID(i), fields, func(f int) (string, bool) { return text(i, f) }, doStem, o.Combined, terms, b.Meta.FieldLen)
 		if err := batch.Index(id(i), d); err != nil {
 			_ = b.Close()
 			return nil, err
@@ -174,6 +157,135 @@ func BuildBleveBm25(dir string, n int, id, docID func(i int) string, text func(i
 		return nil, err
 	}
 	return b, nil
+}
+
+// bleveDoc is the bleve document of one chunk: its fields' tokens (one bleve
+// field per plan field, or the combined field) and its doc id.
+func bleveDoc(docID string, fields []Field, text func(f int) (string, bool), doStem, combined bool, terms map[string]struct{}, lens map[string]int64) map[string]any {
+	d := map[string]any{bleveDocIDField: docID}
+	var all strings.Builder
+	for fi := range fields {
+		v, ok := text(fi)
+		if !ok {
+			continue
+		}
+		toks := Tokenize(v, doStem)
+		if len(toks) == 0 {
+			continue
+		}
+		for _, t := range toks {
+			terms[t] = struct{}{}
+		}
+		joined := strings.Join(toks, " ")
+		if !combined {
+			d[bleveField(fi)] = joined
+			lens[bleveField(fi)] += int64(len(toks))
+			continue
+		}
+		lens[bleveAllField] += int64(len(toks) * repeats(fields[fi].Weight))
+		for r := 0; r < repeats(fields[fi].Weight); r++ {
+			all.WriteString(joined)
+			all.WriteByte(' ')
+		}
+	}
+	if combined && all.Len() > 0 {
+		d[bleveAllField] = all.String()
+	}
+	return d
+}
+
+// cloneBleveDir copies a scorch index directory to dst, hard-linking its
+// segment files (*.zap, immutable once written) and copying the rest (the
+// root.bolt snapshot list, index_meta.json). The clone can then be opened
+// writable: scorch only adds segments and replaces its own root.bolt, and a
+// merge that drops a segment unlinks the clone's link, not the base's file.
+func cloneBleveDir(src, dst string) error {
+	return filepath.WalkDir(src, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, _ := filepath.Rel(src, p)
+		out := filepath.Join(dst, rel)
+		if d.IsDir() {
+			return os.MkdirAll(out, 0o755)
+		}
+		if strings.HasSuffix(p, ".zap") {
+			return linkOrCopy(p, out)
+		}
+		return copyFile(p, out)
+	})
+}
+
+// ApplyDelta (RAGWB-003 §6.6) makes a new index at dst from this one: a clone
+// that deletes removeIDs and indexes n new chunks (as BuildBleveBm25 would).
+// The result is open writable until stored (Relocate reopens it read-only).
+// removedText gives the removed chunks' field texts (as text does for new
+// ones), so the field statistics can be kept exact.
+func (b *BleveBm25) ApplyDelta(dst string, removeIDs []string, removedText func(i, f int) (string, bool), n int, id, docID func(i int) string, text func(i, f int) (string, bool)) (*BleveBm25, error) {
+	b.mu.RLock()
+	src, meta := b.path, b.Meta
+	b.mu.RUnlock()
+	if meta.FieldLen == nil {
+		return nil, fmt.Errorf("index.bm25 (bleve): base index has no field statistics (built before RAGWB-003)")
+	}
+	lens := make(map[string]int64, len(meta.FieldLen))
+	for k, v := range meta.FieldLen {
+		lens[k] = v
+	}
+	gone := map[string]int64{}
+	for i := range removeIDs {
+		_ = bleveDoc("", meta.Fields, func(f int) (string, bool) { return removedText(i, f) }, meta.Stem, meta.Combined, map[string]struct{}{}, gone)
+	}
+	for k, v := range gone {
+		lens[k] -= v
+	}
+	if err := cloneBleveDir(src, dst); err != nil {
+		_ = os.RemoveAll(dst)
+		return nil, fmt.Errorf("index.bm25 (bleve): clone: %w", err)
+	}
+	idx, err := bleve.Open(dst)
+	if err != nil {
+		_ = os.RemoveAll(dst)
+		return nil, fmt.Errorf("index.bm25 (bleve): open clone: %w", err)
+	}
+	nb := &BleveBm25{idx: idx, path: dst, Meta: meta}
+	fail := func(err error) (*BleveBm25, error) {
+		_ = nb.Close()
+		_ = os.RemoveAll(dst)
+		return nil, err
+	}
+	batch := idx.NewBatch()
+	for _, rid := range removeIDs {
+		batch.Delete(rid)
+	}
+	terms := map[string]struct{}{}
+	for i := 0; i < n; i++ {
+		d := bleveDoc(docID(i), meta.Fields, func(f int) (string, bool) { return text(i, f) }, meta.Stem, meta.Combined, terms, lens)
+		if err := batch.Index(id(i), d); err != nil {
+			return fail(err)
+		}
+	}
+	if err := idx.Batch(batch); err != nil {
+		return fail(err)
+	}
+	count, err := idx.DocCount()
+	if err != nil {
+		return fail(err)
+	}
+	// the removed ids are all of the touched docs' old chunks, so no new id survives from the base
+	if want := meta.N - len(removeIDs) + n; int(count) != want {
+		return fail(fmt.Errorf("index.bm25 (bleve): delta left %d chunks, expected %d", count, want))
+	}
+	nb.Meta.N = int(count)
+	nb.Meta.FieldLen = lens
+	// Terms (distinct terms, shown by toJSON) is not tracked through deletions:
+	// it stays the base's count plus the new chunks' terms it can't rule out.
+	nb.Meta.Terms = max(meta.Terms, len(terms))
+	raw, _ := json.Marshal(nb.Meta)
+	if err := idx.SetInternal([]byte(bleveMetaKey), raw); err != nil {
+		return fail(err)
+	}
+	return nb, nil
 }
 
 // OpenBleveBm25 opens a stored index read-only (stored outputs are immutable).
@@ -314,6 +426,17 @@ func (b *BleveBm25) search(q string, k int, syn []Synonym, only []string, inDoc 
 	}
 	req := bleve.NewSearchRequestOptions(qq, k, 0, false)
 	req.IncludeLocations = true
+	if b.Meta.FieldLen != nil {
+		// every queried field needs a statistic: the plan fields, and docId (one token per chunk) for searchIn
+		card := map[string]int{bleveDocIDField: b.Meta.N, bleveAllField: 0}
+		for fi := range b.Meta.Fields {
+			card[bleveField(fi)] = 0
+		}
+		for f, n := range b.Meta.FieldLen {
+			card[f] = int(n)
+		}
+		req.PreSearchData = map[string]any{search.BM25PreSearchDataKey: &search.BM25Stats{DocCount: float64(b.Meta.N), FieldCardinality: card}}
+	}
 	res, err := idx.Search(req)
 	if err != nil {
 		return nil, err
