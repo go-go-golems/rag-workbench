@@ -70,34 +70,52 @@
     ].map(([k, v]) => gui.h('span', {}, k + ' ', gui.h('b', { text: v }))));
   };
 
+  // Server-Sent Events over fetch (EventSource can't POST): yields {event, data}
+  async function* sse(res) {
+    const rd = res.body.getReader(), dec = new TextDecoder();
+    let buf = '';
+    for (;;) {
+      const { done, value } = await rd.read();
+      if (value) buf += dec.decode(value, { stream: true });
+      let i;
+      while ((i = buf.indexOf('\n\n')) >= 0) {
+        const block = buf.slice(0, i); buf = buf.slice(i + 2);
+        let event = 'message', data = '';
+        for (const line of block.split('\n')) {
+          if (line.startsWith('event:')) event = line.slice(6).trim();
+          else if (line.startsWith('data:')) data += line.slice(5).trim();
+        }
+        if (data) yield { event, data: JSON.parse(data) };
+      }
+      if (done) return;
+    }
+  }
+
+  // o.onText(node, textSoFar) for LLM nodes; o.onEvent(event) for every engine event
+  // (node start/end, hits, text deltas, tools, progress; RAGWB-004 §6.4)
   async function run(signals, o = {}) {
     const trigger = o.trigger || 'change';
-    const stream = !!o.onText && trigger === 'submit';
+    const stream = (!!o.onText && trigger === 'submit') || !!o.onEvent;
     const t0 = performance.now();
-    const res = await fetch(api('/run' + (stream ? '?stream=1' : '')), {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, signal: o.signal,
+    const res = await fetch(api('/run'), {
+      method: 'POST', signal: o.signal,
+      headers: { 'Content-Type': 'application/json', ...(stream ? { Accept: 'text/event-stream' } : {}) },
       body: JSON.stringify({ signals, trigger }),
     });
     let out;
-    if (!stream) {
+    if (!stream || !(res.headers.get('Content-Type') || '').startsWith('text/event-stream')) {
       out = await res.json();
       if (!res.ok) throw new Error((out.error && out.error.message) || res.statusText);
     } else {
-      const rd = res.body.getReader(), dec = new TextDecoder();
-      let buf = '';
-      for (;;) {
-        const { done, value } = await rd.read();
-        if (value) buf += dec.decode(value, { stream: true });
-        let i;
-        while ((i = buf.indexOf('\n')) >= 0) {
-          const line = buf.slice(0, i).trim(); buf = buf.slice(i + 1);
-          if (!line) continue;
-          const m = JSON.parse(line);
-          if (m.type === 'text') o.onText(m.node, m.text);
-          else if (m.type === 'error') throw new Error(m.error);
-          else if (m.type === 'result') out = m;
+      const texts = {};
+      for await (const m of sse(res)) {
+        if (m.event === 'result') { out = m.data; continue; }
+        if (m.event === 'error') throw new Error(m.data.message || 'run failed');
+        if (m.event === 'text' && o.onText) {
+          texts[m.data.node] = (m.data.reset ? '' : texts[m.data.node] || '') + m.data.delta;
+          o.onText(m.data.node, texts[m.data.node]);
         }
-        if (done) break;
+        if (o.onEvent) try { o.onEvent({ type: m.event, ...m.data }); } catch (_) { /* page callback */ }
       }
       if (!out) throw new Error('the run stream ended without a result');
     }

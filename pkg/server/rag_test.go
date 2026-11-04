@@ -92,23 +92,21 @@ func TestRagServerRoutes(t *testing.T) {
 		}
 	}
 
-	// streamed run: NDJSON ending in the result
-	res, err = http.Post(ts.URL+"/api/rag/reports/run?stream=1", "application/json", strings.NewReader(`{"signals":{"q":"protojson"}}`))
+	// streamed run: Server-Sent Events, the engine's events, then the result
+	req, _ := http.NewRequest(http.MethodPost, ts.URL+"/api/rag/reports/run", strings.NewReader(`{"signals":{"q":"protojson"}}`))
+	req.Header.Set("Accept", "text/event-stream")
+	res, err = http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}
-	var last map[string]any
-	sc := bufio.NewScanner(res.Body)
-	sc.Buffer(make([]byte, 1<<20), 16<<20)
-	for sc.Scan() {
-		last = nil
-		if err := json.Unmarshal(sc.Bytes(), &last); err != nil {
-			t.Fatalf("bad NDJSON line: %v", err)
-		}
-	}
+	evs := readVerbSSE(t, res.Body)
 	res.Body.Close()
-	if last["type"] != "result" || last["timing"] == nil {
-		t.Fatalf("stream ended with %v", last["type"])
+	if res.Header.Get("Content-Type") != "text/event-stream" || len(evs) < 3 {
+		t.Fatalf("stream: %s, %d events", res.Header.Get("Content-Type"), len(evs))
+	}
+	last := evs[len(evs)-1]
+	if last.Event != "result" || last.Data["timing"] == nil || last.Data["chunks"] == nil || !strings.Contains(names(evs), "hits@") {
+		t.Fatalf("stream: %s; last %v", names(evs), last.Data["type"])
 	}
 
 	// lookups

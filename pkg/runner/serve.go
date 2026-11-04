@@ -126,11 +126,16 @@ const serveHarness = `(async (__mode, __path, __src, __opts) => {
       const nodes = Object.values(rep.nodes).filter(n => !n.reused).map(n => ({ id: n.id, ms: n.ms, incremental: !!n.incremental, delta: n.delta || null }));
       return JSON.stringify({ ok: true, ms: rep.ms, nodes, gc, chunks: art().chunks.size });
     },
-    run: async (signalsJson, trigger, onText) => {
+    // emit(type, json): the engine events of this run (RAGWB-004: the shell's SSE);
+    // holder.scope: its abort signal, for the host to cancel
+    run: async (signalsJson, trigger, emit, holder) => {
+      const sc = rag.newScope(emit ? ev => emit(String(ev.type), JSON.stringify(ev)) : () => {});
+      if (holder) holder.scope = sc;
       const r = await session.run(JSON.parse(signalsJson || '{}'), {
-        trigger: trigger || 'change',
-        ...(onText ? { onText: (node, text) => onText(String(node), String(text)) } : {}),
+        trigger: trigger || 'change', signal: sc.signal, detail: sc.detail,
+        ...(emit ? { onEvent: sc.emit } : {}),
       });
+      sc.close();
       collect();
       const t1 = now();
       const a = art();
@@ -249,18 +254,30 @@ type RunResult struct {
 
 // Run executes the plan's live nodes for signals (a JSON object). onText, when
 // set, receives streamed LLM text (node id, text so far) on the runtime's goroutine.
-func (a *ServedApp) Run(ctx context.Context, signals json.RawMessage, trigger string, onText func(node, text string)) (*RunResult, error) {
+func (a *ServedApp) Run(ctx context.Context, signals json.RawMessage, trigger string, sink EventSink) (*RunResult, error) {
 	t0 := time.Now()
+	var holder *goja.Object
+	stop := make(chan struct{})
+	defer close(stop)
 	v, err := ragjs.Eval(ctx, a.rt, "ragwb.serve.run", func(vm *goja.Runtime) (goja.Value, error) {
 		fn, err := a.method(vm, "run")
 		if err != nil {
 			return nil, err
 		}
 		var cb goja.Value = goja.Undefined()
-		if onText != nil {
-			cb = vm.ToValue(onText)
+		if sink != nil {
+			cb = vm.ToValue(func(typ, data string) { sink.Emit(Event{Type: typ, Data: json.RawMessage(data)}) })
 		}
-		return fn(goja.Undefined(), vm.ToValue(string(signals)), vm.ToValue(trigger), cb)
+		holder = vm.NewObject()
+		// a cancelled request aborts the run (remaining nodes and LLM calls stop)
+		go func() {
+			select {
+			case <-ctx.Done():
+				a.abortScope(holder)
+			case <-stop:
+			}
+		}()
+		return fn(goja.Undefined(), vm.ToValue(string(signals)), vm.ToValue(trigger), cb, holder)
 	})
 	if err != nil {
 		return nil, err
@@ -271,6 +288,22 @@ func (a *ServedApp) Run(ctx context.Context, signals json.RawMessage, trigger st
 	}
 	took := time.Since(t0)
 	return &RunResult{JSON: s, EvalMS: float64(took.Microseconds()) / 1000, Took: took}, nil
+}
+
+// abortScope aborts holder.scope (a rag request scope) on the owner.
+func (a *ServedApp) abortScope(holder *goja.Object) {
+	actx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, _ = a.rt.Owner.Call(actx, "ragwb.serve.abort", func(_ context.Context, vm *goja.Runtime) (any, error) {
+		sc, ok := holder.Get("scope").(*goja.Object)
+		if !ok {
+			return nil, nil
+		}
+		if f, ok := goja.AssertFunction(sc.Get("abort")); ok {
+			_, _ = f(sc, vm.ToValue("request cancelled"))
+		}
+		return nil, nil
+	})
 }
 
 // Chunk returns {chunks, neighbors} for one chunk id (a cache miss in the browser).

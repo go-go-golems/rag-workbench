@@ -319,3 +319,56 @@ ragwb serve examples/apps/reports:
 ### Code review instructions
 - Read `handleVerb`, then `sseWriter.pump`.
 - Validate with `go test ./pkg/server -run TestVerb -v`, then `ragwb serve examples/apps/reports` and the curl lines above.
+
+## Step 6: Phase 4 — the browser shell's /run on SSE; NDJSON removed
+
+`POST /api/rag/{app}/run` keeps its request and its final payload, but with `Accept: text/event-stream` it now streams the run's engine events over SSE, the same event model as the verb endpoints, and ends with `event: result`. `?stream=1` and NDJSON are gone.
+
+`shell.js` reads SSE over `fetch`, since `EventSource` cannot POST. It accumulates text deltas, so the page's `onText(node, textSoFar)` contract is unchanged, and it offers `onEvent` for every event.
+
+In a browser, the answer-first preset served with `--llm fake` submitted over SSE (`Content-Type: text/event-stream`) and rendered its answer and 8 reranked sources.
+
+### Prompt Context
+**User prompt (verbatim):** see Step 3.
+**Assistant interpretation:** Guide Phase 4 (the user chose to "move browser shell SSE").
+**Inferred user intent:** see Step 3.
+**Commit (code):** the commit for this step: "RAGWB-004 Phase 4: browser shell on SSE".
+
+### What I did
+- `pkg/runner/serve.go`:
+  - `__serve.run(signalsJson, trigger, emit, holder)` makes a `rag.newScope`, runs the kept session with `onEvent`, `signal` and `detail`, and closes the scope;
+  - `ServedApp.Run(ctx, signals, trigger, sink EventSink)` replaces the `onText` callback; a cancelled ctx calls `abortScope(holder)` on the owner.
+- `pkg/server/rag.go`: `handleRun` uses `wantsSSE`, the stream sink and the pump, then writes `result` (with `timing`) or `error`; the route docs are updated.
+- `web/app-shell/shell.js`:
+  - an `async function* sse(res)` parser;
+  - `run()` streams when the page passes `onText` on submit, or any `onEvent`; it accumulates `text` deltas per node (`reset` clears) and falls back to JSON when the response isn't an event stream.
+- `pkg/server/rag_test.go`: the NDJSON section is replaced by an SSE one (content type, `hits@…` events, `result` last with `timing` and `chunks`).
+
+### What worked
+```
+go vet ./... && go test ./... -count=1      all ok
+ragwb --llm fake --no-store serve --files examples/apps/reports/corpus $S/af/answer.wb.js
+playwright: type the question, Enter →
+  runs: [{url:"/api/rag/answer/run", ct:"text/event-stream", accept:"text/event-stream"}]
+  screenshot: "8 RESULTS · RERANKED · 4.9 MS · 2 CLAUDE CALLS", the answer box filled, E1–E8 sources
+```
+
+### What didn't work
+- `ragwb serve examples/presets/answer-first.js` failed with `ReferenceError: rag is not defined at …/answer-first.js:6:14`. Presets are workbench scripts: serve runs them only as `*.wb.js` (script form), and a plain `.js` is required as a module. That is not a regression. I served a `.wb.js` copy.
+- The first open showed `0 chunks`: `kit.reports()` reads from `rag.files`, so serve needs `--files examples/apps/reports/corpus`.
+
+### What I learned
+- The fake LLM answered with its JSON stub (`{"chars":12069,"fake":true,…}`), because its heuristic sees "json" in a long prompt; the evidence text contains the word. That is harmless, but it is why the screenshot shows JSON as the answer.
+
+### What was tricky to build
+- **Keeping the page contract.** gui components get `onText(node, cumulativeText)`. The shell rebuilds the cumulative text from deltas, so no gui code changed. The engine went the other way: cumulative in `ctx.emit`, deltas on the wire.
+
+### What warrants a second pair of eyes
+- `run()` streams only on submit-with-`onText` or with `onEvent`. Keystroke (`change`) runs stay plain JSON, the cheapest path, as before.
+
+### What should be done in the future
+- Phase 5: LLM cancellation through the signal, example verbs, docs.
+
+### Code review instructions
+- Read `handleRun` in `pkg/server/rag.go` and `run()`/`sse()` in `web/app-shell/shell.js`.
+- Validate with `go test ./pkg/server -v -run TestRagServerRoutes`; manually, serve a `.wb.js` with an answer node and submit.
