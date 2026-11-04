@@ -424,6 +424,7 @@ func recordsObject(vm *goja.Runtime, r *ChunkRecords) *goja.Object {
 		must(err)
 		return ids
 	})
+	_ = o.Set("close", func() { _ = r.Close() })
 	return o
 }
 

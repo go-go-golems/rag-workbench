@@ -479,3 +479,87 @@ terms equal: True
 ### Code review instructions
 - Read `ApplyDelta` and the `PreSearchData` block in `bleve_bm25.go`, then `Terms.Delta`.
 - Validate with `go test ./pkg/runner -run TestDeltaBuildEqualsFullBuild -v`, then `go test ./pkg/natives -run Bleve -v`.
+
+## Step 7: Phase 5 — serve --watch rebuilds incrementally, Engine.gc, --full, store gc/verify; vault edit → visible in 1.2 s
+
+Phase 5 turns delta builds into a serving workflow. `ragwb serve --watch 1s` now checks the sources every interval, and on a change rebuilds right away instead of on the next query. The rebuild is incremental.
+
+`Engine.gc(ir)` drops superseded memo entries and closes their Go handles (record views, bleve indexes) one gc later, so a query that started before the swap keeps working. A delta's base comes from memory when it is still there, so serve does not reopen the previous version from disk.
+
+Two smaller pieces: `--full` (a global flag) disables deltas, and the store gained `gc --keep N` and `verify`.
+
+On the vault copy, served:
+- an appended paragraph was logged as rebuilt 1.18 s after the edit, which is at most one 1 s tick plus a 161–202 ms build;
+- the next query ranked the new section first;
+- over ten rebuilds, file descriptors stayed at 66 and RSS at 324–344 MB.
+
+### Prompt Context
+**User prompt (verbatim):** see Step 2.
+**Assistant interpretation:** Phase 5 of the guide: serve integration, releasing old versions, CLI controls, and vault measurements (target: edit one note → under 2 s).
+**Inferred user intent:** see Step 2.
+**Commit (code):** the commit for this step: "RAGWB-003 Phase 5: serve --watch delta rebuilds, Engine.gc, --full, store gc/verify".
+
+### What I did
+- `pkg/ragjs/assets/rag.js`:
+  - `Engine.retired` and `Engine.gc(ir)`: drop memo entries whose digest the IR no longer has; close what the previous gc retired; never close a value a live entry still references;
+  - `tryDelta`'s `loadBase` prefers the memo value when it is Go-backed (a view or an index). A computed docs/chunks array is not the record store a delta continues from, so the stored version is opened, and retired for the next gc;
+  - `env.fullBuild` disables deltas.
+- `pkg/natives`: `close()` on records2 and records-v1 objects and on bleve objects; `verify.go` with `VerifyStore`, which opens every stored output and checks counts, all records2 shards and bleve's `DocCount`, and decodes blobs.
+- `pkg/runner/serve.go`:
+  - `__serve.refresh()` rebuilds if `artifacts(ir)` is stale, runs gc, and returns per-node `{ms, incremental, delta}`;
+  - `__serve.run` runs gc after a query that triggered a rebuild;
+  - Go `ServedApp.Refresh`.
+- `cmd/ragwb/cmds/serve.go`: with `--watch` > 0, a goroutine per app (`watchApp`) calls `Refresh` every interval and logs one line per rebuild (`refreshSummary`).
+- `cmd/ragwb/cmds/roots.go`, `pkg/ragjs/module.go`, `pkg/runner/runtime.go`: `--full` → `Config.FullBuild` → `Options.FullBuild` → `env.fullBuild`.
+- `pkg/artifacts/lineage.go`:
+  - `LineageKeep = 32`, so gc can find old versions;
+  - `LineageSearch = 8` (the entries `LineageList` returns);
+  - `Store.Delete`;
+  - `Store.GC(keep)`: keep the newest *keep* stored versions per lineage, delete the rest, rewrite the lineage files, remove `.tmp-*` directories older than an hour, and count freed bytes only for files with link count 1 (`nlink_unix.go`).
+- `cmd/ragwb/cmds/store.go`: `ragwb store gc [--keep 3]` and `ragwb store verify`.
+- Tests:
+  - `pkg/runner/serve_watch_test.go`: open, a refresh with no changes returns `null`, then three edit+refresh rounds; all 5 nodes are incremental, the query finds the edit, and old handles are closed;
+  - `TestLineage` extends to GC (keep 2, delete k1, drop the missing k4, remove a stale temp dir).
+
+### What worked
+```
+go test ./... -count=1         all ok;  make lint  ok
+vault copy, fresh store: cold build; then 4 one-note edits → ix-meta 183–201 ms INC each
+du: 683M after the cold build → 822M after 4 edits (≈35 MB per version: terms gob with rows, touched shards, bleve root.bolt)
+ragwb store verify   → verify 59ed0792ef8f7bfc: 25 output(s), 0 problem(s)
+ragwb store gc --keep 2 → gc 59ed0792ef8f7bfc: 5 lineage(s), removed 15 output(s), freed 105.3 MB, 0 abandoned temp dir(s)
+du: 728M;  verify → 10 output(s), 0 problem(s)
+ragwb serve --watch 1s (vault copy): open 0.14 s (5/5 nodes from the store)
+  edit → "rebuilt" logged: 1.18 s
+  ragwb serve: parc: rebuilt in 202ms: files 18 ms Δ {"upserts":1,…,"unchanged":2286} · parse 22 ms Δ · chunks 18 ms Δ {"upserts":19,"removes":18,"docs":1} · ix-text 19 ms Δ · ix-meta 85 ms Δ · 85891 chunks · closed 1 old handles
+  next query: production-acceptance#watched-serve-edit 1.5761 (rank 1)
+  six more edits: fds 59 → 66, then 66 throughout; RSS 324–344 MB
+```
+
+### What didn't work
+- The first serve refresh rebuilt parse and everything downstream fully:
+  ```
+  refresh 1: parse was rebuilt fully: {… "parse","ms":22.7,"incremental":false …}
+  ```
+  The memo held the cold build's computed docs array, a JS array and not records2, so `parseDelta` declined ("base docs are not records2"). `loadBase` now uses the memo only for Go-backed values.
+- `ragwb store verify` against the old scratch store reported `0 output(s)`, because `rag.js` changes had moved the namespace. I rebuilt with the current binary before measuring.
+
+### What I learned
+- In serve, terms is cheaper than in the CLI (85 ms against about 190 ms), because the previous version's terms index is already in memory rather than gob-decoded from the store.
+- A rebuild per edit costs about 35 MB of disk per version, mostly the terms artifact (a full gob copy, rows included). gc reclaims it. A copy-on-write terms layout would make versions nearly free.
+
+### What was tricky to build
+- **When closing is safe.** In serve, queries and builds share the runtime owner, but an LLM await inside a query can span a rebuild. Closing superseded handles one gc later gives in-flight queries a full rebuild of grace without counting queries. The fd measurement shows the count stays flat.
+
+### What warrants a second pair of eyes
+- `Engine.gc` assumes the engine serves one IR (true for `ragwb serve`). The workbench, where one engine serves several plans, must not call it as written.
+- `store gc` running while an older serve process still uses a deleted version: open files survive, but shards it hasn't opened yet are gone. The help text says to keep at least 2.
+
+### What should be done in the future
+- A copy-on-write terms artifact, or patching postings, to bring the terms node and per-version disk below 50 ms and a few MB.
+- `ragwb store verify --against-full <app>`: a full build into a temporary namespace compared with the incremental artifacts. Today the equivalence check is `TestDeltaBuildEqualsFullBuild` plus `scripts/04-vault-delta-vs-full-queries.js`.
+
+### Code review instructions
+- Read `Engine.gc` and `loadBase` in `rag.js`, `__serve.refresh` in `serve.go`, `watchApp` in `cmds/serve.go`, then `Store.GC`.
+- Validate with `go test ./pkg/runner -run 'ServeRefresh|Delta' -v` and `go test ./pkg/artifacts -run Lineage -v`.
+- Manually: `ragwb --store /tmp/s --root <vault> serve --watch 1s <app>`, edit a note, and watch the "rebuilt in …" line.

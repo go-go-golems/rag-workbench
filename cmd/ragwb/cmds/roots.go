@@ -17,6 +17,7 @@ var (
 	llmName      string
 	llmTiers     = llm.DefaultTiers()
 	buildCalls   bool
+	fullBuild    bool
 	embedName    string
 	maxRounds    int
 )
@@ -36,6 +37,7 @@ func AddGlobalFlags(root *cobra.Command) {
 	f.IntVar(&maxRounds, "llm-max-rounds", llm.DefaultMaxRounds, "Most model rounds per sample() call with tools (the last is forced to answer)")
 	f.StringVar(&embedName, "embed", "none", "Embeddings/rerank backend for index.vector and rerank.model: none, lunaroute (cache: ~/.ragwb/cache/embeddings.db)")
 	f.BoolVar(&buildCalls, "build-calls", false, "Let LLM-costing build nodes (enrich.llm, doc cards) run instead of deferring them")
+	f.BoolVar(&fullBuild, "full", false, "Rebuild changed nodes from scratch instead of continuing from their stored previous version (delta builds)")
 	addStoreFlags(f)
 	f.Bool("timings", false, "Print where the time went (startup, runtime, build/load/query per node, output) to stderr")
 }
@@ -80,6 +82,9 @@ func Embedder() (natives.Embedder, *natives.EmbedCache, error) {
 	}
 	return nil, nil, fmt.Errorf("unknown --embed %q (none, lunaroute)", embedName)
 }
+
+// FullBuild reports --full.
+func FullBuild() bool { return fullBuild }
 
 // BuildCalls reports --build-calls.
 func BuildCalls() bool { return buildCalls }

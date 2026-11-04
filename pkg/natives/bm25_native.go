@@ -279,6 +279,7 @@ func bleveObject(vm *goja.Runtime, ix *BleveBm25) *goja.Object {
 	o := vm.NewObject()
 	_ = o.DefineDataProperty(goHandleKey, vm.ToValue(ix), goja.FLAG_FALSE, goja.FLAG_FALSE, goja.FLAG_FALSE)
 	_ = o.Set("backend", "bleve")
+	_ = o.Set("close", func() { _ = ix.Close() })
 	_ = o.Set("n", ix.Meta.N)
 	_ = o.Set("terms", ix.Meta.Terms)
 	_ = o.Set("search", func(q string, k int, syn [][]any, only []string) goja.Value {

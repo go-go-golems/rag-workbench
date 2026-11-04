@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"os"
@@ -74,7 +75,7 @@ func NewServeCommand() *cobra.Command {
 					base = filepath.Dir(path)
 				}
 				rec := timing.New(time.Now(), "open "+name+" (runtime, require, build, load artifacts)")
-				factory, err := runner.NewFactory(runner.Config{Roots: Roots(base), Base: base, JSComponents: JSComponents(), IndexBackend: IndexBackend(), LLM: backend, BuildCalls: BuildCalls(), Embedder: embedder, EmbedCache: embedCache, Artifacts: artStore, Timing: rec, SourceDigestTTL: sourceTTL(watch)})
+				factory, err := runner.NewFactory(runner.Config{Roots: Roots(base), Base: base, JSComponents: JSComponents(), IndexBackend: IndexBackend(), LLM: backend, BuildCalls: BuildCalls(), FullBuild: FullBuild(), Embedder: embedder, EmbedCache: embedCache, Artifacts: artStore, Timing: rec, SourceDigestTTL: sourceTTL(watch)})
 				if err != nil {
 					return err
 				}
@@ -105,6 +106,13 @@ func NewServeCommand() *cobra.Command {
 			}
 			ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt)
 			defer stop()
+			if watch > 0 {
+				// sources are re-checked every --watch; a change rebuilds incrementally right away
+				// (RAGWB-003), so queries after an edit don't wait for the build
+				for _, a := range opened {
+					go watchApp(ctx, a, watch, stderr)
+				}
+			}
 			go func() {
 				<-ctx.Done()
 				sctx, c := context.WithTimeout(context.Background(), 5*time.Second)
@@ -120,9 +128,71 @@ func NewServeCommand() *cobra.Command {
 	cmd.Flags().StringVar(&addr, "addr", "127.0.0.1:8791", "Listen address (keep it on loopback: there is no auth)")
 	cmd.Flags().StringVar(&files, "files", "", "Directory of .md/.markdown/.txt files served to rag.files(...) sources")
 	cmd.Flags().BoolVarP(&quiet, "quiet", "q", false, "Do not log one line per query")
-	cmd.Flags().DurationVar(&watch, "watch", 0, "Re-check source.dir trees for changes at most this often (a change rebuilds on the next query); 0 = snapshot at open, restart to pick up edits")
+	cmd.Flags().DurationVar(&watch, "watch", 0, "Re-check source.dir trees for changes this often and rebuild incrementally when they changed; 0 = snapshot at open, restart to pick up edits")
 	cmd.Flags().DurationVar(&timeout, "open-timeout", 10*time.Minute, "Abort opening an app (build) after this long")
 	return cmd
+}
+
+// watchApp refreshes an app every interval until ctx ends, logging rebuilds.
+func watchApp(ctx context.Context, a *server.RagApp, every time.Duration, log io.Writer) {
+	t := time.NewTicker(every)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+		rctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
+		t0 := time.Now()
+		out, err := a.Refresh(rctx)
+		cancel()
+		if err != nil {
+			fmt.Fprintf(log, "ragwb serve: %s: refresh failed: %v\n", a.Name, err)
+			continue
+		}
+		if out == "null" {
+			continue
+		}
+		fmt.Fprintf(log, "ragwb serve: %s: rebuilt in %v: %s\n", a.Name, time.Since(t0).Round(time.Millisecond), refreshSummary(out))
+	}
+}
+
+// refreshSummary is one line per refresh: changed nodes, incremental or full.
+func refreshSummary(out string) string {
+	var r struct {
+		OK     bool     `json:"ok"`
+		Errors []string `json:"errors"`
+		Chunks int      `json:"chunks"`
+		Nodes  []struct {
+			ID          string          `json:"id"`
+			MS          float64         `json:"ms"`
+			Incremental bool            `json:"incremental"`
+			Delta       json.RawMessage `json:"delta"`
+		} `json:"nodes"`
+		GC *struct {
+			Closed int `json:"closed"`
+		} `json:"gc"`
+	}
+	if err := json.Unmarshal([]byte(out), &r); err != nil {
+		return out
+	}
+	if !r.OK {
+		return "build failed: " + strings.Join(r.Errors, "; ")
+	}
+	parts := []string{}
+	for _, n := range r.Nodes {
+		mode := "full"
+		if n.Incremental {
+			mode = "Δ " + string(n.Delta)
+		}
+		parts = append(parts, fmt.Sprintf("%s %.0f ms %s", n.ID, n.MS, mode))
+	}
+	closed := 0
+	if r.GC != nil {
+		closed = r.GC.Closed
+	}
+	return fmt.Sprintf("%s · %d chunks · closed %d old handles", strings.Join(parts, " · "), r.Chunks, closed)
 }
 
 // resolveServed maps an argument to a path and a URL name: an existing path wins,

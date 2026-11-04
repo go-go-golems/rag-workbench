@@ -94,6 +94,9 @@ type Options struct {
 	// BuildCalls lets LLM-costing build nodes (enrich.llm, doc cards) run during
 	// build; otherwise they are deferred like the workbench's explicit Build button.
 	BuildCalls bool
+	// FullBuild makes every build ignore the stored previous versions (no delta
+	// builds, RAGWB-003): for debugging and verifying incremental builds.
+	FullBuild bool
 	// Timing receives the engine's timing events (compile, build, load, artifacts, run).
 	Timing func(kind, name string, ms float64, detail string)
 }
@@ -242,6 +245,9 @@ func configureHost(vm *goja.Runtime, rag *goja.Object, opts Options) error {
 		_ = env.Set("buildCalls", "auto")
 	} else {
 		_ = env.Set("buildCalls", "explicit")
+	}
+	if opts.FullBuild {
+		_ = env.Set("fullBuild", true)
 	}
 	if opts.Timing != nil {
 		_ = env.Set("timing", opts.Timing)

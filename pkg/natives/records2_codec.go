@@ -184,6 +184,7 @@ func records2Object(vm *goja.Runtime, r *Records2) *goja.Object {
 		}
 		return ids
 	})
+	_ = o.Set("close", func() { _ = r.Close() })
 	_ = o.DefineDataProperty(goHandleKey, vm.ToValue(r), goja.FLAG_FALSE, goja.FLAG_FALSE, goja.FLAG_FALSE)
 	return o
 }

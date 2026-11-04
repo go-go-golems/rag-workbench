@@ -44,3 +44,12 @@ Phase 4: bleve clone+delta and terms rows+rebuild; exact BM25 field statistics v
 - /home/manuel/code/wesen/go-go-golems/rag-workbench/pkg/natives/bleve_bm25.go — ApplyDelta and exact BM25 stats
 - /home/manuel/code/wesen/go-go-golems/rag-workbench/pkg/natives/terms.go — Terms.Delta from rows
 - /home/manuel/code/wesen/go-go-golems/rag-workbench/pkg/runner/delta_test.go — incremental vs full equivalence
+
+## 2026-11-03
+
+Phase 5: serve --watch rebuilds incrementally (vault edit visible in 1.2 s, rebuild 161-202 ms), Engine.gc closes superseded handles (fds flat), --full, store gc/verify; diary step 7
+
+### Related Files
+
+- /home/manuel/code/wesen/go-go-golems/rag-workbench/pkg/artifacts/lineage.go — lineage index and GC
+- /home/manuel/code/wesen/go-go-golems/rag-workbench/pkg/runner/serve.go — refresh and gc in the serve harness

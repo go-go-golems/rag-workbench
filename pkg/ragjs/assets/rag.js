@@ -1306,6 +1306,7 @@
     constructor(env = {}) {
       this.env = env;
       this.memo = new Map();   // build digest → { value, stats }
+      this.retired = [];       // superseded outputs, closed by the next gc (RAGWB-003 §6.7)
       this.items = new Map();  // item key → value
       this.bakes = new Map();
       this.fileDigests = new Map();
@@ -1433,7 +1434,7 @@
           const inputArrays = () => n.in.map(i => asArray(outputs.get(i))); // not before a delta build: it would read every input
           const ctx = this.buildCtx(n, ir, outputs, counter, opts.signal);
           let value, lazy = null;
-          const inc = def.delta && !def.map && !opts.full && !opts.force && opts.persist !== false
+          const inc = def.delta && !def.map && !(opts.full ?? this.env.fullBuild) && !opts.force && opts.persist !== false
             ? await this.tryDelta(n, def, d, lineages.get(n.id), deltas, outputs, ctx, p, opts) : null;
           if (inc) {
             if (inc.lazy) { lazy = new Lazy(inc.lazy, ms => timed('load', n.id, ms, n.t)); outputs.set(n.id, lazy); }
@@ -1516,6 +1517,31 @@
       this.emit({ type: 'built', report });
       return report;
     }
+    // Release superseded build outputs (RAGWB-003 §6.7) for an engine that serves
+    // ir alone (serve): memo entries whose digest ir no longer has are dropped, and
+    // their Go handles (record views, bleve indexes) closed one gc later, so a
+    // query that started before the rebuild keeps working. Values still reachable
+    // from live entries are never closed.
+    gc(ir) {
+      ir = compile(ir);
+      const liveDigests = new Set(this.digests(ir).values());
+      const live = new Set();
+      for (const [d, m] of this.memo) if (liveDigests.has(d) && !(m.lazy && !m.lazy.done)) live.add(m.value);
+      const closing = this.retired.filter(v => !live.has(v));
+      this.retired = [];
+      for (const [d, m] of [...this.memo]) {
+        if (liveDigests.has(d)) continue;
+        this.memo.delete(d);
+        if (!(m.lazy && !m.lazy.done) && !live.has(m.value)) this.retired.push(m.value);
+      }
+      for (const d of [...this.partial.keys()]) if (!liveDigests.has(d)) this.partial.delete(d);
+      let closed = 0;
+      for (const v of closing) {
+        const h = isView(v) ? v.__records : v && v.__ix;
+        if (h && typeof h.close === 'function') { try { h.close(); closed++; } catch (e) { this.env.log && this.env.log(`gc: ${e.message || e}`); } }
+      }
+      return { closed, retired: this.retired.length, memo: this.memo.size };
+    }
     // Delta build of one node (RAGWB-003 §6.5): continue from the newest stored
     // version of this node's lineage that was computed from exactly the versions
     // the input deltas start from. null (no base, an input without a delta, the
@@ -1529,7 +1555,16 @@
       const base = store.lineageList(lin).find(e => e.digest !== d && e.inputs.length === froms.length && e.inputs.every((x, i) => x === froms[i]));
       if (!base) return null;
       const codec = persistOf(def);
-      const b = { storeKey: base.storeKey, digest: base.digest, raw: () => store.load(base.storeKey), load: () => codec.load(store.load(base.storeKey), n.p) };
+      // the previous version is usually still in memory (serve): use it, don't reopen it
+      const loadBase = () => {
+        // a computed docs/chunks array is not the record store a delta continues from: open that
+        const m = this.memo.get(base.digest);
+        if (m && !(m.lazy && !m.lazy.done) && (isView(m.value) || (m.value && m.value.__ix))) return m.value;
+        const v = codec.load(store.load(base.storeKey), n.p);
+        this.retired.push(v); // opened for this delta only: closed by the next gc
+        return v;
+      };
+      const b = { storeKey: base.storeKey, digest: base.digest, raw: () => store.load(base.storeKey), load: loadBase };
       const inputs = n.in.map((id, i) => ({ get value() { return outputs.get(id); }, delta: ins[i] }));
       // inherit, don't spread: ctx.docs/ctx.chunks are getters that read every doc and chunk
       const dctx = Object.assign(Object.create(ctx), { store, deltaMaxFraction: opts.deltaMaxFraction ?? this.env.deltaMaxFraction ?? 0.2 });

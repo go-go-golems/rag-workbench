@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestSaveHasLoad(t *testing.T) {
@@ -194,7 +195,7 @@ func TestLineage(t *testing.T) {
 		}
 	}
 	es, _ := s.lineageRead("lin1")
-	if len(es) != LineageKeep || es[0].StoreKey != "k4" || es[2].StoreKey != "k2" {
+	if len(es) != 4 || es[0].StoreKey != "k4" || es[2].StoreKey != "k2" {
 		t.Fatalf("kept %+v", es)
 	}
 	// the newest payload disappears (pruned/damaged): the next one serves
@@ -211,5 +212,24 @@ func TestLineage(t *testing.T) {
 	}
 	if len(ms) != 4 {
 		t.Fatalf("List = %+v", ms)
+	}
+	// gc keeps the newest 2 stored versions (k3, k2), deletes k1, forgets k4 (no payload)
+	_ = os.MkdirAll(filepath.Join(s.Dir, s.NS, ".tmp-old"), 0o755)
+	old := time.Now().Add(-2 * time.Hour)
+	_ = os.Chtimes(filepath.Join(s.Dir, s.NS, ".tmp-old"), old, old)
+	r, err := s.GC(2)
+	if err != nil || r.Removed != 1 || r.Temps != 1 || r.Freed == 0 {
+		t.Fatalf("gc = %+v, %v", r, err)
+	}
+	if m, _ := s.Has("k1"); m != nil {
+		t.Fatal("k1 survived gc")
+	}
+	for _, k := range []string{"k2", "k3"} {
+		if m, _ := s.Has(k); m == nil {
+			t.Fatalf("%s was deleted", k)
+		}
+	}
+	if es, _ := s.lineageRead("lin1"); len(es) != 2 || es[0].StoreKey != "k3" || es[1].StoreKey != "k2" {
+		t.Fatalf("lineage after gc %+v", es)
 	}
 }
