@@ -34,6 +34,18 @@ WhenToUse: Before changing source.dir, the markdown parser/chunker ids, the arti
 
 # Intern guide: incremental re-indexing with delta builds
 
+> **Implementation status (2026-11-03):** Phases 0–5 are implemented. The commits are `efe927d`, `29feef3`, `1bd2495`, `4235a13`, `0e1321e` and `780c4ab`; the details are in diary steps 2–7.
+>
+> On a copy of the vault, a one-note edit runs in 0.45 s wall for the whole CLI process. Under `serve --watch`, the rebuild takes 161–202 ms, and the edit is visible to queries about 1.2 s after it is saved.
+>
+> Where the code differs from this design:
+> 1. **BM25 statistics.** Searches pass exact BM25 statistics to bleve through `PreSearchData`: N, plus the token count per field. bleve's own statistic sums each segment's dictionary size, so a delta and a full build scored differently (diary step 6). This changed rankings: presets went from hit@5 0.942 to 0.944 and MRR 0.893 to 0.913; vault self-recall went from 0.755 to 0.730.
+> 2. **records2 order.** The canonical order lives in `index.json`, a document list with record counts. Shard key order is not used, so iteration is not a 64-way merge.
+> 3. **Lineage matching.** Lineage entries record the digests of their inputs. A node continues only from a version built from exactly the versions its input deltas start from.
+> 4. **Manifest codec.** The manifest is a Go-only codec (`manifest`), because nanosecond mtimes don't survive JS numbers.
+> 5. **No-delta components.** `index.vector`, `map` components (`enrich`) and the memory BM25 backend have no delta. They build fully, using their caches.
+> 6. **gc and verify.** `ragwb store gc --keep N` and `ragwb store verify` are implemented. `verify` checks integrity; equivalence with a full build is checked by `TestDeltaBuildEqualsFullBuild`.
+
 ## 1. Executive summary
 
 rag-workbench builds a search index from a directory of markdown notes, here the author's Obsidian vault: 2,282 notes, 85,882 chunks. The build has several steps:
