@@ -124,6 +124,7 @@ func NewServeCommand() *cobra.Command {
 				return err
 			}
 			srv := &http.Server{Handler: rs.Handler(), ReadHeaderTimeout: 10 * time.Second}
+			fmt.Fprintf(cmd.OutOrStdout(), "ragwb serve: llm %s\n", DescribeLLM(backend))
 			for _, a := range opened {
 				fmt.Fprintf(cmd.OutOrStdout(), "ragwb serve: http://%s/apps/%s/\n", ln.Addr(), a.Name)
 				if n := len(a.Verbs()); n > 0 {

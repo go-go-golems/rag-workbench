@@ -10,6 +10,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/go-go-golems/rag-workbench/pkg/llm"
+	"github.com/go-go-golems/rag-workbench/pkg/llm/gepp"
 	"github.com/go-go-golems/rag-workbench/pkg/natives"
 )
 
@@ -18,7 +19,8 @@ var (
 	jsComponents bool
 	indexBackend string
 	llmName      string
-	llmTiers     = llm.DefaultTiers()
+	llmTiers     llm.TierModels // "" per tier: the backend's default
+	piAgentDir   string
 	buildCalls   bool
 	fullBuild    bool
 	embedName    string
@@ -33,10 +35,12 @@ func AddGlobalFlags(root *cobra.Command) {
 	f := root.PersistentFlags()
 	f.StringVar(&indexBackend, "index-backend", "bleve",
 		"Default backend of index.bm25 when a plan does not set one: bleve (disk-backed, opens in ms) or memory (exact port of the browser engine's BM25)")
-	f.StringVar(&llmName, "llm", "none", "LLM backend for LLM nodes: none, fake, lunaroute (key: $LUNAROUTE_API_KEY or Pi's ~/.pi/agent/models.json)")
-	f.StringVar(&llmTiers.Quick, "llm-quick", llmTiers.Quick, "Model for modelTier 'quick'")
-	f.StringVar(&llmTiers.Default, "llm-default", llmTiers.Default, "Model for modelTier 'default'")
-	f.StringVar(&llmTiers.Complex, "llm-complex", llmTiers.Complex, "Model for modelTier 'complex'")
+	f.StringVar(&llmName, "llm", "none", "LLM backend for LLM nodes: none, fake, pi (Geppetto with Pi's models and credentials; streams tokens; recommended), lunaroute (direct client, no token streaming; key: $LUNAROUTE_API_KEY or Pi's models.json)")
+	lt, pt := llm.DefaultTiers(), gepp.DefaultTiers()
+	f.StringVar(&llmTiers.Quick, "llm-quick", "", fmt.Sprintf("Model for modelTier 'quick' (default %s; with --llm pi a Pi reference provider/model[:thinking], default %s)", lt.Quick, pt.Quick))
+	f.StringVar(&llmTiers.Default, "llm-default", "", fmt.Sprintf("Model for modelTier 'default' (default %s; with --llm pi, %s)", lt.Default, pt.Default))
+	f.StringVar(&llmTiers.Complex, "llm-complex", "", fmt.Sprintf("Model for modelTier 'complex' (default %s; with --llm pi, %s)", lt.Complex, pt.Complex))
+	f.StringVar(&piAgentDir, "pi-agent-dir", "", "Pi's agent directory for --llm pi (models, credentials, settings; default $PI_CODING_AGENT_DIR or ~/.pi/agent)")
 	f.IntVar(&maxRounds, "llm-max-rounds", llm.DefaultMaxRounds, "Most model rounds per sample() call with tools (the last is forced to answer)")
 	f.StringVar(&embedName, "embed", "none", "Embeddings/rerank backend for index.vector and rerank.model: none, lunaroute (cache: ~/.ragwb/cache/embeddings.db)")
 	f.BoolVar(&buildCalls, "build-calls", false, "Let LLM-costing build nodes (enrich.llm, doc cards) run instead of deferring them")
@@ -63,18 +67,50 @@ func LLM() (llm.Backend, error) {
 			}
 		}
 		return f, nil
+	case "pi":
+		return gepp.New(gepp.Config{AgentDir: piAgentDir, Tiers: tiersOr(gepp.DefaultTiers()), MaxRounds: maxRounds})
 	case "lunaroute":
 		c, err := llm.NewLunaRoute()
 		if err != nil {
 			return nil, err
 		}
-		c.Tiers = llmTiers
+		c.Tiers = tiersOr(llm.DefaultTiers())
 		if maxRounds > 0 {
 			c.MaxRounds = maxRounds
 		}
 		return c, nil
 	}
-	return nil, fmt.Errorf("unknown --llm %q (none, fake, lunaroute)", llmName)
+	return nil, fmt.Errorf("unknown --llm %q (none, fake, pi, lunaroute)", llmName)
+}
+
+// tiersOr fills the tiers not set by --llm-quick/-default/-complex from def.
+func tiersOr(def llm.TierModels) llm.TierModels {
+	t := llmTiers
+	if t.Quick == "" {
+		t.Quick = def.Quick
+	}
+	if t.Default == "" {
+		t.Default = def.Default
+	}
+	if t.Complex == "" {
+		t.Complex = def.Complex
+	}
+	return t
+}
+
+// DescribeLLM names a backend for startup lines.
+func DescribeLLM(b llm.Backend) string {
+	switch v := b.(type) {
+	case nil:
+		return "none"
+	case interface{ Describe() string }:
+		return v.Describe()
+	case *llm.Client:
+		return fmt.Sprintf("lunaroute (quick=%s default=%s complex=%s; no token streaming)", v.Tiers.Quick, v.Tiers.Default, v.Tiers.Complex)
+	case *llm.Fake:
+		return "fake"
+	}
+	return fmt.Sprintf("%T", b)
 }
 
 // Embedder returns the embeddings/rerank backend selected by --embed and the
