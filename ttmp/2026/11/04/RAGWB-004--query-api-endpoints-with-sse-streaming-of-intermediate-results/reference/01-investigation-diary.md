@@ -372,3 +372,69 @@ playwright: type the question, Enter →
 ### Code review instructions
 - Read `handleRun` in `pkg/server/rag.go` and `run()`/`sse()` in `web/app-shell/shell.js`.
 - Validate with `go test ./pkg/server -v -run TestRagServerRoutes`; manually, serve a `.wb.js` with an answer node and submit.
+
+## Step 7: Phase 5 — LLM cancellation, an `ask` verb in reports/app.js, serve help, vault measurements
+
+An abandoned request now stops its model call. The sample bridge gives every call its own context, which is cancelled when the request scope's abort signal fires; before, calls ran on the runtime's lifetime context. A test with a model that streams until cancelled fails on the old bridge and passes on the new one.
+
+`examples/apps/reports/app.js` declares an `ask` verb (retrieve, fuse, rerank.llm, pack, answer). It is a CLI command (`ragwb --llm fake verbs --dir examples/apps/reports reports ask "…"`) and an endpoint (`POST /api/rag/reports/verbs/ask`) with no other wiring.
+
+On the vault copy, SSE adds no measurable latency: a median of 9.3 ms for JSON and for SSE, and the first `hits` event after 8.7 ms.
+
+The user asked mid-step whether the Trace tab can show each step's results. I answered in chat (summary, not their words): the data is already in `result.outputs` and `trace[].top`; the gui's `trace()` widget only draws the table; a `trace({details: true})` with expandable rows is a small `gui.js` change, offered as a follow-up.
+
+### Prompt Context
+**User prompt (verbatim):** see Step 3. Mid-step, the user asked (verbatim): "is it possible in say the "trace" tab of http://127.0.0.1:8797/apps/answer/ to have details on each pipeline step and the results at that point ? is that something the js app framework can do? how is that apps/answer written?"
+**Assistant interpretation:** Finish Phase 5. Answer the trace question from the code (`gui.js` `trace`, `results({from})`) without changing scope.
+**Inferred user intent:** Inspect intermediate results in the UI, not only through the API.
+**Commit (code):** the commit for this step: "RAGWB-004 Phase 5: LLM cancellation, ask verb, serve help".
+
+### What I did
+- `pkg/ragjs/sample.go`:
+  - the JS half passes `o.signal` to Go;
+  - the Go half makes `callCtx` from `services.Lifetime()`, registers `addEventListener('abort', cancel)` (and cancels at once if the signal was already aborted), and calls `backend.Sample(callCtx, …)`;
+  - a cancellation while the runtime lives rejects with `{code:'cancelled'}`, which `Session.run` already turns into a stop.
+- `pkg/runner/verbs_test.go`: `slowLLM` streams `"word "` every 10 ms until its context ends, and records the cancellation. `TestServedVerbCancelStopsTheModelCall` cancels after the first text event and checks that `Invoke` returns `context.Canceled`, that the model call was cancelled, and that the runtime still serves `search`.
+- `pkg/runner/serve.go`: the harness defines `__package__`/`__section__`/`__verb__`/`doc` as no-ops when the jsverbs loader didn't, so an `app.js` with verbs opens either way. The existing reports tests open it without the loader.
+- `examples/apps/reports/lib/plans.js`: an `answer` plan. `examples/apps/reports/app.js`: `__package__({name:"reports"})` and the `ask(q, k)` verb, which returns `{answer, cited, sources, errors}`.
+- `cmd/ragwb/cmds/serve.go`: `--help` documents the verb endpoints, SSE events, options and a curl line.
+- `scripts/01-verb-sse-latency-bench.py`: JSON, SSE and SSE with chunks over 24 vault queries.
+
+### What worked
+```
+go test ./pkg/runner -run TestServedVerbCancel -v
+    verbs_test.go:292: model call cancelled 0s after the request
+--- PASS (0.17s)
+with HEAD's sample.go restored:   verbs_test.go:290: the model call was not cancelled   --- FAIL (5.16s)
+go vet ./... && go test ./... -count=1     all ok
+ragwb --llm fake verbs --dir examples/apps/reports reports ask "what happens to product flags" --k 3 --output json   → answer, cited, 3 sources
+ragwb --llm fake serve examples/apps/reports; curl -N SSE …/verbs/ask:
+      1 event: context · 5 event: hits · 14 event: node · 1 event: result · 1 event: run · 1 event: runEnd · 1 event: start · 1 event: text
+  log: reports verb reports ask q="…" · 1 run(s) · 23 event(s) · 23.7 ms · ok   (JSON: runs [{calls: 2, plan: "answer", trigger: "submit"}])
+vault copy (85,891 chunks), ragwb serve $S/parc, parc search via /verbs/search, 24 requests per mode:
+  json        median total    9.3 ms  p90   11.2 ms
+  sse         median total    9.3 ms  p90   10.9 ms  first hits event   8.7 ms  events/request 13
+  sse+chunks  median total   11.0 ms  p90   12.5 ms  first hits event   9.5 ms  events/request 13
+```
+
+### What didn't work
+- Nothing failed in this step. The one risk caught was that `reports/app.js` with `__verb__` would throw `ReferenceError` when served without the jsverbs loader (`ragTestServer` does that). The harness no-ops prevent it, and the full suite confirms it.
+
+### What I learned
+- On a lexical query, the event stream costs nothing measurable. The engine emits about 13 small events, and JSON.stringify plus a channel send is microseconds. Full chunks add about 1.7 ms.
+- The parc `search` verb compiles to the same digests as the app's plan (`corpus(null)` and `corpus(["**/*.md"])` resolve to the same include), so verb calls reuse the build. A verb with another `mode` or subset would build its own plan on first use, streaming `build` events.
+
+### What was tricky to build
+- **Telling cancellation apart from shutdown.** `callCtx.Err()` is also set when the runtime closes. A rejection is `cancelled` only if the runtime's lifetime context is still alive; otherwise it stays `upstream_error`, as before.
+
+### What warrants a second pair of eyes
+- The abort listener closure stays registered on the signal after the call settles. Scopes are per request and closed afterwards, so the closures are collected with them.
+- `rerank.model` still reports no `progress`: its batches run inside Go.
+
+### What should be done in the future
+- The trace details widget the user asked about (`trace({details: true})`, plus live updates from `onEvent`).
+- `rerank.model` progress per batch.
+
+### Code review instructions
+- Read the `callCtx` block in `pkg/ragjs/sample.go`, then `TestServedVerbCancelStopsTheModelCall`.
+- Validate with `go test ./pkg/runner -run 'ServedVerb' -v`, `ragwb --llm fake serve examples/apps/reports`, and the curl line in `ragwb serve --help`.

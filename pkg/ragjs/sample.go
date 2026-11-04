@@ -40,7 +40,7 @@ const sampleJS = `(function (call) {
     const onText = typeof o.onText === 'function' ? (text, delta) => { try { o.onText({ text, delta }); } catch (_) { /* page callback errors stay local */ } } : null;
     const req = { turns, tier: o.modelTier || 'default', model: o.model || '', json,
       tools: tools.map(t => ({ name: String(t.name), description: String(t.description || ''), inputSchema: t.inputSchema || null })) };
-    return call(JSON.stringify(req), exec, onText).then(s => {
+    return call(JSON.stringify(req), exec, onText, o.signal || null).then(s => {
       const r = JSON.parse(s);
       return json ? r.json : r.result;
     });
@@ -88,6 +88,17 @@ func newSample(vm *goja.Runtime, backend llm.Backend) (goja.Value, error) {
 			rejectWith(&llm.Failure{Code: "sampling_disabled", Message: "runtime has no event-loop bridge"})
 			return vm.ToValue(promise)
 		}
+		// the call's own context: cancelled when the JS abort signal fires (a request
+		// scope's signal, RAGWB-004 §6.7), so an abandoned request stops its model call
+		callCtx, cancelCall := context.WithCancel(services.Lifetime())
+		if sig, ok := call.Argument(3).(*goja.Object); ok {
+			if add, ok := goja.AssertFunction(sig.Get("addEventListener")); ok {
+				_, _ = add(sig, vm.ToValue("abort"), vm.ToValue(func() { cancelCall() }))
+			}
+			if a := sig.Get("aborted"); a != nil && a.ToBoolean() {
+				cancelCall()
+			}
+		}
 		lreq := llm.Request{Turns: req.Turns, Tier: req.Tier, Model: req.Model, JSON: req.JSON}
 		for _, t := range req.Tools {
 			lreq.Tools = append(lreq.Tools, llm.Tool{Name: t.Name, Description: t.Description, InputSchema: nullToEmpty(t.InputSchema)})
@@ -133,8 +144,8 @@ func newSample(vm *goja.Runtime, backend llm.Backend) (goja.Value, error) {
 			}
 		}
 		go func() {
-			ctx := services.Lifetime()
-			res, err := backend.Sample(ctx, lreq, onText, exec)
+			defer cancelCall()
+			res, err := backend.Sample(callCtx, lreq, onText, exec)
 			var payload string
 			var failure *llm.Failure
 			if err == nil {
@@ -153,6 +164,8 @@ func newSample(vm *goja.Runtime, backend llm.Backend) (goja.Value, error) {
 				}
 			} else if f, ok := err.(*llm.Failure); ok {
 				failure = f
+			} else if callCtx.Err() != nil && services.Lifetime().Err() == nil {
+				failure = &llm.Failure{Code: "cancelled", Message: "the request was cancelled"}
 			} else {
 				failure = &llm.Failure{Code: "upstream_error", Message: err.Error()}
 			}

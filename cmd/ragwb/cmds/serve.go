@@ -38,7 +38,14 @@ func NewServeCommand() *cobra.Command {
 			"a workbench script (*.wb.js returning { plan, app? }), or the name of an app in $RAGWB_APPS / ~/.ragwb/apps.\n" +
 			"The plan is built once (loading stored artifacts, see `ragwb store`); every query runs only the live nodes.\n" +
 			"Open http://ADDR/apps/<name>/. Example:\n" +
-			"  ragwb --root ~/code/wesen/go-go-golems/go-go-parc serve examples/apps/parc",
+			"  ragwb --root ~/code/wesen/go-go-golems/go-go-parc serve examples/apps/parc\n\n" +
+			"Every verb (__verb__) in the app directory, app.js included, is also an HTTP endpoint:\n" +
+			"  GET  /api/rag/<app>/verbs                      the verbs and their parameters\n" +
+			"  POST /api/rag/<app>/verbs/<verb path or name>  JSON parameters → {verb, params, result, runs, ms}\n" +
+			"With Accept: text/event-stream (or ?stream=sse) the answer is Server-Sent Events while the verb runs:\n" +
+			"start, run, node (start/end), hits, context, text (LLM deltas), tool, progress, build, runEnd, then result\n" +
+			"or error. Options: chunks=1 (full chunks in hits), events=hits,text (filter), top=N (hits per event).\n" +
+			"  curl -N -H 'Accept: text/event-stream' localhost:8791/api/rag/reports/verbs/ask -d '{\"q\":\"…\"}'",
 		Args: cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			backend, err := LLM()

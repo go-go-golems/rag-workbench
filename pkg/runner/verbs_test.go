@@ -224,3 +224,74 @@ func TestServedVerbParams(t *testing.T) {
 		t.Fatalf("describe: %+v %v", fs, err)
 	}
 }
+
+// slowLLM streams until its context is cancelled and records that it was (RAGWB-004 §6.7).
+type slowLLM struct {
+	cancelled chan struct{}
+}
+
+func (s *slowLLM) Sample(ctx context.Context, req llm.Request, onText llm.OnText, exec llm.ExecuteTool) (llm.Result, error) {
+	text := ""
+	for i := 0; ; i++ {
+		select {
+		case <-ctx.Done():
+			close(s.cancelled)
+			return llm.Result{}, ctx.Err()
+		case <-time.After(10 * time.Millisecond):
+		}
+		text += "word "
+		if onText != nil {
+			onText(text, "word ")
+		}
+		if i > 1000 {
+			return llm.Result{Text: text}, nil
+		}
+	}
+}
+
+// Cancelling a request's context aborts its scope: the in-flight model call is
+// cancelled (not left running on the runtime's lifetime) and Invoke returns.
+func TestServedVerbCancelStopsTheModelCall(t *testing.T) {
+	slow := &slowLLM{cancelled: make(chan struct{})}
+	a := verbApp(t, slow)
+	v := verbByName(t, a, "answer")
+	vals, err := ParseVerbParams(a.Registry(), v, map[string]any{"q": "rebalance law"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	rec := &recorder{}
+	errc := make(chan error, 1)
+	go func() {
+		_, _, err := a.Invoke(ctx, v, vals, rec, Detail{})
+		errc <- err
+	}()
+	deadline := time.After(10 * time.Second)
+	for !strings.Contains(rec.types(), "text@answer") {
+		select {
+		case <-deadline:
+			t.Fatalf("no text streamed: %s", rec.types())
+		case <-time.After(5 * time.Millisecond):
+		}
+	}
+	t0 := time.Now()
+	cancel()
+	select {
+	case err := <-errc:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("Invoke returned %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Invoke did not return after cancel")
+	}
+	select {
+	case <-slow.cancelled:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the model call was not cancelled")
+	}
+	t.Logf("model call cancelled %v after the request", time.Since(t0).Round(time.Millisecond))
+	// the runtime is still usable
+	if res, _ := invoke(t, a, "search", map[string]any{"q": "law", "k": float64(2)}, nil, Detail{}); len(res.([]any)) != 2 {
+		t.Fatalf("after cancel: %v", res)
+	}
+}

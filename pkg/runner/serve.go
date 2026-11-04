@@ -51,6 +51,9 @@ type ServedApp struct {
 const serveHarness = `(async (__mode, __path, __src, __opts) => {
   const rag = require("ragwb"), gui = require("ragwb/gui"), kit = require("ragwb/kit");
   rag.configure({ files: () => __opts.files || [] });
+  // app.js may declare verbs; without the jsverbs loader (no scan) the declarations are no-ops
+  for (const k of ['__package__', '__section__', '__verb__']) if (typeof globalThis[k] !== 'function') globalThis[k] = function () {};
+  if (typeof globalThis.doc !== 'function') globalThis.doc = function () { return ''; };
   const now = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
   let out;
   if (__mode === 'module') out = require(__opts.modulePath || __path) || {};
