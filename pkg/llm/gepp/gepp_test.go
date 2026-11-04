@@ -6,9 +6,6 @@ import (
 	"errors"
 	"io"
 	"net/http"
-	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -17,119 +14,26 @@ import (
 	"github.com/go-go-golems/geppetto/pkg/steps/ai/providers/pi"
 
 	"github.com/go-go-golems/rag-workbench/pkg/llm"
+	"github.com/go-go-golems/rag-workbench/pkg/llm/gepp/gepptest"
 )
 
-// provider is a scripted OpenAI Chat Completions server: request i gets
-// script[i]; request bodies are kept for assertions.
-type provider struct {
-	t      *testing.T
-	mu     sync.Mutex
-	script []func(w http.ResponseWriter, r *http.Request)
-	bodies []map[string]any
-}
+type provider = gepptest.Provider
 
-func (p *provider) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	var body map[string]any
-	_ = json.NewDecoder(r.Body).Decode(&body)
-	p.mu.Lock()
-	p.bodies = append(p.bodies, body)
-	i := len(p.bodies) - 1
-	p.mu.Unlock()
-	if i >= len(p.script) {
-		p.t.Errorf("unexpected request %d", i)
-		http.Error(w, "no script", 500)
-		return
-	}
-	p.script[i](w, r)
-}
+var (
+	chunk    = gepptest.Chunk
+	usage    = gepptest.Usage
+	sse      = gepptest.SSE
+	text     = gepptest.Text
+	toolCall = gepptest.ToolCall
+	status   = gepptest.Status
+)
 
-func (p *provider) body(i int) map[string]any {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	if i >= len(p.bodies) {
-		return nil
-	}
-	return p.bodies[i]
-}
-
-func chunk(delta map[string]any, finish string) string {
-	c := map[string]any{"index": 0, "delta": delta}
-	if finish != "" {
-		c["finish_reason"] = finish
-	}
-	b, _ := json.Marshal(map[string]any{"id": "c", "model": "m", "choices": []any{c}})
-	return string(b)
-}
-
-func usage(in, out int) string {
-	b, _ := json.Marshal(map[string]any{"id": "c", "model": "m", "choices": []any{}, "usage": map[string]any{"prompt_tokens": in, "completion_tokens": out, "total_tokens": in + out}})
-	return string(b)
-}
-
-func sse(w http.ResponseWriter, chunks ...string) {
-	w.Header().Set("Content-Type", "text/event-stream")
-	for _, c := range chunks {
-		_, _ = io.WriteString(w, "data: "+c+"\n\n")
-		if f, ok := w.(http.Flusher); ok {
-			f.Flush()
-		}
-	}
-	_, _ = io.WriteString(w, "data: [DONE]\n\n")
-}
-
-// text answers with the given content pieces, then stop.
-func text(parts ...string) func(http.ResponseWriter, *http.Request) {
-	return func(w http.ResponseWriter, _ *http.Request) {
-		var cs []string
-		for _, p := range parts {
-			cs = append(cs, chunk(map[string]any{"content": p}, ""))
-		}
-		cs = append(cs, chunk(map[string]any{}, "stop"), usage(10, 5))
-		sse(w, cs...)
-	}
-}
-
-// toolCall asks for one tool call: {id, name, arguments JSON}.
-func toolCall(id, name, args string) func(http.ResponseWriter, *http.Request) {
-	return func(w http.ResponseWriter, _ *http.Request) {
-		sse(w,
-			chunk(map[string]any{"tool_calls": []any{map[string]any{"index": 0, "id": id, "type": "function", "function": map[string]any{"name": name, "arguments": args}}}}, ""),
-			chunk(map[string]any{}, "tool_calls"), usage(10, 7))
-	}
-}
-
-func status(code int, body string) func(http.ResponseWriter, *http.Request) {
-	return func(w http.ResponseWriter, _ *http.Request) { http.Error(w, body, code) }
-}
-
-func writeJSON(t *testing.T, path string, v any) {
+// setup makes a backend over gepptest's agent directory, whose providers
+// point at a scripted server.
+func setup(t *testing.T, cfg Config, script ...gepptest.Reply) (*Backend, *provider) {
 	t.Helper()
-	b, err := json.Marshal(v)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(path, b, 0o600); err != nil {
-		t.Fatal(err)
-	}
-}
-
-// setup makes an agent directory whose lunaroute provider is the scripted
-// server (models "big" and "small"; "small" also exists under provider "other").
-func setup(t *testing.T, cfg Config, script ...func(http.ResponseWriter, *http.Request)) (*Backend, *provider) {
-	t.Helper()
-	p := &provider{t: t, script: script}
-	srv := httptest.NewServer(p)
-	t.Cleanup(srv.Close)
-	dir := t.TempDir()
-	writeJSON(t, filepath.Join(dir, "settings.json"), map[string]any{"defaultProvider": "lunaroute", "defaultModel": "big", "defaultThinkingLevel": "medium", "enabledModels": []string{"lunaroute/big"}})
-	model := func(id string) map[string]any {
-		return map[string]any{"id": id, "reasoning": true, "input": []string{"text"}, "maxTokens": 100000}
-	}
-	writeJSON(t, filepath.Join(dir, "models.json"), map[string]any{"providers": map[string]any{
-		"lunaroute": map[string]any{"baseUrl": srv.URL + "/v1", "api": "openai-completions", "apiKey": "test-key", "models": []any{model("big"), model("small")}},
-		"other":     map[string]any{"baseUrl": srv.URL + "/v1", "api": "openai-completions", "apiKey": "test-key", "models": []any{model("small")}},
-	}})
-	cfg.AgentDir = dir
+	p := gepptest.NewProvider(t, script...)
+	cfg.AgentDir = gepptest.AgentDir(t, p.URL)
 	cfg.Options = append(cfg.Options, pi.WithLocalProviders())
 	b, err := New(cfg)
 	if err != nil {
@@ -170,8 +74,8 @@ func TestSampleStreamsDeltas(t *testing.T) {
 	if res.Usage.PromptTokens != 10 || res.Usage.CompletionTokens != 5 {
 		t.Fatalf("usage %+v", res.Usage)
 	}
-	if mt := p.body(0)["max_completion_tokens"]; mt != float64(8192) {
-		t.Fatalf("default tier budget not sent: %v", p.body(0))
+	if mt := p.Body(0)["max_completion_tokens"]; mt != float64(8192) {
+		t.Fatalf("default tier budget not sent: %v", p.Body(0))
 	}
 }
 
@@ -201,10 +105,10 @@ func TestSampleToolLoop(t *testing.T) {
 	if res.Text != "Let me look.\n\nFound it." || res.Rounds != 2 {
 		t.Fatalf("result %q rounds %d", res.Text, res.Rounds)
 	}
-	if _, ok := p.body(0)["tools"]; !ok {
+	if _, ok := p.Body(0)["tools"]; !ok {
 		t.Fatal("round 1 offered no tools")
 	}
-	msgs, _ := json.Marshal(p.body(1)["messages"])
+	msgs, _ := json.Marshal(p.Body(1)["messages"])
 	if !strings.Contains(string(msgs), "3 hits") || !strings.Contains(string(msgs), "call_1") {
 		t.Fatalf("round 2 lacks the tool result: %s", msgs)
 	}
@@ -224,10 +128,10 @@ func TestSampleForcesTheLastRound(t *testing.T) {
 	if res.Text != "Answer." {
 		t.Fatalf("text %q", res.Text)
 	}
-	if _, ok := p.body(1)["tools"]; ok {
+	if _, ok := p.Body(1)["tools"]; ok {
 		t.Fatal("the last round offered tools")
 	}
-	msgs, _ := json.Marshal(p.body(1)["messages"])
+	msgs, _ := json.Marshal(p.Body(1)["messages"])
 	if !strings.Contains(string(msgs), "tool budget for this answer is used up") {
 		t.Fatalf("no forcing message: %s", msgs)
 	}
