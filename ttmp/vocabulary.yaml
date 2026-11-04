@@ -13,6 +13,8 @@ topics:
       description: Script-driven UI DSL
     - slug: search
       description: Search indexes, retrieval backends and query execution
+    - slug: llm
+      description: Language-model backends, sampling and streaming
 docTypes:
     - slug: design-doc
       description: Structured rationale and architecture notes

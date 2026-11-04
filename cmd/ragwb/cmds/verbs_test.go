@@ -29,7 +29,7 @@ func TestReportsAppVerbs(t *testing.T) {
 				t.Fatal(err)
 			}
 			root.AddCommand(verbs)
-			root.SetArgs([]string{"verbs", "--dir", dir, "reports", "search", "rebalance law", "--k", "2", "--output", "json"})
+			root.SetArgs([]string{"verbs", "--dir", dir, "reports", "search", "rebalance law", "--k", "2", "--format", "json"})
 			// Glazed writes rows to os.Stdout directly (not cobra's OutOrStdout), so capture the fd.
 			out := captureStdout(t, func() {
 				if err := root.Execute(); err != nil {
