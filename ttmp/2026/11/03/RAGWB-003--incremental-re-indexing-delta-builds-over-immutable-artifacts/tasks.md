@@ -1,7 +1,7 @@
 # Tasks
 
 ## TODO
-- [ ] Phase 0: spikes — bleve clone+delta vs fresh build (DocCount, FieldCardinality, top-10), bbolt shard COW timing <!-- t:w90r -->
+- [x] Phase 0: spikes — bleve clone+delta vs fresh build (DocCount, FieldCardinality, top-10), bbolt shard COW timing <!-- t:w90r -->
 - [ ] Phase 1: stable identity — DocIDFor (full slug ≤160, hash beyond), per-doc AssignIDs and ord, in Go and rag.js; collision warnings; parity tests <!-- t:p0lk -->
 - [ ] Phase 2: source manifest (size, mtime, sha256) + DiffManifests; Engine.lineages + lineage index in the artifact store <!-- t:45f8 -->
 - [ ] Phase 3: records2 (64 shards, canonical keys, COW) for chunks and docs; delta protocol in Engine.build; deltas for source.dir, parse.markdown, chunk.sections <!-- t:j9a8 -->

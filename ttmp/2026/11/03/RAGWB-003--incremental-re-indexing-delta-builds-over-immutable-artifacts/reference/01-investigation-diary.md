@@ -107,3 +107,50 @@ While reading the code for the guide, I found and measured an existing identity 
 
 ### Code review instructions
 - Read the guide. Check the measurements with `python3 scripts/01-doc-id-collisions.py`, and the bleve claims against `~/go/pkg/mod/github.com/blevesearch/bleve/v2@v2.6.0` and `zapx/v16@v16.3.4`.
+
+## Step 2: Phase 0 spike — a cloned bleve index plus a delta scores identically to a fresh build, in 70 ms instead of 12 s
+
+The user asked to implement RAGWB-003. Phase 0 answers the one question that could change the bleve part of the design: is an index made by hard-linking a stored index's segments and applying a delta equivalent to a fresh build of the same chunks?
+
+It is, for scoring. On the vault (85,882 chunks), a 30-document delta (445 chunk deletes, 418 new chunks) gave identical scores to a fresh build on all 48 queries, and identical top-10 ids on 45. The other three differ only in the order of equal-scored hits. Cloning took 0.3 ms and applying the delta 70 ms, against 12.4 s for a fresh build.
+
+### Prompt Context
+**User prompt (verbatim):** "Alright, implement, commit at appropriate intervals and keep a detailed diary as you work (using the diary format from the skill) (diary format from skill: MANDATORY)"
+**Assistant interpretation:** Implement RAGWB-003's phases 0–5, with commits per milestone and investigation-format diary steps.
+**Inferred user intent:** Make an edit to one note cheap in practice, not just on paper.
+**Commit (code):** this step's commit adds `scripts/02-bleve-delta-spike`.
+
+### What I did
+- `scripts/02-bleve-delta-spike/main.go`:
+  1. Load all chunks from the stored vault record file (`~/.ragwb/store/2725d65d16063b99/e9/e9647dbeba55cc.records`).
+  2. Build index A fresh. Pick 30 docs with seed 3: 10 removed, 10 modified (" incremental zebra marker" appended to every chunk), 10 added (copies of other docs under new doc ids).
+  3. Clone A's directory: hard-link `*.zap`, copy `root.bolt` and `index_meta.json`. Open it writable, batch-delete the 445 old chunk ids, index the 418 new chunks (documents built exactly like `BuildBleveBm25`), close.
+  4. Build index B fresh from the final chunk set, then compare `DocCount`, `FieldCardinality(f0..f2)` (via `idx.Advanced().Reader().(index.BM25Reader)`) and top-10 ids and scores for 48 queries (5 hand-written plus 43 sampled headings).
+
+### What worked
+```
+A: 85882 chunks · B: 85855 chunks · delta: delete 445, index 418 (docs: 10 removed, 10 modified, 10 added)
+fresh build A: 10.426s
+clone (hard links): 294µs · open+apply+close: 70ms
+fresh build B: 12.355s
+DocCount clone 85855 fresh 85855 · FieldCardinality clone [5583 33328 249021] fresh [5490 32564 244152]
+base after delta: DocCount 85882 (want 85882)
+queries 48 · identical top-10 ids 45 · identical scores 48 · max relative score diff 0
+```
+
+### What didn't work
+- Nothing failed. One expectation was wrong in an instructive way (below).
+
+### What I learned
+- **`FieldCardinality` does lag after deletes.** The clone still counts terms that only deleted documents contained (249,021 vs 244,152 for the text field).
+- **Scores are unaffected anyway.** bleve's BM25 average length is `ceil(FieldCardinality / DocCount)` (`search/searcher/search_term.go:118`), and the ceiling rounds both cases to the same integer: 3 for text, 1 for title and headings.
+  - It is a coarse statistic: the number of distinct terms per document, rounded up.
+  - Drift could cross an integer boundary after many deletions. If that ever matters, a forced merge resets it; not needed now.
+- **Tie order follows bleve's internal document numbers,** which differ between a clone and a fresh build. The equivalence contract (guide §6.9) already allows reordering among equal scores.
+- **The base directory is unaffected by changes to the clone**, as hard-link semantics promise for immutable segments.
+
+### What should be done in the future
+- The bbolt shard copy-on-write timing is measured in Phase 3 with the real `records2` code instead of a separate spike.
+
+### Code review instructions
+- Run `go run ./ttmp/2026/11/03/RAGWB-003-…/scripts/02-bleve-delta-spike -records <stored chunk records>`.
