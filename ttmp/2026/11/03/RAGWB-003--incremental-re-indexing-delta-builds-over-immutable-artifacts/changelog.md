@@ -16,3 +16,12 @@ Ticket opened; intern design/implementation guide for delta builds written (stab
 ## 2026-11-03
 
 Guide uploaded to reMarkable: /ai/2026/11/04/RAGWB-003/RAGWB-003 Incremental Re-indexing Intern Guide.pdf
+
+## 2026-11-03
+
+Phase 1 (stable identity, 29feef3) and Phase 2: source manifest + Diff, lineage keys (Engine.lineages) and the store's lineage index; diary steps 3-4
+
+### Related Files
+
+- /home/manuel/code/wesen/go-go-golems/rag-workbench/pkg/artifacts/lineage.go — lineage index
+- /home/manuel/code/wesen/go-go-golems/rag-workbench/pkg/natives/manifest.go — source manifest and Diff

@@ -154,3 +154,118 @@ queries 48 · identical top-10 ids 45 · identical scores 48 · max relative sco
 
 ### Code review instructions
 - Run `go run ./ttmp/2026/11/03/RAGWB-003-…/scripts/02-bleve-delta-spike -records <stored chunk records>`.
+
+## Step 3: Phase 1 — stable per-file identity in Go and rag.js
+
+Phase 1 makes a document's id depend only on its file name, so an unchanged file keeps its id and chunk ids across builds. Previously, ids came from a slug capped at 64 characters, which made 271 of the 2,287 vault files share an id with another file. Chunk ordinals ran across the whole corpus, so one inserted file renumbered every later chunk.
+
+Now the id is the full slug if it has at most 160 characters. Otherwise it is the slug cut to 151 characters, with trailing dashes trimmed, plus `-` and 8 hex digits of `cyrb53(name)`. Chunk ordinals count within each document. On the vault, 9 ids get the hash suffix instead of 1,911 with a 64-character cap, and there are no true collisions.
+
+### Prompt Context
+**User prompt (verbatim):** see Step 2.
+**Assistant interpretation:** First implementation phase: stable identity, the precondition for every delta.
+**Inferred user intent:** Unchanged notes keep their artifacts across edits elsewhere.
+**Commit (code):** `29feef3` — "RAGWB-003 Phase 1: stable per-file identity (Go and rag.js)".
+
+### What I did
+- `pkg/natives/jsstr.go`:
+  - `slugFull`, with `slug` as its capped wrapper;
+  - `DocIDMax = 160`, `DocIDFor(name)`;
+  - `Cyrb53(s)`, which hashes UTF-16 code units, as JS does.
+- `pkg/natives/markdown.go`: `id := DocIDFor(name)`.
+- `pkg/natives/chunk.go`: `AssignIDs` uses an ordinal per document (a `pos` map keyed by doc).
+- `pkg/ragjs/assets/rag.js`:
+  - `slugFull`, `DOC_ID_MAX` and `docIdFor`; `parseMarkdown` uses `docIdFor(name)`; `assignIds` uses an ordinal per document;
+  - `artifacts()` keeps the first document of a duplicated id and logs the duplicate through `this.env.log`.
+- `pkg/natives/markdown_native.go`: the `parse.markdown` `all` wrapper logs duplicate ids.
+- `pkg/ragjs/identity_test.go`: `DocIDFor` and `Cyrb53` equal rag.js on 13 names (ASCII, umlauts, emoji and astral characters, 159/160/161/250-character names, separator runs at the cut).
+- `natives.Version` → `"2026-11-04.2"`, so stored artifacts with old ids are not reused.
+
+### What worked
+- `go test ./pkg/...`: all green, including markdown and BM25 parity on the reports corpus. Ids changed but Go and JS agree.
+- With the 160-character cap, 9 vault files get a hashed id (1,911 with a 64-character cap). The uncapped slug length has a median of 88 and a maximum of 183.
+
+### What didn't work
+- `artifacts()` first used `engine.env.log`, but `engine` is not in scope there: `ReferenceError: engine is not defined` on the duplicate-id path. Fixed to `this.env`.
+
+### What I learned
+- None of the 271 shared ids were true collisions: every one came from the 64-character cap. Distinct names with the same slug (`a b.md` / `a-b.md`) do not occur in the vault, but the duplicate-id warning covers them.
+
+### What was tricky to build
+- Matching `cyrb53` exactly: JS `Math.imul` and `>>>` semantics over UTF-16 code units, not runes. An astral character contributes two code units. The test names include one.
+
+### What warrants a second pair of eyes
+- A duplicate id keeps the first document in canonical order and drops the second. It is logged rather than failing the build.
+
+### What should be done in the future
+- The whole-vault markdown parity run under the new ids was started in the background (`RAGWB_PARITY_INCLUDE='**/*.md' go test ./pkg/runner -run TestMarkdownParityVault`). Its result is recorded in a later step.
+
+### Code review instructions
+- Start at `DocIDFor` in `pkg/natives/jsstr.go` and `docIdFor` in `rag.js`. Then run `go test ./pkg/ragjs -run Identity -v`.
+
+## Step 4: Phase 2 — source manifest, diff, and lineage keys in the artifact store
+
+Phase 2 gives a build a way to find "the previous version of this node" and to know which files changed since then. Lineage keys are the first part. They are digests computed without the file stats: `source.dir` contributes `def.lineage(p)`, its resolved params, instead of `def.digest(p)`. So "the chunks of this pipeline over this folder" keep the same key across corpus edits.
+
+The artifact store gained a small lineage index, `lineage/<l[:2]>/<l>.json`. It holds the last three (storeKey, digest) pairs, newest first. rag.js records an entry after every save.
+
+The second part is the manifest. `source.dir` now stores it in place of the old zero marker: every matched file's name, size, mtime in nanoseconds and sha256, with skipped files tracked too. `SourceDir.Diff(p, base, maxFraction)` compares the tree with a base manifest. It stats every file and hashes only those whose (size, mtime) changed.
+
+### Prompt Context
+**User prompt (verbatim):** see Step 2.
+**Assistant interpretation:** Second implementation phase: the data a delta build needs. Nothing consumes it yet; Phase 3 does.
+**Inferred user intent:** see Step 2.
+**Commit (code):** the commit for this step: "RAGWB-003 Phase 2: source manifest, diff, lineage index".
+
+### What I did
+- `pkg/natives/manifest.go` (new):
+  - `Manifest{Version, Params, Entries}`, `ManifestEntry{Name, Size, Mtime, Hash, Skipped}`;
+  - `FilesDiff{Full, Reason, Added, Changed, Removed, Unchanged}`;
+  - `readMatched`, which applies the skip rules (maxBytes, HTML) to one file, as `Walk` does;
+  - `Diff`, `LastManifest`, `Lineage`.
+- `pkg/natives/sourcedir.go`:
+  - `Walk` goes through `readMatched` and remembers the manifest for each param key;
+  - the JS definition gains `lineage: p => h.lineage(p)`;
+  - `persist.save: (_, p) => JSON.parse(h.manifest(p))`, so the stored payload is the manifest as plain JSON.
+- `pkg/artifacts/lineage.go` (new): `LineageEntry`, `LineageKeep = 3`, `LineageLatest`, `LineageRecord`. These are atomic temp+rename writes. `List` skips the `lineage` directory.
+- `pkg/natives/persist.go`: `env.artifacts.lineageLatest(l)` and `lineageRecord(l, storeKey, digest)`.
+- `pkg/ragjs/assets/rag.js`:
+  - `Engine.lineages(ir)`. It is null for `source.files`, whose params are the contents, and for any node with a `digest` hook but no `lineage` hook, plus everything downstream of those;
+  - `build` computes lineages when the store supports them and records one after each successful save;
+  - `codec.save(value, n.p)` now receives the params.
+- Tests:
+  - `pkg/natives/manifest_test.go` covers a no-op diff, add, change, remove, rename (remove plus add), a touch with identical bytes, skipped→returned, returned→skipped, the threshold, other params, a nil base, and lineage ignoring contents;
+  - `pkg/artifacts/store_test.go` `TestLineage` covers newest-first order, keep 3, and absence from `List`;
+  - `pkg/runner/lineage_test.go` runs two stored builds around a one-file edit. Every node has a lineage key; every saved node's `LineageLatest` points at a stored artifact with its digest; the `source.dir` payload parses as a `Manifest`; and after the edit, lineage keys are equal and saved digests differ.
+
+### What worked
+```
+go test ./pkg/natives -run TestManifestDiff -count=1   ok   0.011s
+go test ./pkg/runner -run 'TestLineageRecorded|TestBleveIndexPersists' -count=1 -v
+--- PASS: TestBleveIndexPersistsAcrossRuntimes (0.32s)
+--- PASS: TestLineageRecordedForStoredNodes (0.41s)
+go vet ./pkg/... && go test ./pkg/... -count=1   all ok (runner 75 s)
+```
+
+### What didn't work
+- `go build` failed after the first edit with `pkg/natives/sourcedir.go:352:13: undefined: json`. The `encoding/json` import was missing; I added it.
+- The first version of `persist.save` returned the manifest's JSON string. Persist's generic path stringifies values, so that would have stored a JSON string containing JSON. Wrapping it in `JSON.parse` stores the object; the parse costs microseconds for about 2,300 entries.
+- `TestLineage` first expected the wrong `List` count (it counted lineage files). Fixed to 4 entries, none from the lineage directory.
+
+### What I learned
+- A touched-but-identical file must not count as a change. Editors and `git checkout` rewrite mtimes. The diff re-hashes on a stat mismatch, and equal hashes count as unchanged.
+- A rename is a removal plus an addition. The id follows the name, so that is also what the downstream artifacts need.
+
+### What was tricky to build
+- Deciding which nodes get a lineage at all. A node whose output depends on something outside its params and inputs (a `digest` hook) can only be continued if it also says what stays the same (a `lineage` hook). Otherwise a stale "previous version" could be patched into a wrong result, so the key is null and the node always does a full build.
+
+### What warrants a second pair of eyes
+- `Diff` with `maxFraction`: more than that fraction of the base changing means `Full`. The threshold is relative to the base entry count, and an empty base never trips it. Phase 3 picks the default (the guide says 0.3).
+- The manifest is remembered in memory per param key and saved from the last walk. If two builds over the same folder run concurrently in one process, the later walk wins. Both describe the same tree up to a race, and the digest still guards correctness.
+
+### What should be done in the future
+- Phase 3 consumes all of this: `Engine.build` looks up `lineageLatest`, loads the base manifest, calls `Diff`, and passes the delta downstream.
+
+### Code review instructions
+- Read `pkg/natives/manifest.go` `Diff`, then `Engine.lineages` in `rag.js`, then the runner test.
+- Validate with `go test ./pkg/natives ./pkg/artifacts ./pkg/runner -run 'Manifest|Lineage' -count=1 -v`.

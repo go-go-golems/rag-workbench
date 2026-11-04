@@ -279,7 +279,7 @@ func List(dir string) ([]Meta, error) {
 			return err
 		}
 		if d.IsDir() {
-			if strings.HasPrefix(d.Name(), ".tmp-") || strings.Contains(d.Name(), ".") {
+			if strings.HasPrefix(d.Name(), ".tmp-") || strings.Contains(d.Name(), ".") || d.Name() == "lineage" {
 				return filepath.SkipDir // temp builds and directory payloads (<key>.<codec>/) hold no metadata
 			}
 			return nil

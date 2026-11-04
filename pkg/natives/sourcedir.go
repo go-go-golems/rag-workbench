@@ -6,6 +6,7 @@ package natives
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io/fs"
 	"os"
@@ -40,8 +41,9 @@ type SourceDir struct {
 	// runs); `ragwb serve` sets it so a keystroke does not stat the whole vault.
 	DigestTTL time.Duration
 
-	mu      sync.Mutex
-	digests map[string]cachedDigest
+	mu        sync.Mutex
+	digests   map[string]cachedDigest
+	manifests map[string]*Manifest // latest Walk/Diff per source, for persist.save (manifest.go)
 }
 
 type cachedDigest struct {
@@ -207,24 +209,25 @@ func (s *SourceDir) Walk(p map[string]any) ([]FileRecord, []Skipped, error) {
 	}
 	files := []FileRecord{}
 	skipped := []Skipped{}
+	entries := []ManifestEntry{}
 	err = matches(dp, func(rel, path string, info fs.FileInfo) error {
-		if dp.maxBytes > 0 && info.Size() > dp.maxBytes {
-			skipped = append(skipped, Skipped{rel, fmt.Sprintf("larger than maxBytes (%d > %d)", info.Size(), dp.maxBytes)})
-			return nil
-		}
-		b, err := os.ReadFile(path)
+		f, e, err := readMatched(dp, rel, path, info)
 		if err != nil {
 			return err
 		}
-		text := strings.ToValidUTF8(string(b), "�")
-		if dp.skipHTML && looksLikeHTML(text) {
-			skipped = append(skipped, Skipped{rel, "HTML document with a text extension"})
+		entries = append(entries, e)
+		if f == nil {
+			skipped = append(skipped, Skipped{rel, e.Skipped})
 			return nil
 		}
-		files = append(files, FileRecord{Name: rel, Path: path, Text: text, Size: info.Size(), Mtime: info.ModTime().UnixMilli()})
+		files = append(files, *f)
 		return nil
 	})
 	sort.Slice(files, func(i, j int) bool { return files[i].Name < files[j].Name })
+	if err == nil {
+		sort.Slice(entries, func(i, j int) bool { return entries[i].Name < entries[j].Name })
+		s.remember(dp, &Manifest{Version: manifestVersion, Params: dp.key(), Entries: entries})
+	}
 	return files, skipped, err
 }
 
@@ -308,15 +311,17 @@ const sourceDirJS = `(function (rag, h) {
     args: o => (typeof o === 'string' ? { root: o } : { ...(o || {}) }),
     describe: p => p.root + ' · ' + [].concat(p.include || ['**/*.md']).join(', '),
     digest: p => h.digest(p),
+    lineage: p => h.lineage(p), // identity without file stats: delta builds find the previous version
     all: (inputs, ctx, p) => {
       const r = h.walk(p);
       if (r.skipped.length) ctx.log('skipped ' + r.skipped.length + ' file(s): ' + r.skipped.slice(0, 5).map(s => s.name + ' (' + s.reason + ')').join('; '));
       return r.files;
     },
-    // artifact store: nothing is written; a stored marker makes the files a lazy
-    // re-read, valid because the digest covers every file's path, size and mtime.
-    // A run whose downstream nodes are all stored never reads the source.
-    persist: { save: () => 0, load: (_, p) => h.walk(p).files },
+    // artifact store: the manifest (every file's size, mtime and hash, as a JSON
+    // string) is stored, not the files: loading re-reads them lazily, valid because
+    // the digest covers every file's path, size and mtime; a run whose downstream
+    // nodes are all stored never reads the source. The next build diffs against it.
+    persist: { save: (_, p) => JSON.parse(h.manifest(p)), load: (_, p) => h.walk(p).files },
   });
 })`
 
@@ -339,6 +344,15 @@ func (s *SourceDir) Install(vm *goja.Runtime, rag *goja.Object) error {
 		return map[string]any{"files": fs, "skipped": sk}, nil
 	})
 	_ = h.Set("digest", s.Digest)
+	_ = h.Set("lineage", s.Lineage)
+	_ = h.Set("manifest", func(p map[string]any) (string, error) {
+		m, err := s.LastManifest(p)
+		if err != nil {
+			return "", err
+		}
+		b, err := json.Marshal(m)
+		return string(b), err
+	})
 	v, err := vm.RunString(sourceDirJS)
 	if err != nil {
 		return err

@@ -1338,6 +1338,25 @@
       }
       return out;
     }
+    // lineage keys (RAGWB-003 §6.4): like digests, but a source contributes its
+    // def.lineage(p) instead of its file stats, so "this node of this pipeline" keeps
+    // its key across corpus edits. null: the node (or one upstream) has a digest
+    // hook without a lineage hook and can't be continued incrementally.
+    lineages(ir) {
+      const out = new Map();
+      for (const n of ir.nodes) {
+        if (n.phase !== 'build') continue;
+        const def = REG.get(n.t);
+        let extra = '';
+        if (n.t === 'source.files') extra = null;
+        else if (def && typeof def.lineage === 'function') extra = String(def.lineage(n.p, this));
+        else if (def && typeof def.digest === 'function') extra = null;
+        const ins = n.in.map(i => out.get(i));
+        out.set(n.id, extra === null || ins.some(x => x === null) ? null
+          : hash(['lineage', n.t, n.p, ins, extra, ...(def && def.src ? [def.src] : [])]));
+      }
+      return out;
+    }
     dirty(ir) {
       const d = this.digests(ir);
       return [...d].filter(([, dg]) => !this.memo.has(dg)).map(([id]) => id);
@@ -1367,6 +1386,10 @@
       ir = compile(ir);
       const t0 = now();
       const dg = this.digests(ir);
+      let lineages = new Map();
+      if (this.env.artifacts && this.env.artifacts.lineageRecord) {
+        try { lineages = this.lineages(ir); } catch (e) { this.env.log && this.env.log(`lineage keys: ${e.message || e}`); }
+      }
       const report = { ok: true, ms: 0, nodes: {}, errors: [] };
       const outputs = new Outputs();
       const counter = { calls: 0 };
@@ -1447,7 +1470,13 @@
             this.partial.delete(d);
             const store = this.env.artifacts, codec = store ? persistOf(def) : null;
             if (codec && opts.persist !== false) {
-              try { store.save(storeKey(d, def), n.t, codec.save(value), st.count); st.saved = true; } catch (e) { this.env.log && this.env.log(`[${n.id}] not persisted: ${e.message || e}`); }
+              try {
+                const sk = storeKey(d, def);
+                store.save(sk, n.t, codec.save(value, n.p), st.count);
+                st.saved = true;
+                const lin = lineages.get(n.id);
+                if (lin && store.lineageRecord) store.lineageRecord(lin, sk, d);
+              } catch (e) { this.env.log && this.env.log(`[${n.id}] not persisted: ${e.message || e}`); }
             }
           }
         } catch (e) {

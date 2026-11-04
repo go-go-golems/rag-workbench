@@ -175,3 +175,41 @@ func p0(t *testing.T, s *Store, key string) string {
 	}
 	return p
 }
+
+func TestLineage(t *testing.T) {
+	s, err := Open(t.TempDir(), "ns1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if e, err := s.LineageLatest("lin1"); e != nil || err != nil {
+		t.Fatalf("empty lineage: %v %v", e, err)
+	}
+	for i, k := range []string{"k1", "k2", "k3", "k4"} {
+		_ = s.Save(k, "x", "json", 1, []byte("[1]"))
+		if err := s.LineageRecord(LineageEntry{Lineage: "lin1", StoreKey: k, Digest: "d" + k}); err != nil {
+			t.Fatal(err)
+		}
+		if e, _ := s.LineageLatest("lin1"); e == nil || e.StoreKey != k {
+			t.Fatalf("after %d records latest = %+v", i+1, e)
+		}
+	}
+	es, _ := s.lineageRead("lin1")
+	if len(es) != LineageKeep || es[0].StoreKey != "k4" || es[2].StoreKey != "k2" {
+		t.Fatalf("kept %+v", es)
+	}
+	// the newest payload disappears (pruned/damaged): the next one serves
+	_ = os.Remove(filepath.Join(s.Dir, s.NS, "k4"[:2], "k4.bin"))
+	if e, _ := s.LineageLatest("lin1"); e == nil || e.StoreKey != "k3" {
+		t.Fatalf("fallback latest = %+v", e)
+	}
+	// List reads metadata only (k4's meta is still there); lineage files must not show up as entries
+	ms, _ := List(s.Dir)
+	for _, m := range ms {
+		if m.Key != "k1" && m.Key != "k2" && m.Key != "k3" && m.Key != "k4" {
+			t.Fatalf("List saw a non-artifact: %+v", m)
+		}
+	}
+	if len(ms) != 4 {
+		t.Fatalf("List = %+v", ms)
+	}
+}

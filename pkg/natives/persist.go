@@ -62,6 +62,22 @@ func (p Persist) InstallEnv(vm *goja.Runtime, rag *goja.Object, env rtenv.Env) e
 		return fmt.Errorf("artifacts: JSON is not available")
 	}
 	a := vm.NewObject()
+	// lineage index (RAGWB-003 §6.4): the previous stored output of "this node of this pipeline"
+	_ = a.Set("lineageLatest", func(lineage string) goja.Value {
+		e, err := p.Store.LineageLatest(lineage)
+		if err != nil || e == nil {
+			return goja.Null()
+		}
+		o := vm.NewObject()
+		_ = o.Set("storeKey", e.StoreKey)
+		_ = o.Set("digest", e.Digest)
+		return o
+	})
+	_ = a.Set("lineageRecord", func(lineage, storeKey, digest string) {
+		if err := p.Store.LineageRecord(artifacts.LineageEntry{Lineage: lineage, StoreKey: storeKey, Digest: digest}); err != nil {
+			debugf("lineage %s: %v", lineage, err)
+		}
+	})
 	_ = a.Set("has", func(key string) goja.Value {
 		m, err := p.Store.Has(key)
 		if err != nil {
