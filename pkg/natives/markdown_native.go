@@ -20,7 +20,14 @@ const markdownJS = `(function (rag, h) {
   // id: the op layer names inserted nodes def.id(p) || family; keep the built-ins' family ids.
   rag.define('parse.markdown', {
     id: () => 'parse', phase: 'build', in: ['files'], out: 'docs', describe: () => 'frontmatter · headings · fences · tables (Go)',
-    all: ([files], ctx, p) => h.parse(files || [], p || {}),
+    all: ([files], ctx, p) => {
+      const docs = h.parse(files || [], p || {});
+      // ids come from paths (docIdFor), so a duplicate means two paths with the same slug
+      const seen = new Map(), dup = [];
+      for (const d of docs) { if (seen.has(d.id)) dup.push(seen.get(d.id) + ' / ' + d.name + ' → ' + d.id); else seen.set(d.id, d.name); }
+      if (dup.length) ctx.log('duplicate doc ids (' + dup.length + '; the first file keeps the id): ' + dup.slice(0, 5).join('; '));
+      return docs;
+    },
   });
   rag.define('chunk.sections', {
     id: () => 'chunk', phase: 'build', in: ['docs'], out: 'chunks',

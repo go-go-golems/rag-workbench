@@ -1,6 +1,7 @@
 package natives
 
 import (
+	"fmt"
 	"math"
 	"strconv"
 	"strings"
@@ -70,6 +71,48 @@ func clip(s string, n int) string {
 
 // slug is rag.js slug(): lowercase, drop quotes, non-alnum runs → '-', trim '-', 64 chars, 'x' if empty.
 func slug(s string) string {
+	out := slugFull(s)
+	if len(out) > 64 { // ASCII only at this point; JS slices after trimming dashes, so a trailing '-' may remain
+		out = out[:64]
+	}
+	if out == "" {
+		return "x"
+	}
+	return out
+}
+
+// DocIDMax is the longest document id kept as a plain slug (RAGWB-003 §6.2).
+const DocIDMax = 160
+
+// DocIDFor is rag.js docIdFor(name): a document's id from its own relative path
+// only — the uncapped slug of the name without .md, or, beyond DocIDMax
+// characters, a prefix plus 8 hex of cyrb53(name). No two vault paths share an
+// uncapped slug, so ids no longer collide the way 64-char cuts did.
+func DocIDFor(name string) string {
+	full := slugFull(reMdSuffix.ReplaceAllString(name, ""))
+	if full == "" {
+		return "x"
+	}
+	if len(full) <= DocIDMax {
+		return full
+	}
+	return strings.TrimRight(full[:DocIDMax-9], "-") + "-" + Cyrb53(name)[:8]
+}
+
+// Cyrb53 ports rag.js cyrb53 (seed 0) over UTF-16 code units: 8 hex of h2, then 6 of h1.
+func Cyrb53(s string) string {
+	h1, h2 := uint32(0xdeadbeef), uint32(0x41c6ce57)
+	for _, ch := range utf16.Encode([]rune(s)) {
+		h1 = (h1 ^ uint32(ch)) * 2654435761
+		h2 = (h2 ^ uint32(ch)) * 1597334677
+	}
+	h1 = (h1^(h1>>16))*2246822507 ^ (h2^(h2>>13))*3266489909
+	h2 = (h2^(h2>>16))*2246822507 ^ (h1^(h1>>13))*3266489909
+	return fmt.Sprintf("%08x%06s", h2, fmt.Sprintf("%08x", h1)[:6])
+}
+
+// slugFull is slug without the 64-char cap and without the 'x' fallback.
+func slugFull(s string) string {
 	s = jsLower(s)
 	var b strings.Builder
 	dash := false
@@ -87,14 +130,7 @@ func slug(s string) string {
 			dash = true
 		}
 	}
-	out := b.String()
-	if len(out) > 64 { // ASCII only at this point; JS slices after trimming dashes, so a trailing '-' may remain
-		out = out[:64]
-	}
-	if out == "" {
-		return "x"
-	}
-	return out
+	return b.String()
 }
 
 // jsString is String(v) for the scalar/array values parseScalar produces.

@@ -59,7 +59,16 @@
   const isBake = v => isObj(v) && typeof v.$bake === 'string';
   const arr = v => (v == null ? [] : Array.isArray(v) ? v : [v]);
   const uniq = xs => [...new Set(xs)];
-  const slug = s => String(s || '').toLowerCase().replace(/[`'"’]/g, '').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 64) || 'x';
+  const slugFull = s => String(s || '').toLowerCase().replace(/[`'"’]/g, '').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+  const slug = s => slugFull(s).slice(0, 64) || 'x';
+  // a document's id from its own path only (RAGWB-003 §6.2): the uncapped slug, or past
+  // 160 chars a prefix + 8 hex of cyrb53(name); 64-char cuts made distinct notes collide
+  const DOC_ID_MAX = 160;
+  const docIdFor = name => {
+    const full = slugFull(String(name).replace(/\.md$/i, ''));
+    if (!full) return 'x';
+    return full.length <= DOC_ID_MAX ? full : full.slice(0, DOC_ID_MAX - 9).replace(/-+$/, '') + '-' + cyrb53(String(name)).slice(0, 8);
+  };
   const tokens = t => Math.ceil(String(Array.isArray(t) ? t.map(b => (b && b.text) || b).join('\n') : (t && t.text) || t || '').length / 4);
   const clip = (s, n) => (s && s.length > n ? s.slice(0, n - 1) + '…' : s || '');
 
@@ -281,7 +290,7 @@
     }
     flush();
     const name = file.name;
-    const id = slug(name.replace(/\.md$/i, ''));
+    const id = docIdFor(name);
     const title = String(meta.title || h1 || name.replace(/\.md$/i, '')).replace(/^"|"$/g, '');
     const links = [];
     const linkRe = /\[\[([^\]|#]+)(?:#[^\]|]*)?(?:\|[^\]]*)?\]\]/g;
@@ -329,14 +338,17 @@
       hasCode: blocks.some(b => b.kind === 'fence'), hasTable: blocks.some(b => b.kind === 'table'), tokens: tokens(text), ...extra, text,
     };
   }
+  // ids depend only on the chunk's own document (bases start with docId#, doc ids are
+  // unique per file) and ord is the position within the document (RAGWB-003 §6.2)
   function assignIds(chunks) {
-    const seen = new Map();
-    chunks.forEach((c, i) => {
+    const seen = new Map(), pos = new Map();
+    chunks.forEach(c => {
       const base = c.id || `${c.docId}#${c.kind !== 'section' ? slug(c.kind) + '-' : ''}${slug(c.headingPath[c.headingPath.length - 1] || 'intro')}`;
       const n = seen.get(base) || 0;
       seen.set(base, n + 1);
       c.id = n ? `${base}-${n + 1}` : base;
-      c.ord = i;
+      c.ord = pos.get(c.docId) || 0;
+      pos.set(c.docId, c.ord + 1);
     });
     return chunks;
   }
@@ -1519,7 +1531,13 @@
       }
       let docs = null, links = null;
       const docsMap = () => {
-        if (!docs) { docs = new Map(); for (const id of docNodes) for (const d of byId.get(id)) docs.set(d.id, d); }
+        if (!docs) {
+          docs = new Map();
+          const dup = [];
+          for (const id of docNodes) for (const d of byId.get(id)) { if (docs.has(d.id)) dup.push(d.name || d.id); else docs.set(d.id, d); }
+          // keep the first, say so: a silent overwrite hid notes (RAGWB-003 §4.3)
+          if (dup.length && this.env.log) this.env.log(`[artifacts] ${dup.length} doc(s) share an id with an earlier doc and are not in art.docs: ${dup.slice(0, 5).join(', ')}`);
+        }
         return docs;
       };
       // reading order per doc from the first chunk stream

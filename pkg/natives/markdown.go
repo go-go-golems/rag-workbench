@@ -345,7 +345,7 @@ func ParseMarkdown(name, text string, frontmatter bool) *Doc {
 	}
 	flush(len(lines) - 1)
 
-	id := slug(reMdSuffix.ReplaceAllString(name, ""))
+	id := DocIDFor(name)
 	var title string
 	if t, ok := meta.Values["title"]; ok && jsTruthy(t) {
 		title = jsString(t)
