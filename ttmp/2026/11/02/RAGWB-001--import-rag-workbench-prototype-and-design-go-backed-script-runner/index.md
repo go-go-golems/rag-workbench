@@ -1,7 +1,7 @@
 ---
 Title: Import rag-workbench prototype and design Go-backed script runner
 Ticket: RAGWB-001
-Status: active
+Status: complete
 Topics:
     - rag
     - goja
@@ -12,8 +12,8 @@ Intent: long-term
 Owners: []
 RelatedFiles: []
 ExternalSources: []
-Summary: "Import the claude.ai RAG workbench prototype and analyze turning it into a Go-backed app: saved JS pipeline/UI scripts, headless runners for vaults/docs, ad-hoc apps."
-LastUpdated: 2026-11-02T21:16:36.801657867-05:00
+Summary: 'Import the claude.ai RAG workbench prototype and analyze turning it into a Go-backed app: saved JS pipeline/UI scripts, headless runners for vaults/docs, ad-hoc apps.'
+LastUpdated: 2026-11-03T19:27:27.306253747-05:00
 WhatFor: ""
 WhenToUse: ""
 ---
