@@ -12,3 +12,7 @@ Ticket opened; intern design/implementation guide for delta builds written (stab
 
 - /home/manuel/code/wesen/go-go-golems/rag-workbench/ttmp/2026/11/03/RAGWB-003--incremental-re-indexing-delta-builds-over-immutable-artifacts/design-doc/01-intern-guide-incremental-re-indexing-with-delta-builds.md — the guide
 - /home/manuel/code/wesen/go-go-golems/rag-workbench/ttmp/2026/11/03/RAGWB-003--incremental-re-indexing-delta-builds-over-immutable-artifacts/scripts/01-doc-id-collisions.py — collision/length measurement
+
+## 2026-11-03
+
+Guide uploaded to reMarkable: /ai/2026/11/04/RAGWB-003/RAGWB-003 Incremental Re-indexing Intern Guide.pdf
