@@ -374,6 +374,28 @@ h3.g-h { font-size: 20px; }
 .g-tabbar button.on { background: var(--sheet); color: var(--ink); box-shadow: inset 0 -2px 0 var(--ink); }
 .g-tabbody { padding: 10px; display: flex; flex-direction: column; gap: 10px; }
 .g-dag { overflow: auto; max-height: 320px; background: var(--paper); border: 1px solid var(--hair-soft); }
+/* trace({details: true}) — per-step outputs (RAGWB-005) */
+.g-trace-table th.num, .g-trace-hits th.num { text-align: right; }
+.g-trace-table td.num, .g-trace-hits td.num { padding-left: 10px; }
+.g-trace-table .g-trace-row { cursor: pointer; }
+.g-trace-table .g-trace-row:hover td { background: var(--hair-soft); }
+.g-trace-table .g-trace-row.running td { color: var(--sig, #2a6); }
+.g-trace-table .g-trace-row.pending td { color: var(--muted); }
+.g-trace-table .g-trace-row.error td { color: var(--bad, #b33); }
+.g-trace-tog { width: 14px; color: var(--muted); }
+.g-trace-type { font: 400 10px var(--mono); color: var(--muted); }
+.g-trace-detail > td { background: var(--paper); padding: 8px 10px 12px 0; }
+.g-trace-hits { margin: 2px 0 4px; }
+.g-trace-hits caption { caption-side: bottom; text-align: left; font: 400 10px var(--mono); color: var(--muted); padding-top: 4px; }
+.g-trace-hit { cursor: pointer; }
+.g-trace-hit:hover td, .g-trace-hit.on td { background: var(--hair-soft); }
+.g-trace-doc, .g-trace-how, .g-trace-note, .g-trace-prog { font: 400 10.5px var(--mono); color: var(--muted); }
+.g-trace-how { max-width: 320px; }
+.g-trace-list { margin: 2px 0 4px 18px; padding: 0; font-size: 12px; }
+.g-trace-list.notes { list-style: '· '; color: var(--muted); }
+.g-trace-text { max-height: 260px; overflow: auto; font-size: 13px; }
+.g-trace-json { max-height: 220px; overflow: auto; font: 400 11px var(--mono); margin: 0; }
+.g-trace-err { color: var(--bad, #b33); font-size: 12px; }
 .g-canvas { width: 100%; max-width: 100%; display: block; border: 1px solid var(--hair-soft); background: var(--sheet); }
 .g-err { border: 1px solid var(--bad); background: var(--bad-w); color: var(--bad); font: 400 11px var(--mono); padding: 6px 10px; margin-bottom: 8px; }
 .g-err-inline { color: var(--bad); font: 400 11px/1.4 var(--mono); }

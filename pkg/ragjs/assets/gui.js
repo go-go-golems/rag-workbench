@@ -272,7 +272,10 @@
       this.session = this.bound ? r.session() : null;
       const sig = this.bound ? r.ir().signals : {};
       this.signalKeys = new Set(Object.keys(sig));
-      this.state = { ...JSON.parse(JSON.stringify(sig)), ...JSON.parse(JSON.stringify(this.ir.state || {})), out: {}, run: { status: 'idle' }, stream: null, result: null };
+      this.state = { ...JSON.parse(JSON.stringify(sig)), ...JSON.parse(JSON.stringify(this.ir.state || {})), out: {}, run: { status: 'idle' }, stream: null, result: null, live: null, traceOpen: {} };
+      // a trace({details: true}) fills in while a submit runs: ask the session for its events (RAGWB-005)
+      const walk = x => !!x && ((x.t === 'trace' && x.p && x.p.details && x.p.live !== false) || (x.c || []).some(walk));
+      this.wantsEvents = walk(this.ir.root);
       this.der = {};
       this.computeDerived();
     }
@@ -350,19 +353,34 @@
       const ctl = this.ctl = new AbortController();
       this.set({ run: { status: 'running', trigger, at: Date.now() }, ...(trigger === 'submit' ? { stream: null } : {}) }, null, { noRun: true });
       let lastPaint = 0;
+      let live = null, livePaint = 0, liveTimer = null;
+      const paintLive = () => { clearTimeout(liveTimer); liveTimer = null; livePaint = Date.now(); if (seq === this.runSeq) this.set({ live: { ...live } }, null, { noRun: true }); };
+      const onEvent = this.wantsEvents && trigger === 'submit' ? ev => {
+        if (!live) live = { nodes: {}, at: Date.now() };
+        foldEvent(live, ev);
+        if (Date.now() - livePaint > 60) paintLive();
+        else if (!liveTimer) liveTimer = setTimeout(paintLive, 60);
+      } : null;
+      // between events, repaint so running steps' elapsed time keeps counting
+      const tick = onEvent && typeof setInterval === 'function' ? setInterval(() => { if (live) paintLive(); }, 250) : null;
       try {
         const r = await this.session.run(this.signals(), {
           trigger, signal: ctl.signal,
           onText: (node, text) => { const t = Date.now(); if (t - lastPaint > 60 && seq === this.runSeq) { lastPaint = t; this.set({ stream: { node, text } }, null, { noRun: true }); } },
+          ...(onEvent ? { onEvent } : {}),
         });
+        clearTimeout(liveTimer);
         if (seq !== this.runSeq) return r;
-        this.set({ out: r.outputs, result: r, stream: null, run: { status: r.errors.length ? 'partial' : 'done', trigger, ms: r.ms, calls: r.calls, errors: r.errors, at: Date.now() } }, null, { noRun: true });
+        this.set({ out: r.outputs, result: r, stream: null, live: null, run: { status: r.errors.length ? 'partial' : 'done', trigger, ms: r.ms, calls: r.calls, errors: r.errors, at: Date.now() } }, null, { noRun: true });
         if (this.host.onResult) this.host.onResult(r, this);
         return r;
       } catch (e) {
         if (seq !== this.runSeq) return null;
         this.set({ run: { status: 'error', trigger, error: e.message || e.code, at: Date.now() } }, null, { noRun: true });
         return null;
+      } finally {
+        if (tick) clearInterval(tick);
+        clearTimeout(liveTimer);
       }
     }
     showError(e) {
@@ -427,6 +445,106 @@
   }
 
   // ────────────────────────────────────────────────────────────── components
+  // ── trace details (RAGWB-005): per-step outputs, filled in live from engine events
+  // fold one engine event (RAGWB-004 §6.4) into the live view of a running query
+  function foldEvent(live, ev) {
+    if (!ev || !ev.node || ev.type === 'build') return;
+    const nd = live.nodes[ev.node] || (live.nodes[ev.node] = { status: 'running' });
+    switch (ev.type) {
+      case 'node':
+        if (ev.phase === 'start') { nd.status = 'running'; nd.t0 = Date.now(); }
+        else Object.assign(nd, { status: ev.status, ms: ev.ms, in: ev.in, out: ev.out, calls: ev.calls, error: ev.error, notes: ev.notes });
+        break;
+      case 'hits': nd.hits = ev.hits; nd.total = ev.total; nd.partial = !!ev.partial; break;
+      case 'context': nd.evidence = ev.evidence; nd.bytes = ev.bytes; break;
+      case 'text': nd.text = (ev.reset ? '' : nd.text || '') + (ev.delta || ''); break;
+      case 'progress': nd.progress = { done: ev.done, total: ev.total, unit: ev.unit }; break;
+      case 'tool': (nd.tools = nd.tools || []).push(ev); break;
+      case 'note': (nd.notes = nd.notes || []).push(ev.text); break;
+    }
+  }
+  const fmtScore = v => (typeof v === 'number' ? fmtNum(+v.toFixed(4)) : v == null ? '' : String(v));
+  const whyText = why => (why && typeof why === 'object' ? Object.entries(why).sort((a, b) => b[1] - a[1]).slice(0, 4).map(([t, v]) => `${t} ${fmtScore(v)}`).join(' · ') : '');
+  const partsText = parts => (parts && typeof parts === 'object' ? Object.entries(parts).map(([s, r]) => `${s} #${r}`).join(' · ') : '');
+  // a hit list: rank, score, section, how it got here; a click selects the section
+  function hitTable(n, rt, hits, extra, limit, step) {
+    const key = n.p.selectedKey || 'selected', sel = rt.state[key];
+    const rows = hits.slice(0, limit).map((hit, i) => {
+      const c = rt.host.rag && rt.host.rag.chunk(hit.id);
+      const x = extra.get(hit.id) || {};
+      const how = [hit.via && hit.via !== step ? 'via ' + hit.via : null, partsText(hit.parts || x.parts), whyText(hit.why || x.why)].filter(Boolean).join(' · ');
+      return h('tr', { class: 'g-trace-hit' + (sel === hit.id ? ' on' : ''), tabindex: '0', onclick: () => rt.set({ [key]: hit.id }, null, { noRun: true }) },
+        h('td', { class: 'num', text: String(hit.rank || i + 1) }),
+        h('td', { class: 'num', text: fmtScore(hit.score) }),
+        h('td', {}, h('b', { text: c ? c.headingPath[c.headingPath.length - 1] || c.title : hit.heading || hit.id }), h('div', { class: 'g-trace-doc', text: c ? c.title : hit.doc || '' })),
+        h('td', { class: 'g-trace-how', text: [how, hit.reason || x.reason ? '↳ ' + (hit.reason || x.reason) : ''].filter(Boolean).join('  ') }));
+    });
+    return h('table', { class: 'g-table g-trace-hits' }, h('thead', {}, h('tr', {}, ['#', 'score', 'section', 'how'].map((t, i) => h('th', { text: t, class: i < 2 ? 'num' : null })))), h('tbody', {}, rows),
+      hits.length > limit ? h('caption', { text: `${limit} of ${hits.length} shown` }) : null);
+  }
+  // what one step produced, by the shape of its output
+  function stepDetail(n, rt, step, entry, out, live) {
+    const limit = n.p.limit || 10, parts = [];
+    const extra = new Map(((entry && entry.top) || []).map(t => [t.id, t]));
+    if (live && live.progress) parts.push(h('div', { class: 'g-trace-prog', text: `${live.progress.done}/${live.progress.total} ${live.progress.unit || ''}` }));
+    const hits = Array.isArray(out) && out.length && typeof out[0] === 'object' && out[0] && 'id' in out[0] ? out : live && live.hits ? live.hits : null;
+    if (hits) parts.push(hitTable(n, rt, hits, extra, limit, step), live && live.partial ? h('div', { class: 'g-trace-note', text: `partial: ${hits.length} of ${live.total} so far` }) : null);
+    else if (Array.isArray(out) && out.every(x => typeof x === 'string')) parts.push(h('ol', { class: 'g-trace-list' }, out.map(q => h('li', { text: q }))));
+    else if (out && Array.isArray(out.evidence) && out.text != null && !('cited' in out)) {
+      parts.push(h('ol', { class: 'g-trace-list' }, out.evidence.map(e => h('li', { text: `[${e.label}] ${e.title || e.id} › ${(e.headingPath || []).join(' › ')}` }))), h('div', { class: 'g-trace-note', text: `${out.bytes ?? out.text.length} bytes of context` }));
+    } else if (out && typeof out.text === 'string') {
+      parts.push(h('div', { class: 'g-md g-trace-text', html: md(out.text) }));
+      if (out.cited && out.cited.length) parts.push(h('div', { class: 'g-trace-note', text: 'cites ' + out.cited.join(', ') }));
+      if (out.rounds && out.rounds.length) parts.push(h('ol', { class: 'g-trace-list' }, out.rounds.map(x => h('li', { text: x.tool + (x.query ? ` "${x.query}"` : x.id ? ' ' + x.id : '') + (x.found != null ? ` → ${x.found}` : '') }))));
+    } else if (live && live.evidence) {
+      const name = e => { const c = rt.host.rag && rt.host.rag.chunk(e.id); return c ? [c.title, ...(c.headingPath || [])].join(' › ') : e.id; };
+      parts.push(h('ol', { class: 'g-trace-list' }, live.evidence.map(e => h('li', { text: `[${e.label}] ${name(e)}` }))));
+      if (live.bytes != null) parts.push(h('div', { class: 'g-trace-note', text: `${live.bytes} bytes of context` }));
+    }
+    else if (live && live.text) parts.push(h('div', { class: 'g-md g-trace-text', html: md(live.text) }));
+    else if (out != null && !hits) parts.push(h('pre', { class: 'g-trace-json', text: clipText(JSON.stringify(out, null, 1), 2000) }));
+    if (live && live.tools) parts.push(h('ol', { class: 'g-trace-list' }, live.tools.filter(t => t.phase === 'end').map(t => h('li', { text: `${t.name} → ${t.summary} (${t.ms} ms)` }))));
+    const notes = (entry && entry.notes) || (live && live.notes);
+    if (notes && notes.length) parts.push(h('ul', { class: 'g-trace-list notes' }, notes.map(x => h('li', { text: x }))));
+    const err = (entry && entry.error) || (live && live.error);
+    if (err) parts.push(h('div', { class: 'g-trace-err', text: '✗ ' + err }));
+    return parts.length ? parts : [h('div', { class: 'g-empty', text: 'No output.' })];
+  }
+  const clipText = (s, n) => (s && s.length > n ? s.slice(0, n) + '…' : s || '');
+  // trace({details: true, limit}): one expandable row per live step
+  function traceDetails(n, rt, d) {
+    d.add('live'); d.add('run'); d.add('traceOpen'); d.add(n.p.selectedKey || 'selected');
+    const r = rt.state.result, live = rt.state.run && rt.state.run.status === 'running' ? rt.state.live : null;
+    if (!r && !live) return h('div', { class: 'g-empty', text: 'No run yet. Submit a query to see what each step produced.' });
+    const ir = rt.host.rag.ir();
+    const steps = live
+      ? ir.nodes.filter(x => x.phase === 'live').map(x => ({ node: x.id, t: x.t, ...(live.nodes[x.id] || { status: 'pending' }) }))
+      : r.trace;
+    const open = rt.state.traceOpen || {};
+    const toggle = id => rt.set({ traceOpen: { ...open, [id]: !open[id] } }, null, { noRun: true });
+    const rows = [];
+    for (const st of steps) {
+      const isOpen = !!open[st.node];
+      const running = st.status === 'running';
+      const ms = running && st.t0 ? `${Date.now() - st.t0}…` : st.ms ?? '';
+      rows.push(h('tr', { class: 'g-trace-row ' + (st.status || ''), tabindex: '0', onclick: () => toggle(st.node), onkeydown: e => { if (e.key === 'Enter') toggle(st.node); } },
+        h('td', { class: 'g-trace-tog', text: isOpen ? '▾' : '▸' }),
+        h('td', {}, h('b', { text: st.node }), h('span', { class: 'g-trace-type', text: ' ' + (st.t || '') })),
+        h('td', { text: running && st.progress ? `running ${st.progress.done}/${st.progress.total}` : st.status || '' }),
+        h('td', { class: 'num', text: st.in ?? '' }), h('td', { class: 'num', text: st.out ?? (st.hits ? st.total : '') }),
+        h('td', { class: 'num', text: ms }), h('td', { class: 'num', text: st.calls || '' })));
+      if (isOpen) {
+        const out = live ? undefined : r.outputs[st.node];
+        rows.push(h('tr', { class: 'g-trace-detail' }, h('td', {}), h('td', { colspan: '6' }, stepDetail(n, rt, st.node, live ? null : st, out, live ? live.nodes[st.node] || null : null))));
+      }
+    }
+    return h('div', { class: 'g-trace' },
+      h('table', { class: 'g-table g-trace-table' },
+        h('thead', {}, h('tr', {}, ['', 'step', 'status', 'in', 'out', 'ms', 'calls'].map((x, i) => h('th', { text: x, class: i >= 3 ? 'num' : null })))),
+        h('tbody', {}, rows)),
+      live ? h('div', { class: 'g-trace-note', text: 'running — steps fill in as they finish' }) : null);
+  }
+
   const RENDER = {
     unknown: n => h('div', { class: 'g-err-inline', text: `unknown component '${n.t}'` }),
     col: (n, rt, d) => h('div', { class: 'g-col' + (rt.val(n.p.gap, d) === 'tight' ? ' tight' : ''), style: n.p.grow ? { flexGrow: String(n.p.grow) } : null }, rt.kids(n)),
@@ -702,9 +820,12 @@
     trace: (n, rt, d) => {
       d.add('result');
       const r = rt.state.result;
-      if (!r) return h('div', { class: 'g-empty', text: 'No run yet.' });
-      return h('table', { class: 'g-table' }, h('thead', {}, h('tr', {}, ['node', 'status', 'in', 'out', 'ms'].map(x => h('th', { text: x })))),
-        h('tbody', {}, r.trace.map(t => h('tr', { class: t.status }, h('td', { text: t.node }), h('td', { text: t.status }), h('td', { class: 'num', text: t.in }), h('td', { class: 'num', text: t.out }), h('td', { class: 'num', text: t.ms })))));
+      if (!n.p.details) {
+        if (!r) return h('div', { class: 'g-empty', text: 'No run yet.' });
+        return h('table', { class: 'g-table' }, h('thead', {}, h('tr', {}, ['node', 'status', 'in', 'out', 'ms'].map(x => h('th', { text: x })))),
+          h('tbody', {}, r.trace.map(t => h('tr', { class: t.status }, h('td', { text: t.node }), h('td', { text: t.status }), h('td', { class: 'num', text: t.in }), h('td', { class: 'num', text: t.out }), h('td', { class: 'num', text: t.ms })))));
+      }
+      return traceDetails(n, rt, d);
     },
     dag: (n, rt, d) => {
       d.add('result');
@@ -719,6 +840,7 @@
     bake: f => f(gui.bakeCtx || {}),
     mount: (app, el, host) => new Runtime(app.kind === 'gui' ? app : app.compile(), host).mount(el),
     md, chart: chartSvg, h, esc, snippet, fmtNum,
+    foldEvent, // trace({details}) live state from one engine event (exported for tests)
     Runtime, AppSpec,
     components: () => Object.keys(RENDER).filter(k => k !== 'unknown'),
   };

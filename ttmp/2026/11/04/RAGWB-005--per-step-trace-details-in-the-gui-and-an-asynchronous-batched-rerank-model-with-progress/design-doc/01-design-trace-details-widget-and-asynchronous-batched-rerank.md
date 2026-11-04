@@ -10,9 +10,13 @@ Topics:
 DocType: design-doc
 Intent: long-term
 Owners: []
-RelatedFiles: []
+RelatedFiles:
+    - Path: repo://pkg/ragjs/assets/gui.js
+      Note: trace details widget
+    - Path: repo://pkg/ragjs/trace_fold_test.go
+      Note: live fold tests
 ExternalSources: []
-Summary: "Two follow-ups of RAGWB-004: a trace widget that shows each steps output (and fills in live from the engines events), and a rerank.model that no longer blocks the runtime: asynchronous, batched, cancellable, with progress and partial results."
+Summary: 'Two follow-ups of RAGWB-004: a trace widget that shows each steps output (and fills in live from the engines events), and a rerank.model that no longer blocks the runtime: asynchronous, batched, cancellable, with progress and partial results.'
 LastUpdated: 2026-11-04T16:03:19.84705563-05:00
 WhatFor: Implementing and reviewing RAGWB-005.
 WhenToUse: Before changing gui.js trace rendering, the gui runtimes run loop, or rerank.model.
@@ -69,6 +73,7 @@ fold(live, ev):
 - **Opt-in through `details: true`.** Plain `trace()` stays the compact table, so existing presets do not change.
 - **Events only for submit runs.** Keystroke runs are 5–15 ms and finish before a live view would paint.
 - **No new server API.** Everything comes from the run result and the RAGWB-004 events.
+- **Cached steps describe their output (added during implementation).** A memoized step used to emit only `node:end`, so during a submit run that follows a keystroke run of the same query, the cached retrieve and pack steps had nothing to show. The engine now emits the same `hits`/`context` events, and records the same `top` entry, for a cached step as for one that ran (`describe` in `Session.run`).
 
 ## 2. An asynchronous, batched `rerank.model`
 

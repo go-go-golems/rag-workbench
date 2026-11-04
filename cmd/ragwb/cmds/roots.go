@@ -3,6 +3,9 @@ package cmds
 import (
 	"fmt"
 	"os"
+	"strconv"
+	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -48,7 +51,18 @@ func LLM() (llm.Backend, error) {
 	case "", "none":
 		return nil, nil
 	case "fake":
-		return &llm.Fake{}, nil
+		// RAGWB_FAKE_STREAM="pieces,delay" (e.g. "20,40ms") streams fake replies slowly, for demos of live output
+		f := &llm.Fake{}
+		if v := os.Getenv("RAGWB_FAKE_STREAM"); v != "" {
+			n, d, _ := strings.Cut(v, ",")
+			if p, err := strconv.Atoi(strings.TrimSpace(n)); err == nil {
+				f.Pieces = p
+			}
+			if dd, err := time.ParseDuration(strings.TrimSpace(d)); err == nil {
+				f.Delay = dd
+			}
+		}
+		return f, nil
 	case "lunaroute":
 		c, err := llm.NewLunaRoute()
 		if err != nil {
