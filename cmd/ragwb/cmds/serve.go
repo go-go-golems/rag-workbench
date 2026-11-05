@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/dop251/goja_nodejs/require"
+	"github.com/go-go-golems/go-go-goja/pkg/jsverbs"
 	"io"
 	"net"
 	"net/http"
@@ -28,6 +30,7 @@ func NewServeCommand() *cobra.Command {
 	var addr, files string
 	var quiet bool
 	var timeout, watch time.Duration
+	var maxInflight int
 	cmd := &cobra.Command{
 		Use:   "serve <app>...",
 		Short: "Serve apps: build each plan once server-side and mount its gui in the browser",
@@ -35,7 +38,14 @@ func NewServeCommand() *cobra.Command {
 			"a workbench script (*.wb.js returning { plan, app? }), or the name of an app in $RAGWB_APPS / ~/.ragwb/apps.\n" +
 			"The plan is built once (loading stored artifacts, see `ragwb store`); every query runs only the live nodes.\n" +
 			"Open http://ADDR/apps/<name>/. Example:\n" +
-			"  ragwb --root ~/code/wesen/go-go-golems/go-go-parc serve examples/apps/parc",
+			"  ragwb --root ~/code/wesen/go-go-golems/go-go-parc serve examples/apps/parc\n\n" +
+			"Every verb (__verb__) in the app directory, app.js included, is also an HTTP endpoint:\n" +
+			"  GET  /api/rag/<app>/verbs                      the verbs and their parameters\n" +
+			"  POST /api/rag/<app>/verbs/<verb path or name>  JSON parameters → {verb, params, result, runs, ms}\n" +
+			"With Accept: text/event-stream (or ?stream=sse) the answer is Server-Sent Events while the verb runs:\n" +
+			"start, run, node (start/end), hits, context, text (LLM deltas), tool, progress, build, runEnd, then result\n" +
+			"or error. Options: chunks=1 (full chunks in hits), events=hits,text (filter), top=N (hits per event).\n" +
+			"  curl -N -H 'Accept: text/event-stream' localhost:8791/api/rag/reports/verbs/ask -d '{\"q\":\"…\"}'",
 		Args: cobra.MinimumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			backend, err := LLM()
@@ -75,18 +85,31 @@ func NewServeCommand() *cobra.Command {
 					base = filepath.Dir(path)
 				}
 				rec := timing.New(time.Now(), "open "+name+" (runtime, require, build, load artifacts)")
-				factory, err := runner.NewFactory(runner.Config{Roots: Roots(base), Base: base, JSComponents: JSComponents(), IndexBackend: IndexBackend(), LLM: backend, BuildCalls: BuildCalls(), FullBuild: FullBuild(), Embedder: embedder, EmbedCache: embedCache, Artifacts: artStore, Timing: rec, SourceDigestTTL: sourceTTL(watch)})
+				// the app directory's verbs become endpoints (RAGWB-004); the runtime then
+				// loads the app's files through jsverbs' loader, which captures them
+				verbs, err := jsverbs.ScanDir(base, store.VerbScanOptions())
+				if err != nil {
+					fmt.Fprintf(stderr, "ragwb serve: %s: no verb endpoints (scan failed: %v)\n", name, err)
+					verbs = nil
+				} else if len(verbs.Verbs()) == 0 {
+					verbs = nil
+				}
+				var loader require.SourceLoader
+				if verbs != nil {
+					loader = verbs.RequireLoader()
+				}
+				factory, err := runner.NewFactory(runner.Config{SourceLoader: loader, Roots: Roots(base), Base: base, JSComponents: JSComponents(), IndexBackend: IndexBackend(), LLM: backend, BuildCalls: BuildCalls(), FullBuild: FullBuild(), Embedder: embedder, EmbedCache: embedCache, Artifacts: artStore, Timing: rec, SourceDigestTTL: sourceTTL(watch)})
 				if err != nil {
 					return err
 				}
 				ctx, cancel := context.WithTimeout(cmd.Context(), timeout)
-				app, err := runner.OpenApp(ctx, factory, runner.AppSpec{Name: name, Path: path, Files: corpus})
+				app, err := runner.OpenApp(ctx, factory, runner.AppSpec{Name: name, Path: path, Files: corpus, Verbs: verbs})
 				cancel()
 				if err != nil {
 					return err
 				}
 				rec.Phase("serving")
-				opened = append(opened, &server.RagApp{ServedApp: app, Timing: rec})
+				opened = append(opened, &server.RagApp{ServedApp: app, Timing: rec, MaxInflight: maxInflight})
 				fmt.Fprintln(stderr, openSummary(name, app.Info, rec))
 				if timing.Default.Enabled() {
 					rec.Print(stderr)
@@ -103,6 +126,9 @@ func NewServeCommand() *cobra.Command {
 			srv := &http.Server{Handler: rs.Handler(), ReadHeaderTimeout: 10 * time.Second}
 			for _, a := range opened {
 				fmt.Fprintf(cmd.OutOrStdout(), "ragwb serve: http://%s/apps/%s/\n", ln.Addr(), a.Name)
+				if n := len(a.Verbs()); n > 0 {
+					fmt.Fprintf(cmd.OutOrStdout(), "ragwb serve: %d verb endpoint(s): http://%s/api/rag/%s/verbs\n", n, ln.Addr(), a.Name)
+				}
 			}
 			ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt)
 			defer stop()
@@ -129,6 +155,7 @@ func NewServeCommand() *cobra.Command {
 	cmd.Flags().StringVar(&files, "files", "", "Directory of .md/.markdown/.txt files served to rag.files(...) sources")
 	cmd.Flags().BoolVarP(&quiet, "quiet", "q", false, "Do not log one line per query")
 	cmd.Flags().DurationVar(&watch, "watch", 0, "Re-check source.dir trees for changes this often and rebuild incrementally when they changed; 0 = snapshot at open, restart to pick up edits")
+	cmd.Flags().IntVar(&maxInflight, "max-inflight", 0, "Concurrent verb requests per app before answering 503 busy (0 = 8)")
 	cmd.Flags().DurationVar(&timeout, "open-timeout", 10*time.Minute, "Abort opening an app (build) after this long")
 	return cmd
 }

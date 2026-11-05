@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -21,11 +22,13 @@ import (
 //
 //	GET  /api/rag                       → [{name, id, title}]
 //	GET  /api/rag/{app}                 → {id, title, ir, app, build, stats}
-//	POST /api/rag/{app}/run[?stream=1]  {signals, trigger} → {result, chunks, neighbors, packMs, timing}
-//	                                      stream=1: NDJSON {type:"text",node,text}… then {type:"result",…}
+//	POST /api/rag/{app}/run             {signals, trigger} → {result, chunks, neighbors, packMs, timing}
+//	                                      Accept: text/event-stream: the run's events (sse.go), then event "result"
 //	GET  /api/rag/{app}/chunk?id=       → {chunks, neighbors}   (a cache miss in the shell)
 //	GET  /api/rag/{app}/doc?id=         → doc metadata | null
 //	GET  /api/rag/{app}/timings         → recorder entries since the app was opened
+//	GET  /api/rag/{app}/verbs           → the app's verbs and their parameters (RAGWB-004, verbs.go)
+//	POST /api/rag/{app}/verbs/{verb...} → run a verb: JSON, or SSE events (sse.go)
 //	GET  /apps/{app}/                   → the app shell
 type RagServer struct {
 	apps  map[string]*RagApp
@@ -37,7 +40,32 @@ type RagServer struct {
 type RagApp struct {
 	*runner.ServedApp
 	Timing *timing.Recorder
+	// MaxInflight caps concurrent verb requests (0 = DefaultMaxInflight); more get 503 busy.
+	MaxInflight int
+	once        sync.Once
+	inflight    chan struct{}
 }
+
+// DefaultMaxInflight is the verb request cap per app when MaxInflight is 0.
+const DefaultMaxInflight = 8
+
+func (a *RagApp) acquire() bool {
+	a.once.Do(func() {
+		n := a.MaxInflight
+		if n <= 0 {
+			n = DefaultMaxInflight
+		}
+		a.inflight = make(chan struct{}, n)
+	})
+	select {
+	case a.inflight <- struct{}{}:
+		return true
+	default:
+		return false
+	}
+}
+
+func (a *RagApp) release() { <-a.inflight }
 
 func NewRagServer(apps ...*RagApp) *RagServer {
 	s := &RagServer{apps: map[string]*RagApp{}}
@@ -55,6 +83,9 @@ func (s *RagServer) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/rag/{app}/run", s.withApp(s.handleRun))
 	mux.HandleFunc("GET /api/rag/{app}/chunk", s.withApp(s.handleLookup("chunk")))
 	mux.HandleFunc("GET /api/rag/{app}/doc", s.withApp(s.handleLookup("doc")))
+	mux.HandleFunc("GET /api/rag/{app}/verbs", s.withApp(s.handleVerbs))
+	mux.HandleFunc("POST /api/rag/{app}/verbs/{verb...}", s.withApp(s.handleVerb))
+	mux.HandleFunc("GET /api/rag/{app}/verbs/{verb...}", s.withApp(s.handleVerb))
 	mux.HandleFunc("GET /api/rag/{app}/timings", s.withApp(func(w http.ResponseWriter, r *http.Request, a *RagApp) {
 		writeJSON(w, map[string]any{"entries": nonNil(a.Timing.Entries())})
 	}))
@@ -206,35 +237,30 @@ func (s *RagServer) handleRun(w http.ResponseWriter, r *http.Request, a *RagApp)
 	if len(req.Signals) == 0 || string(req.Signals) == "null" {
 		req.Signals = json.RawMessage("{}")
 	}
-	stream := r.URL.Query().Get("stream") == "1"
-	var onText func(node, text string)
-	var mu sync.Mutex
+	stream := wantsSSE(r)
+	var sw *sseWriter
+	var sink *streamSink
+	var pumped chan struct{}
+	ctx, cancel := context.WithCancel(r.Context())
+	defer cancel()
+	var sinkArg runner.EventSink
 	if stream {
-		w.Header().Set("Content-Type", "application/x-ndjson")
-		w.Header().Set("Cache-Control", "no-store")
-		fl, _ := w.(http.Flusher)
-		var last time.Time
-		onText = func(node, text string) { // cumulative text: dropping intermediate frames loses nothing
-			mu.Lock()
-			defer mu.Unlock()
-			if time.Since(last) < 50*time.Millisecond {
-				return
-			}
-			last = time.Now()
-			b, _ := json.Marshal(map[string]string{"type": "text", "node": node, "text": text})
-			_, _ = w.Write(append(b, '\n'))
-			if fl != nil {
-				fl.Flush()
-			}
-		}
+		// Server-Sent Events (RAGWB-004): the run's engine events, then "result"
+		sw = newSSEWriter(w, t0, eventFilter(r))
+		sink = newStreamSink(cancel)
+		sinkArg = sink
+		pumped = make(chan struct{})
+		go func() { sw.pump(sink, nil); close(pumped) }()
 	}
-	res, err := a.Run(r.Context(), req.Signals, req.Trigger, onText)
-	mu.Lock()
-	defer mu.Unlock()
+	res, err := a.Run(ctx, req.Signals, req.Trigger, sinkArg)
+	if stream {
+		sink.close()
+		<-pumped
+	}
 	if err != nil {
 		if stream {
-			b, _ := json.Marshal(map[string]string{"type": "error", "error": err.Error()})
-			_, _ = w.Write(append(b, '\n'))
+			b, _ := json.Marshal(map[string]string{"type": "error", "code": "run_failed", "message": err.Error()})
+			_ = sw.write("error", b)
 			return
 		}
 		writeErr(w, http.StatusInternalServerError, "run_failed", err.Error())
@@ -256,16 +282,13 @@ func (s *RagServer) handleRun(w http.ResponseWriter, r *http.Request, a *RagApp)
 	tm.TotalMS = float64(time.Since(t0).Microseconds()) / 1000
 	tb, _ := json.Marshal(tm)
 	body := strings.TrimSuffix(strings.TrimSpace(res.JSON), "}")
-	if stream {
-		body = `{"type":"result",` + strings.TrimPrefix(body, "{")
-	}
 	out := body + `,"timing":` + string(tb) + "}"
 	if stream {
-		out += "\n"
+		_ = sw.write("result", []byte(`{"type":"result",`+strings.TrimPrefix(out, "{")))
 	} else {
 		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, out)
 	}
-	_, _ = io.WriteString(w, out)
 	if s.Log != nil {
 		errs := ""
 		if len(head.Result.Errors) > 0 {

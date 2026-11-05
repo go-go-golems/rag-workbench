@@ -10,6 +10,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/go-go-golems/go-go-goja/pkg/jsverbs"
+
 	"github.com/dop251/goja"
 	"github.com/go-go-golems/go-go-goja/pkg/engine"
 
@@ -23,6 +25,9 @@ type AppSpec struct {
 	Name  string // URL segment, e.g. "reports"
 	Path  string // app directory (with app.js) or a workbench script
 	Files []File // corpus for rag.files(...) sources (script form)
+	// Verbs are the app directory's jsverbs verbs (RAGWB-004 endpoints); the
+	// runtime factory must then use Verbs.RequireLoader(). Nil: no verb endpoints.
+	Verbs *jsverbs.Registry
 }
 
 // ServedApp is one opened app: a long-lived runtime holding the built plan and a
@@ -36,6 +41,9 @@ type ServedApp struct {
 	rt   *engine.Runtime
 	stop context.CancelFunc
 	once sync.Once
+	// verb endpoints
+	verbs  *jsverbs.Registry
+	verbMu sync.Mutex // held from announcing a scope until the verb took it (Invoke)
 }
 
 // The serve harness evaluates the app once and keeps a run/lookup API in
@@ -43,9 +51,12 @@ type ServedApp struct {
 const serveHarness = `(async (__mode, __path, __src, __opts) => {
   const rag = require("ragwb"), gui = require("ragwb/gui"), kit = require("ragwb/kit");
   rag.configure({ files: () => __opts.files || [] });
+  // app.js may declare verbs; without the jsverbs loader (no scan) the declarations are no-ops
+  for (const k of ['__package__', '__section__', '__verb__']) if (typeof globalThis[k] !== 'function') globalThis[k] = function () {};
+  if (typeof globalThis.doc !== 'function') globalThis.doc = function () { return ''; };
   const now = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
   let out;
-  if (__mode === 'module') out = require(__path) || {};
+  if (__mode === 'module') out = require(__opts.modulePath || __path) || {};
   else {
     const log = (...a) => console.log(...a);
     const fn = new Function('rag', 'gui', 'log', 'kit', '"use strict";return (async () => {\n' + __src + '\n})();');
@@ -90,7 +101,24 @@ const serveHarness = `(async (__mode, __path, __src, __opts) => {
   const NB_HITS = 40;
   // after a rebuild (a query found the sources changed, or refresh): release the old version
   let artKey = art0.key;
-  const collect = () => { const a = art(); if (a && a.key !== artKey) { artKey = a.key; return eng.gc(ir); } return null; };
+  // gc keeps the outputs of every plan run recently: the app's and those its verbs ran
+  const collect = () => { const a = art(); if (a && a.key !== artKey) { artKey = a.key; return eng.gc([ir, ...eng.recentIrs()]); } return null; };
+  // verb endpoints (RAGWB-004): a captured verb function is wrapped once, so that
+  // an invocation the host announced (__ragwbPending) runs in its request scope
+  globalThis.__ragwbWrapVerb = (entry, name) => {
+    const f = entry && entry[name];
+    if (typeof f !== 'function' || f.__ragwb) return typeof f === 'function';
+    const w = function (...args) {
+      const p = globalThis.__ragwbPending;
+      globalThis.__ragwbPending = null;
+      if (!p) return f.apply(this, args);
+      p.entered();
+      return rag.withScope(p.scope, () => f.apply(this, args));
+    };
+    w.__ragwb = true;
+    entry[name] = w;
+    return true;
+  };
   globalThis.__serve = {
     // refresh: rebuild now if the sources changed (serve --watch), so the next query doesn't wait
     refresh: async () => {
@@ -101,11 +129,16 @@ const serveHarness = `(async (__mode, __path, __src, __opts) => {
       const nodes = Object.values(rep.nodes).filter(n => !n.reused).map(n => ({ id: n.id, ms: n.ms, incremental: !!n.incremental, delta: n.delta || null }));
       return JSON.stringify({ ok: true, ms: rep.ms, nodes, gc, chunks: art().chunks.size });
     },
-    run: async (signalsJson, trigger, onText) => {
+    // emit(type, json): the engine events of this run (RAGWB-004: the shell's SSE);
+    // holder.scope: its abort signal, for the host to cancel
+    run: async (signalsJson, trigger, emit, holder) => {
+      const sc = rag.newScope(emit ? ev => emit(String(ev.type), JSON.stringify(ev)) : () => {});
+      if (holder) holder.scope = sc;
       const r = await session.run(JSON.parse(signalsJson || '{}'), {
-        trigger: trigger || 'change',
-        ...(onText ? { onText: (node, text) => onText(String(node), String(text)) } : {}),
+        trigger: trigger || 'change', signal: sc.signal, detail: sc.detail,
+        ...(emit ? { onEvent: sc.emit } : {}),
       });
+      sc.close();
       collect();
       const t1 = now();
       const a = art();
@@ -149,7 +182,16 @@ func OpenApp(ctx context.Context, factory *engine.RuntimeFactory, spec AppSpec) 
 		stop()
 		return nil, err
 	}
-	a := &ServedApp{Name: spec.Name, rt: rt, stop: stop}
+	a := &ServedApp{Name: spec.Name, rt: rt, stop: stop, verbs: spec.Verbs}
+	modulePath := ""
+	if spec.Verbs != nil && mode == "module" {
+		// the jsverbs loader knows the scanned files by module path (/app.js), and
+		// requiring app.js through it is what captures verbs declared there
+		root, _ := filepath.Abs(spec.Verbs.RootDir)
+		if rel, err := filepath.Rel(root, path); err == nil && !strings.HasPrefix(rel, "..") {
+			modulePath = "/" + filepath.ToSlash(rel)
+		}
+	}
 	files := make([]any, 0, len(spec.Files))
 	for _, f := range spec.Files {
 		files = append(files, map[string]any{"name": f.Name, "text": f.Text})
@@ -163,7 +205,7 @@ func OpenApp(ctx context.Context, factory *engine.RuntimeFactory, spec AppSpec) 
 		if !ok {
 			return nil, fmt.Errorf("serve harness is not a function")
 		}
-		return fn(goja.Undefined(), vm.ToValue(mode), vm.ToValue(path), vm.ToValue(src), vm.ToValue(map[string]any{"files": files}))
+		return fn(goja.Undefined(), vm.ToValue(mode), vm.ToValue(path), vm.ToValue(src), vm.ToValue(map[string]any{"files": files, "modulePath": modulePath}))
 	})
 	if err != nil {
 		a.Close()
@@ -215,18 +257,30 @@ type RunResult struct {
 
 // Run executes the plan's live nodes for signals (a JSON object). onText, when
 // set, receives streamed LLM text (node id, text so far) on the runtime's goroutine.
-func (a *ServedApp) Run(ctx context.Context, signals json.RawMessage, trigger string, onText func(node, text string)) (*RunResult, error) {
+func (a *ServedApp) Run(ctx context.Context, signals json.RawMessage, trigger string, sink EventSink) (*RunResult, error) {
 	t0 := time.Now()
+	var holder *goja.Object
+	stop := make(chan struct{})
+	defer close(stop)
 	v, err := ragjs.Eval(ctx, a.rt, "ragwb.serve.run", func(vm *goja.Runtime) (goja.Value, error) {
 		fn, err := a.method(vm, "run")
 		if err != nil {
 			return nil, err
 		}
 		var cb goja.Value = goja.Undefined()
-		if onText != nil {
-			cb = vm.ToValue(onText)
+		if sink != nil {
+			cb = vm.ToValue(func(typ, data string) { sink.Emit(Event{Type: typ, Data: json.RawMessage(data)}) })
 		}
-		return fn(goja.Undefined(), vm.ToValue(string(signals)), vm.ToValue(trigger), cb)
+		holder = vm.NewObject()
+		// a cancelled request aborts the run (remaining nodes and LLM calls stop)
+		go func() {
+			select {
+			case <-ctx.Done():
+				a.abortScope(holder)
+			case <-stop:
+			}
+		}()
+		return fn(goja.Undefined(), vm.ToValue(string(signals)), vm.ToValue(trigger), cb, holder)
 	})
 	if err != nil {
 		return nil, err
@@ -237,6 +291,22 @@ func (a *ServedApp) Run(ctx context.Context, signals json.RawMessage, trigger st
 	}
 	took := time.Since(t0)
 	return &RunResult{JSON: s, EvalMS: float64(took.Microseconds()) / 1000, Took: took}, nil
+}
+
+// abortScope aborts holder.scope (a rag request scope) on the owner.
+func (a *ServedApp) abortScope(holder *goja.Object) {
+	actx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, _ = a.rt.Owner.Call(actx, "ragwb.serve.abort", func(_ context.Context, vm *goja.Runtime) (any, error) {
+		sc, ok := holder.Get("scope").(*goja.Object)
+		if !ok {
+			return nil, nil
+		}
+		if f, ok := goja.AssertFunction(sc.Get("abort")); ok {
+			_, _ = f(sc, vm.ToValue("request cancelled"))
+		}
+		return nil, nil
+	})
 }
 
 // Chunk returns {chunks, neighbors} for one chunk id (a cache miss in the browser).

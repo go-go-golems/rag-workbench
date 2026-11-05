@@ -1300,6 +1300,91 @@
   const asArray = v => (isView(v) ? v.toArray() : v);
   const JSON_PERSIST = { save: v => v, load: x => x };
   const FULL_DELTA = Object.freeze({ full: true });
+
+  // ── request scopes and events (RAGWB-004 §6.3–6.5)
+  // A scope routes one request's events (and carries its abort signal and detail
+  // options) through every rag.run/rag.build it starts. Many requests share one
+  // runtime and interleave at awaits, so the host makes a scope current only for
+  // the synchronous start of a call (withScope); rag.run captures it then.
+  let currentScope = null;
+  function newScope(emit, detail = {}) {
+    let runs = 0, open = true;
+    const listeners = [];
+    const signal = {
+      aborted: false, reason: undefined,
+      addEventListener: (t, f) => { if (t === 'abort') listeners.push(f); },
+      removeEventListener: (t, f) => { const i = listeners.indexOf(f); if (i >= 0) listeners.splice(i, 1); },
+    };
+    return {
+      signal, detail: { top: 20, chunks: false, ...detail },
+      emit: ev => { if (open && ev && typeof ev === 'object') try { emit(ev); } catch (_) { /* a sink error must not fail the query */ } },
+      nextRun: () => ++runs,
+      runs: () => runs,
+      close: () => { open = false; },
+      abort: reason => {
+        if (signal.aborted) return;
+        signal.aborted = true; signal.reason = reason;
+        for (const f of listeners.slice()) try { f(); } catch (_) { /* keep aborting */ }
+      },
+    };
+  }
+  function withScope(scope, fn) {
+    const prev = currentScope;
+    currentScope = scope || null;
+    try { return fn(); } finally { currentScope = prev; }
+  }
+  // scoped(opts): the options of a run/build started now, with the current (or an
+  // explicit opts.scope) scope's events, signal and detail. scope: null = none.
+  function scoped(opts = {}) {
+    const sc = opts.scope !== undefined ? opts.scope : currentScope;
+    if (!sc) return opts;
+    const run = sc.nextRun ? sc.nextRun() : 0, prev = opts.onEvent;
+    return {
+      ...opts, scope: null, signal: opts.signal || sc.signal, detail: opts.detail || sc.detail,
+      onEvent: ev => { if (prev) try { prev(ev); } catch (_) { /* caller's */ } sc.emit(run ? { ...ev, run } : ev); },
+    };
+  }
+  const safeEmit = opts => (opts && opts.onEvent ? ev => { try { opts.onEvent(ev); } catch (_) { /* listener errors stay local */ } } : null);
+  // hits as events: ids, scores and labels; the chunk itself only when asked (detail.chunks)
+  function hitsEvent(node, hits, art, detail = {}, partial = false) {
+    const top = detail.top ?? 20, list = arr(hits);
+    return {
+      type: 'hits', node, ...(partial ? { partial: true } : {}), total: list.length,
+      hits: list.slice(0, top).map((h, i) => {
+        const c = (art && art.chunks.get(h.id)) || {};
+        const o = { id: h.id, score: h.score, rank: i + 1, doc: c.title, heading: (c.headingPath || []).join(' › ') };
+        if (h.via) o.via = h.via;
+        if (h.reason) o.reason = h.reason;
+        if (detail.chunks && c.id) o.chunk = c;
+        return o;
+      }),
+    };
+  }
+  const summarize = v => (Array.isArray(v) ? `${v.length} result${v.length === 1 ? '' : 's'}` : typeof v === 'string' ? clip(v, 120) : v && typeof v === 'object' ? clip(JSON.stringify(v), 120) : String(v));
+  // tool calls of an LLM node as events: wrap each tool's execute
+  function eventSample(sample, node, emit) {
+    let calls = 0;
+    const wrap = o => (!o || !Array.isArray(o.tools) || !o.tools.length ? o : {
+      ...o, tools: o.tools.map(t => ({
+        ...t, execute: async (input, eo) => {
+          const call = ++calls, t0 = now();
+          emit({ type: 'tool', node, call, name: String(t.name), phase: 'start', input });
+          try {
+            const v = await t.execute(input, eo);
+            emit({ type: 'tool', node, call, name: String(t.name), phase: 'end', ms: +(now() - t0).toFixed(1), summary: summarize(v) });
+            return v;
+          } catch (e) {
+            emit({ type: 'tool', node, call, name: String(t.name), phase: 'end', ms: +(now() - t0).toFixed(1), isError: true, summary: String((e && e.message) || e) });
+            throw e;
+          }
+        },
+      })),
+    });
+    const f = (input, o) => sample(input, wrap(o));
+    f.json = (input, o) => sample.json(input, wrap(o));
+    if (sample.limits) f.limits = sample.limits;
+    return f;
+  }
   const persistOf = def => (!def || def.persist === false ? null : def.persist || (['docs', 'chunks'].includes(def.out) ? JSON_PERSIST : null));
   const storeKey = (d, def) => hash([d, def.src || '']);
   class Engine {
@@ -1307,6 +1392,8 @@
       this.env = env;
       this.memo = new Map();   // build digest → { value, stats }
       this.retired = [];       // superseded outputs, closed by the next gc (RAGWB-003 §6.7)
+      this.recent = new Map(); // recently run plans (noteIr)
+      this.building = new Map(); // digest set → in-flight build promise (buildShared)
       this.items = new Map();  // item key → value
       this.bakes = new Map();
       this.fileDigests = new Map();
@@ -1393,6 +1480,7 @@
         try { lineages = this.lineages(ir); } catch (e) { this.env.log && this.env.log(`lineage keys: ${e.message || e}`); }
       }
       const report = { ok: true, ms: 0, nodes: {}, errors: [] };
+      const bemit = safeEmit(opts);
       const outputs = new Outputs();
       const deltas = new Map(); // node id → its change since the base the next node continues from (RAGWB-003 §6.5)
       const counter = { calls: 0 };
@@ -1418,6 +1506,7 @@
           outputs.set(n.id, m.lazy && !m.lazy.done ? m.lazy : m.value);
           Object.assign(st, { reused: true, count: m.count, ms: 0 });
           deltas.set(n.id, { none: true, from: d });
+          if (bemit) bemit({ type: 'build', node: n.id, component: n.t, ms: 0, reused: true, stored: !!st.stored, count: st.count });
           continue;
         }
         if (costly && !allowCalls && this.partial.has(d)) {
@@ -1465,6 +1554,7 @@
                 if (def.async && this.env.cache) this.env.cache.set(key, v).catch(() => {});
                 st.computed++;
                 if (opts.onProgress) opts.onProgress({ node: n.id, done: st.computed + st.cached, total: items.length });
+                if (bemit) bemit({ type: 'progress', node: n.id, done: st.computed + st.cached, total: items.length, unit: 'items' });
               }
             };
             await Promise.all(Array.from({ length: def.async ? Math.max(1, p.concurrency ?? 3) : 1 }, worker));
@@ -1505,6 +1595,7 @@
         st.ms = +(now() - t1).toFixed(1);
         timed('build', n.id, st.ms, n.t + ' · computed' + (st.saved ? ', saved' : ''));
         this.emit({ type: 'node-built', node: n.id, stats: st });
+        if (bemit) bemit({ type: 'build', node: n.id, component: n.t, ms: st.ms, count: st.count, incremental: !!st.incremental, ...(st.delta ? { delta: st.delta } : {}) });
       }
       // bake params of live nodes
       if (report.ok) for (const n of ir.nodes) if (n.phase === 'live') {
@@ -1513,6 +1604,7 @@
       report.ms = +(now() - t0).toFixed(1);
       report.calls = counter.calls;
       report.passes = passesOf(ir, report);
+      if (bemit) bemit({ type: 'built', ok: report.ok, ms: report.ms, errors: report.errors });
       this.lastBuild = report;
       this.emit({ type: 'built', report });
       return report;
@@ -1522,9 +1614,9 @@
     // their Go handles (record views, bleve indexes) closed one gc later, so a
     // query that started before the rebuild keeps working. Values still reachable
     // from live entries are never closed.
-    gc(ir) {
-      ir = compile(ir);
-      const liveDigests = new Set(this.digests(ir).values());
+    gc(irs) {
+      const liveDigests = new Set();
+      for (const ir of arr(irs)) for (const d of this.digests(compile(ir)).values()) liveDigests.add(d);
       const live = new Set();
       for (const [d, m] of this.memo) if (liveDigests.has(d) && !(m.lazy && !m.lazy.done)) live.add(m.value);
       const closing = this.retired.filter(v => !live.has(v));
@@ -1671,7 +1763,29 @@
       return this._art;
     }
     session(irOrGetter) { return new Session(this, typeof irOrGetter === 'function' ? irOrGetter : () => irOrGetter); }
-    async run(ir, signals = {}, opts = {}) { return this.session(compile(ir)).run(signals, opts); }
+    async run(ir, signals = {}, opts = {}) { // scoped() runs before the first await
+      ir = compile(ir);
+      this.noteIr(ir);
+      return this.session(ir).run(signals, scoped(opts));
+    }
+    // plans this engine ran recently (serve: the app's plan plus those verbs ran),
+    // so gc keeps their outputs (RAGWB-004 §6.8)
+    noteIr(ir) {
+      const key = ir.id + ':' + hash(ir.nodes.map(n => [n.id, n.t, n.p]));
+      this.recent.delete(key);
+      this.recent.set(key, ir);
+      while (this.recent.size > 8) this.recent.delete(this.recent.keys().next().value);
+    }
+    recentIrs() { return [...this.recent.values()]; }
+    // one build per digest set at a time: a second query for a plan being built waits for it
+    buildShared(ir, opts = {}) {
+      const key = [...this.digests(ir).values()].join(',');
+      const cur = this.building.get(key);
+      if (cur) { if (opts.onEvent) try { opts.onEvent({ type: 'build', waiting: true }); } catch (_) { /* listener */ } return cur; }
+      const p = this.build(ir, opts).finally(() => this.building.delete(key));
+      this.building.set(key, p);
+      return p;
+    }
   }
 
   function passesOf(ir, report) {
@@ -1707,8 +1821,9 @@
     async run(signals = {}, opts = {}) {
       const ir = this.getIr();
       const engine = this.engine;
+      const emit = safeEmit(opts) || (() => {});
       let art = engine.artifacts(ir);
-      if (!art) { const rep = await engine.build(ir, { signal: opts.signal, onProgress: opts.onProgress }); if (!rep.ok) throw new RagError('build', rep.errors.join('\n')); art = engine.artifacts(ir); }
+      if (!art) { const rep = await engine.buildShared(ir, { signal: opts.signal, onProgress: opts.onProgress, onEvent: opts.onEvent, scope: null }); if (!rep.ok) throw new RagError('build', rep.errors.join('\n')); art = engine.artifacts(ir); }
       // live outputs memoized against other artifacts (a rebuilt corpus) are stale
       if (this.artKey !== art.key) { this.memo.clear(); this.artKey = art.key; }
       const t0 = now();
@@ -1718,6 +1833,8 @@
       const counter = { calls: 0 };
       const sample = engine.sampler(counter, opts.signal);
       const runId = ++this.runs;
+      const detail = opts.detail || {};
+      emit({ type: 'run', plan: ir.id, trigger, signals: s });
       for (const n of ir.nodes) {
         if (n.phase === 'build') continue;
         if (n.phase === 'signal') { outputs[n.id] = s[n.id]; continue; }
@@ -1740,6 +1857,7 @@
           entry.out = countOf(m.out);
           if (m.notes) entry.notes = m.notes;
           trace.push(entry);
+          emit({ type: 'node', node: n.id, component: n.t, phase: 'end', status: entry.status, ms: 0, in: entry.in, out: entry.out });
           continue;
         }
         if (!wants) {
@@ -1747,6 +1865,7 @@
           entry.status = 'skipped';
           entry.out = countOf(outputs[n.id]);
           trace.push(entry);
+          emit({ type: 'node', node: n.id, component: n.t, phase: 'end', status: 'skipped', ms: 0, in: entry.in, out: entry.out });
           this.memo.set(n.id, { digest: nd, inputs, reads: {}, out: outputs[n.id], full: false });
           continue;
         }
@@ -1754,8 +1873,9 @@
         const sp = new Proxy(s, { get: (t, k) => { if (typeof k === 'string') reads[k] = stable(t[k]); return t[k]; } });
         const notes = [];
         const c0 = counter.calls;
-        const ctx = this.ctx(n, ir, art, sample, s, notes, opts);
+        const ctx = this.ctx(n, ir, art, sample, s, notes, opts, opts.onEvent ? emit : null);
         const t1 = now();
+        emit({ type: 'node', node: n.id, component: n.t, phase: 'start' });
         try {
           const p = await this.params(n, sp, ctx, art, ir);
           let out = await def.run(sp, ctx, input, p);
@@ -1763,6 +1883,8 @@
           outputs[n.id] = out;
           entry.out = countOf(out);
           if (n.out === 'hits') entry.top = out.slice(0, 50).map(h => ({ id: h.id, score: h.score, why: h.why, parts: h.parts, reason: h.reason }));
+          if (n.out === 'hits' && opts.onEvent) emit(hitsEvent(n.id, out, art, detail));
+          if (n.out === 'context' && out && opts.onEvent) emit({ type: 'context', node: n.id, evidence: arr(out.evidence).map(e => ({ label: e.label, id: e.id })), bytes: out.bytes });
           this.memo.set(n.id, { digest: nd, inputs, reads, out, full: true, notes });
         } catch (e) {
           const msg = e && (e.message || e.code) ? `${e.code && !e.message ? e.code : e.message}` : String(e);
@@ -1778,6 +1900,8 @@
         if (notes.length) entry.notes = notes;
         trace.push(entry);
         if (opts.onNode) opts.onNode(entry);
+        emit({ type: 'node', node: n.id, component: n.t, phase: 'end', status: entry.status, ms: entry.ms, in: entry.in, out: entry.out, calls: entry.calls,
+          ...(entry.notes ? { notes: entry.notes } : {}), ...(entry.error ? { error: entry.error } : {}) });
       }
       const o = ir.outputs;
       const result = {
@@ -1785,6 +1909,7 @@
         answer: o.answer ? outputs[o.answer] : null, outputs, trace, errors, ms: +(now() - t0).toFixed(1), calls: counter.calls,
       };
       decorateResult(result, art);
+      emit({ type: 'runEnd', ms: result.ms, calls: result.calls, errors });
       this.last = result;
       return result;
     }
@@ -1797,11 +1922,12 @@
       }
       return out;
     }
-    ctx(n, ir, art, sample, s, notes, opts) {
+    ctx(n, ir, art, sample, s, notes, opts, emit) {
       let chunkList = null; // all chunks, only for components that ask (ctx.chunks)
       const allChunks = () => chunkList || (chunkList = [...art.chunks.values()]);
+      let lastText = ''; // ctx.emit takes the text so far; events carry what is new
       return {
-        node: n, sample, signal: opts.signal, signals: Object.freeze({ ...s }), synonyms: art.synonyms, tokens, clip,
+        node: n, sample: emit ? eventSample(sample, n.id, emit) : sample, signal: opts.signal, signals: Object.freeze({ ...s }), synonyms: art.synonyms, tokens, clip,
         index: name => art.indexes.get(String(name)) || null,
         indexNames: () => [...art.indexes.keys()],
         firstIndex: kind => [...art.indexes.values()].find(x => x.kind === kind) || null,
@@ -1819,8 +1945,18 @@
           return [...list.slice(Math.max(0, i - (o.before ?? 1)), i), ...list.slice(i + 1, i + 1 + (o.after ?? 1))].map(x => art.chunks.get(x));
         },
         log: (...a) => this.engine.env.log && this.engine.env.log(`[${n.id}]`, ...a),
-        note: t => notes.push(String(t)),
-        emit: text => opts.onText && opts.onText(n.id, text),
+        note: t => { notes.push(String(t)); if (emit) emit({ type: 'note', node: n.id, text: String(t) }); },
+        emit: text => {
+          if (opts.onText) opts.onText(n.id, text);
+          if (!emit) return;
+          text = String(text);
+          const delta = text.startsWith(lastText) ? text.slice(lastText.length) : text;
+          if (!text.startsWith(lastText)) emit({ type: 'text', node: n.id, reset: true, delta: '' });
+          lastText = text;
+          if (delta) emit({ type: 'text', node: n.id, delta });
+        },
+        partial: hits => { if (emit) emit(hitsEvent(n.id, normHits(hits, n.id), art, opts.detail || {}, true)); },
+        progress: (done, total, unit) => { if (emit) emit({ type: 'progress', node: n.id, done: Number(done), total: Number(total), ...(unit ? { unit: String(unit) } : {}) }); },
       };
     }
   }
@@ -2224,7 +2360,9 @@ q.value = ${json(ir.signals.q || '')}; go();
     // compile and run
     compile, applyOps,
     ir: json => withMethods(clone(json)),
-    build: (target, opts) => defaultEngine().build(compile(target), opts),
+    build: (target, opts) => defaultEngine().build(compile(target), scoped(opts)),
+    scope: () => currentScope,
+    withScope, newScope,
     run: (target, signals, opts) => (target instanceof Workspace ? target.run(signals, opts) : defaultEngine().run(compile(target), signals, opts)),
     search: async (target, q, opts = {}) => {
       const r = await rag.run(target, { ...(opts.signals || {}), q, ...(opts.k ? { k: opts.k } : {}), ...(opts.where ? { filters: opts.where } : {}) }, { trigger: opts.trigger || 'change' });
