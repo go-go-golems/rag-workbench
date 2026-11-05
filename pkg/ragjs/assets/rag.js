@@ -545,6 +545,26 @@
     },
     async: true,
   });
+  // RAGWB-007 §3.5: ask the questions about every chunk (the chunk is the state);
+  // compact answers go to chunk[name] and chunk.meta[name], so index.terms and
+  // filter.where can use them. Costs one decision call per chunk: deferred like enrich.llm.
+  build('enrich.decide', {
+    in: ['chunks'], out: 'chunks', args: optArgs, llm: true,
+    describe: p => `${p.name} · ${Object.keys(p.questions || {}).join(' · ')} · 1 decision per chunk`,
+    map: async (chunk, ctx, p) => {
+      if (!isObj(p.questions) || !Object.keys(p.questions).length) throw new RagError('build', `enrich.decide '${p.name}': questions are required`);
+      const state = { title: chunk.title, section: (chunk.headingPath || []).join(' › '), text: clip(chunk.text || '', p.clip ?? 4000), ...(p.corpus ? { corpus: p.corpus } : {}) };
+      const r = await ctx.decide({ state, questions: p.questions });
+      const v = {};
+      for (const [id, a] of Object.entries(r.answers)) {
+        if (a.type === 'choice') { v[id] = a.choice; v[id + '_p'] = +(+(a.probabilities[a.choice] ?? a.confidence)).toFixed(4); }
+        else if (a.type === 'noul') v[id] = +(+a.probability).toFixed(4);
+        else v[id] = +(+a.score).toFixed(3);
+      }
+      return { ...chunk, [p.name]: v, meta: { ...(chunk.meta || {}), [p.name]: v } };
+    },
+    async: true,
+  });
   build('index.bm25', {
     in: ['chunks'], out: 'index', args: optArgs, describe: p => Object.entries(p.fields || { title: 2, headingPath: 3, text: 1 }).map(([k, v]) => `${k}×${v}`).join(' '),
     all: ([chunks], ctx, p) => new Bm25Index(chunks, p),
