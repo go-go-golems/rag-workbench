@@ -52,9 +52,9 @@ func NewWorkbenchCommand() *cobra.Command {
 				return err
 			}
 			srv := &http.Server{Handler: s.Handler(), ReadHeaderTimeout: 10 * time.Second}
-			llmName := "none (LLM calls disabled; pass --llm lunaroute)"
+			llmName := "none (LLM calls disabled; pass --llm pi)"
 			if backend != nil {
-				llmName = fmt.Sprintf("%T", backend)
+				llmName = DescribeLLM(backend)
 			}
 			fmt.Fprintf(cmd.OutOrStdout(), "ragwb workbench on http://%s  (llm: %s, db: %s, apps: %s)\n", ln.Addr(), llmName, dbPath, apps.Dir)
 			ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt)

@@ -16,7 +16,11 @@ import (
 
 	"github.com/go-go-golems/go-go-goja/pkg/jsverbs"
 
+	"github.com/go-go-golems/geppetto/pkg/steps/ai/providers/pi"
+
 	"github.com/go-go-golems/rag-workbench/pkg/llm"
+	"github.com/go-go-golems/rag-workbench/pkg/llm/gepp"
+	"github.com/go-go-golems/rag-workbench/pkg/llm/gepp/gepptest"
 	"github.com/go-go-golems/rag-workbench/pkg/runner"
 	"github.com/go-go-golems/rag-workbench/pkg/store"
 	"github.com/go-go-golems/rag-workbench/pkg/timing"
@@ -198,6 +202,37 @@ func TestVerbEndpoints(t *testing.T) {
 
 // An LLM verb over SSE: text deltas (merged by the writer) add up to the answer.
 func TestVerbSSEStreamsLLMText(t *testing.T) {
+	n := answerVerbSSE(t, &llm.Fake{Pieces: 12, Delay: 3 * time.Millisecond})
+	t.Logf("12 deltas arrived as %d text events", n)
+}
+
+// RAGWB-006: the Geppetto backend streams the provider's deltas to SSE
+// clients; deltas 50 ms apart (more than the 30 ms merge window) arrive as
+// separate text events.
+func TestVerbSSEStreamsGeppettoDeltas(t *testing.T) {
+	parts := []string{"The rebalance ", "law preserves ", "placements ", "[E1]."}
+	p := gepptest.NewProvider(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		for _, part := range parts {
+			_, _ = io.WriteString(w, "data: "+gepptest.Chunk(map[string]any{"content": part}, "")+"\n\n")
+			w.(http.Flusher).Flush()
+			time.Sleep(50 * time.Millisecond)
+		}
+		_, _ = io.WriteString(w, "data: "+gepptest.Chunk(map[string]any{}, "stop")+"\n\ndata: [DONE]\n\n")
+	})
+	b, err := gepp.New(gepp.Config{AgentDir: gepptest.AgentDir(t, p.URL), Tiers: llm.TierModels{Default: "lunaroute/big"}, Options: []pi.Option{pi.WithLocalProviders()}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := answerVerbSSE(t, b); n < len(parts) {
+		t.Fatalf("%d provider deltas arrived as %d text events", len(parts), n)
+	}
+}
+
+// answerVerbSSE serves an app with an answer verb on backend, calls it over
+// SSE, checks that the text events add up to the answer, and returns their number.
+func answerVerbSSE(t *testing.T, backend llm.Backend) int {
+	t.Helper()
 	corpus, _ := filepath.Abs("../../examples/apps/reports/corpus")
 	dir := filepath.Join(t.TempDir(), "qa")
 	_ = os.MkdirAll(dir, 0o755)
@@ -212,7 +247,7 @@ __verb__("answer", { short: "Answer a question", fields: { q: { argument: true }
 module.exports = { app: kit.searchApp(plan, { id: "q", title: "QA" }) };
 `, corpus)
 	_ = os.WriteFile(filepath.Join(dir, "app.js"), []byte(app), 0o644)
-	ts, _ := serveVerbs(t, dir, &llm.Fake{Pieces: 12, Delay: 3 * time.Millisecond}, corpus)
+	ts, _ := serveVerbs(t, dir, backend, corpus)
 	// app.js's verbs are "app <name>" (jsverbs names a file's verbs after the file);
 	// the bare name works when it is unique
 	res, evs := postSSE(t, ts.URL+"/api/rag/qa/verbs/answer", `{"q":"what is the rebalance law"}`)
@@ -237,5 +272,5 @@ module.exports = { app: kit.searchApp(plan, { id: "q", title: "QA" }) };
 	if text.String() != want || n == 0 {
 		t.Fatalf("streamed %q (%d events), answer %q", text.String(), n, want)
 	}
-	t.Logf("12 deltas arrived as %d text events", n)
+	return n
 }
