@@ -13,7 +13,7 @@ __verb__("search", {
   fields: {
     q: { argument: true, help: "Query text" },
     k: { type: "int", default: 5, help: "Number of hits" },
-    plan: { type: "choice", choices: ["lexical", "fused", "semantic", "hybrid", "hybrid-rerank"], default: "lexical", help: "Which plan in lib/plans.js (dense plans need --embed lunaroute)" },
+    plan: { type: "choice", choices: ["lexical", "fused", "semantic", "hybrid", "hybrid-rerank", "graded", "filtered"], default: "lexical", help: "Which plan in lib/plans.js (dense plans need --embed lunaroute; graded/filtered need --decide)" },
     trigger: { type: "choice", choices: ["change", "submit"], default: "submit", help: "submit also runs submit-trigger nodes (rerank.model, LLM nodes)" },
   },
 });
@@ -26,6 +26,6 @@ __verb__("explain", {
   short: "Show how one chunk moved through the plan's nodes",
   fields: {
     q: { argument: true }, id: { argument: true, help: "Chunk id (from search)" },
-    plan: { type: "choice", choices: ["lexical", "fused", "semantic", "hybrid", "hybrid-rerank"], default: "lexical" },
+    plan: { type: "choice", choices: ["lexical", "fused", "semantic", "hybrid", "hybrid-rerank", "graded", "filtered"], default: "lexical" },
   },
 });

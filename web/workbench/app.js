@@ -1154,8 +1154,8 @@
     const c = window.claude;
     if (!c || typeof c.use !== 'function') return;
     const get = n => c.use(n).catch(() => null);
-    const [sample, db, user, downloads] = await Promise.all([get('sample'), get('db'), get('user'), get('downloads')]);
-    W.caps = { sample, db, user, downloads };
+    const [sample, db, user, downloads, decide] = await Promise.all([get('sample'), get('db'), get('user'), get('downloads'), get('decide')]);
+    W.caps = { sample, db, user, downloads, decide };
     if (sample && sample.limits) { try { W.caps.limits = await sample.limits(); } catch (_) { W.caps.limits = null; } }
     if (db && user) { try { W.caps.uid = await user.id(); } catch (_) { W.caps.uid = null; } }
   }
@@ -1197,7 +1197,7 @@
     capsP.then(async () => {
       agentHost.sample = W.caps.sample;
       agentHost.limits = W.caps.limits;
-      rag.configure({ sample: W.caps.sample || undefined });
+      rag.configure({ sample: W.caps.sample || undefined, decide: W.caps.decide || undefined });
       if (!W.caps.sample) clog('warn', 'Claude is not available in this view: LLM nodes are skipped with an error and the agent cannot run. Lexical search, evals and editing work.');
       else if (W.caps.limits && !W.caps.limits.tools) clog('warn', 'This view cannot run page tools, so the agent can talk but not act.');
       if (store.init()) {

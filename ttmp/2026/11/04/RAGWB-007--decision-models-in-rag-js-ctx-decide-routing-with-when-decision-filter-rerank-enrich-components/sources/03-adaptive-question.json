@@ -1,0 +1,72 @@
+[
+{
+  "answer": "The rebalance law preserves placements via a placement→view map invariant [E1]:\n\n- `placementMapOf(tree)` builds a `ReadonlyMap` from each leaf's id to the `viewId` its body shows (empty string if not a leaf).\n- `preservesPlacements(before, after)` requires both maps to have the same size and every id to map to the same viewId before and after.\n\n`planRebalance` in `planner/workspace.ts` applies this predicate before emitting a `workspaceSetTree`, refusing with `rebalance_changes_membership` if a tree adds, drops, or retargets a leaf, and with `invalid_tree` for a malformed tree [E1]. The law is deliberately stronger than \"same leaf count\" — a tree that swaps which view a placement id shows keeps the same leaf count but is not a valid rebalance [E1].\n\nVerification: `rebalance/law.test.ts` generates trees from a small grammar (depth 1–3, sixteen shapes, three ratio classes, two configs) and asserts `preservesPlacements` for every `set-tree` proposal `buildSlate` emits, plus explicit refusal tests for dropped, added, or retargeted leaves [E3]. Note the diary's caveat: the grammar does not cover the 12-tile perf fixture [E3], and evidence on whether deeper trees behave correctly is missing.",
+  "cited": [
+    "E1",
+    "E3"
+  ],
+  "direct": false,
+  "errors": [],
+  "route": {
+    "needs": 0.9141063981550096
+  },
+  "sources": [
+    {
+      "doc": "PBUI Workbench Core: A Headless Engine, a Pure Planner, and the Hard Cutover of the React Shell",
+      "heading": "5. The core's modules › 5.9 The rebalance law",
+      "id": "project-report-pbui-workbench-core-a-headless-engine-a-pure-planner-and-the-hard-cutover-of-the-react-shell#5-9-the-rebalance-law",
+      "rank": 1,
+      "reason": "p=1.00"
+    },
+    {
+      "doc": "PBUI Workbench Core: A Headless Engine, a Pure Planner, and the Hard Cutover of the React Shell",
+      "heading": "13. Conclusion",
+      "id": "project-report-pbui-workbench-core-a-headless-engine-a-pure-planner-and-the-hard-cutover-of-the-react-shell#13-conclusion",
+      "rank": 2,
+      "reason": "p=0.99"
+    },
+    {
+      "doc": "PBUI Workbench Core: A Headless Engine, a Pure Planner, and the Hard Cutover of the React Shell",
+      "heading": "7. Verification",
+      "id": "project-report-pbui-workbench-core-a-headless-engine-a-pure-planner-and-the-hard-cutover-of-the-react-shell#7-verification-2",
+      "rank": 3,
+      "reason": "p=0.99"
+    },
+    {
+      "doc": "PBUI Workbench Core: A Headless Engine, a Pure Planner, and the Hard Cutover of the React Shell",
+      "heading": "6. The React shell cutover",
+      "id": "project-report-pbui-workbench-core-a-headless-engine-a-pure-planner-and-the-hard-cutover-of-the-react-shell#6-the-react-shell-cutover-4",
+      "rank": 4,
+      "reason": "p=0.94"
+    },
+    {
+      "doc": "PBUI Workbench Core: A Headless Engine, a Pure Planner, and the Hard Cutover of the React Shell",
+      "heading": "1. Project status",
+      "id": "project-report-pbui-workbench-core-a-headless-engine-a-pure-planner-and-the-hard-cutover-of-the-react-shell#1-project-status-2",
+      "rank": 5,
+      "reason": "p=0.82"
+    },
+    {
+      "doc": "PBUI Workbench Core: A Headless Engine, a Pure Planner, and the Hard Cutover of the React Shell",
+      "heading": "",
+      "id": "project-report-pbui-workbench-core-a-headless-engine-a-pure-planner-and-the-hard-cutover-of-the-react-shell#intro",
+      "rank": 6,
+      "reason": "p=0.50"
+    },
+    {
+      "doc": "PBUI Workbench Core: A Headless Engine, a Pure Planner, and the Hard Cutover of the React Shell",
+      "heading": "3. The domain model",
+      "id": "project-report-pbui-workbench-core-a-headless-engine-a-pure-planner-and-the-hard-cutover-of-the-react-shell#3-the-domain-model-2",
+      "rank": 7,
+      "reason": "p=0.22"
+    },
+    {
+      "doc": "PBUI Workbench Core: A Headless Engine, a Pure Planner, and the Hard Cutover of the React Shell",
+      "heading": "5. The core's modules › 5.10 Batch-preserving sync, and persistence",
+      "id": "project-report-pbui-workbench-core-a-headless-engine-a-pure-planner-and-the-hard-cutover-of-the-react-shell#5-10-batch-preserving-sync-and-persistence-2",
+      "rank": 8,
+      "reason": "p=0.08"
+    }
+  ]
+}
+]

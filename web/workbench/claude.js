@@ -112,7 +112,21 @@
   sample.json = (input, o) => call(input, o, true);
   sample.limits = () => Promise.resolve({ tools: { maxCount: 16 }, maxInputBytes: 262144 });
 
-  const caps = { sample, db, user, downloads };
+  // ── decide: POST /_rt/decide, a decision.Request JSON → decision.Response JSON
+  // (RAGWB-007). Same contract as the Go host's env.decide(requestJSON, signal).
+  const decide = async (reqJSON, signal) => {
+    const r = await fetch('/_rt/decide', { method: 'POST', headers: { 'content-type': 'application/json' }, body: reqJSON, signal: signal || undefined })
+      .catch(e => { throw fail(signal && signal.aborted ? 'cancelled' : 'upstream_error', String((e && e.message) || e)); });
+    const text = await r.text();
+    if (!r.ok) {
+      let e = {};
+      try { e = JSON.parse(text).error || {}; } catch (_) { /* not JSON */ }
+      throw fail(e.code || 'upstream_error', e.message || text);
+    }
+    return text;
+  };
+
+  const caps = { sample, db, user, downloads, decide };
   window.claude = {
     use: name => (caps[name] ? Promise.resolve(caps[name]) : Promise.reject(fail('not_declared', 'capability ' + name + ' is not available in ragwb'))),
   };

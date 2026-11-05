@@ -75,6 +75,12 @@ func newDecide(vm *goja.Runtime, provider decision.Provider) goja.Value {
 	})
 }
 
+// DecideErrorCode maps a decision-provider error to the code pages and rag.js
+// see (decide_unavailable aside), with its message and provider details.
+func DecideErrorCode(ctx context.Context, err error) (string, string, map[string]any) {
+	return classifyDecideError(err, ctx, context.Background())
+}
+
 // classifyDecideError maps geppetto decision errors to the codes rag.js and
 // pages see (the sample contract's vocabulary, RAGWB-007 §3.1).
 func classifyDecideError(err error, call, lifetime context.Context) (string, string, map[string]any) {

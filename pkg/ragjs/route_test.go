@@ -138,3 +138,25 @@ func TestAnswerDirectWhenRetrievalSkipped(t *testing.T) {
 		t.Fatalf("%+v", got)
 	}
 }
+
+// The GUI fold keeps decision events and the when-skip reason (RAGWB-007 §3.7).
+func TestTraceFoldsDecisions(t *testing.T) {
+	rt := newOptsRuntime(t, Options{Decide: &decide.Fake{}})
+	var got map[string]map[string]any
+	evalJSON(t, rt, nil, `(async () => {
+		const rag = require("ragwb"), gui = require("ragwb/gui");
+		`+routeCorpus+`
+		const live = { nodes: {} };
+		const sc = rag.newScope(ev => gui.foldEvent(live, ev));
+		await rag.withScope(sc, () => rag.run(routed, { q: 'rebalance law' }, { trigger: 'submit' }));
+		return JSON.stringify(live.nodes);
+	})()`, &got)
+	route, skipped := got["route"], got["widgetix"]
+	ds, _ := route["decisions"].([]any)
+	if len(ds) != 1 || ds[0].(map[string]any)["answers"].(map[string]any)["strategy"].(map[string]any)["value"] != "law" {
+		t.Fatalf("route: %v", route)
+	}
+	if skipped["skippedBy"] != "when" || skipped["status"] != "skipped" {
+		t.Fatalf("skipped: %v", skipped)
+	}
+}

@@ -453,7 +453,7 @@
     switch (ev.type) {
       case 'node':
         if (ev.phase === 'start') { nd.status = 'running'; nd.t0 = Date.now(); }
-        else Object.assign(nd, { status: ev.status, ms: ev.ms, in: ev.in, out: ev.out, calls: ev.calls, error: ev.error, notes: ev.notes });
+        else Object.assign(nd, { status: ev.status, ms: ev.ms, in: ev.in, out: ev.out, calls: ev.calls, error: ev.error, notes: ev.notes, skippedBy: ev.skippedBy });
         break;
       case 'hits': nd.hits = ev.hits; nd.total = ev.total; nd.partial = !!ev.partial; break;
       case 'context': nd.evidence = ev.evidence; nd.bytes = ev.bytes; break;
@@ -461,6 +461,7 @@
       case 'progress': nd.progress = { done: ev.done, total: ev.total, unit: ev.unit }; break;
       case 'tool': (nd.tools = nd.tools || []).push(ev); break;
       case 'note': (nd.notes = nd.notes || []).push(ev.text); break;
+      case 'decision': (nd.decisions = nd.decisions || []).push(ev); break; // RAGWB-007
     }
   }
   const fmtScore = v => (typeof v === 'number' ? fmtNum(+v.toFixed(4)) : v == null ? '' : String(v));
@@ -482,6 +483,30 @@
     return h('table', { class: 'g-table g-trace-hits' }, h('thead', {}, h('tr', {}, ['#', 'score', 'section', 'how'].map((t, i) => h('th', { text: t, class: i < 2 ? 'num' : null })))), h('tbody', {}, rows),
       hits.length > limit ? h('caption', { text: `${limit} of ${hits.length} shown` }) : null);
   }
+  // ── decisions (RAGWB-007): one row per question — answer, probability bar, alternatives
+  const DTYPES = ['noul', 'choice', 'score'];
+  const isDecision = out => out && typeof out === 'object' && !Array.isArray(out) && Object.keys(out).length > 0 && Object.values(out).every(a => a && DTYPES.includes(a.type));
+  const bar = p => (typeof p === 'number' ? '█'.repeat(Math.round(Math.max(0, Math.min(1, p)) * 10)).padEnd(10, '░') + ' ' + p.toFixed(2) : '');
+  function decisionTable(rows) {
+    return h('table', { class: 'g-table g-trace-decision' },
+      h('thead', {}, h('tr', {}, ['question', 'answer', 'p', 'alternatives'].map(t => h('th', { text: t })))),
+      h('tbody', {}, rows.map(r => h('tr', {}, h('td', { text: r.id }), h('td', {}, h('b', { text: r.value })), h('td', { class: 'g-trace-bar', text: bar(r.p) }), h('td', { class: 'g-trace-how', text: r.alt || '' })))));
+  }
+  // from a classify output (full answers) or decision events (compact answers)
+  function decisionRows(out) {
+    return Object.entries(out).map(([id, a]) => {
+      if (a.type === 'noul') return { id, value: 'yes/no', p: a.probability };
+      if (a.type === 'choice') {
+        const alt = Object.entries(a.probabilities || {}).filter(([k]) => k !== a.choice).sort((x, y) => y[1] - x[1]).slice(0, 4).map(([k, v]) => `${k} ${v.toFixed(2)}`).join(' · ');
+        return { id, value: a.choice, p: (a.probabilities || {})[a.choice] ?? a.confidence, alt };
+      }
+      return { id, value: 'level ' + (+a.score).toFixed(1), p: a.confidence, alt: (a.levelProbabilities || []).map((v, i) => `${i}: ${v.toFixed(2)}`).join(' · ') };
+    });
+  }
+  function eventDecisionRows(evs) {
+    const last = evs[evs.length - 1];
+    return Object.entries(last.answers || {}).map(([id, a]) => ({ id, value: a.type === 'noul' ? 'yes/no' : a.type === 'choice' ? a.value : 'level ' + (+a.value).toFixed(1), p: a.type === 'noul' ? a.value : a.p }));
+  }
   // what one step produced, by the shape of its output
   function stepDetail(n, rt, step, entry, out, live) {
     const limit = n.p.limit || 10, parts = [];
@@ -489,6 +514,8 @@
     if (live && live.progress) parts.push(h('div', { class: 'g-trace-prog', text: `${live.progress.done}/${live.progress.total} ${live.progress.unit || ''}` }));
     const hits = Array.isArray(out) && out.length && typeof out[0] === 'object' && out[0] && 'id' in out[0] ? out : live && live.hits ? live.hits : null;
     if (hits) parts.push(hitTable(n, rt, hits, extra, limit, step), live && live.partial ? h('div', { class: 'g-trace-note', text: `partial: ${hits.length} of ${live.total} so far` }) : null);
+    else if (isDecision(out)) parts.push(decisionTable(decisionRows(out)));
+    else if (live && live.decisions && live.decisions.length && !live.hits) parts.push(decisionTable(eventDecisionRows(live.decisions)));
     else if (Array.isArray(out) && out.every(x => typeof x === 'string')) parts.push(h('ol', { class: 'g-trace-list' }, out.map(q => h('li', { text: q }))));
     else if (out && Array.isArray(out.evidence) && out.text != null && !('cited' in out)) {
       parts.push(h('ol', { class: 'g-trace-list' }, out.evidence.map(e => h('li', { text: `[${e.label}] ${e.title || e.id} › ${(e.headingPath || []).join(' › ')}` }))), h('div', { class: 'g-trace-note', text: `${out.bytes ?? out.text.length} bytes of context` }));
@@ -530,7 +557,7 @@
       rows.push(h('tr', { class: 'g-trace-row ' + (st.status || ''), tabindex: '0', onclick: () => toggle(st.node), onkeydown: e => { if (e.key === 'Enter') toggle(st.node); } },
         h('td', { class: 'g-trace-tog', text: isOpen ? '▾' : '▸' }),
         h('td', {}, h('b', { text: st.node }), h('span', { class: 'g-trace-type', text: ' ' + (st.t || '') })),
-        h('td', { text: running && st.progress ? `running ${st.progress.done}/${st.progress.total}` : st.status || '' }),
+        h('td', { text: running && st.progress ? `running ${st.progress.done}/${st.progress.total}` : st.skippedBy ? `${st.status} (${st.skippedBy})` : st.status || '' }),
         h('td', { class: 'num', text: st.in ?? '' }), h('td', { class: 'num', text: st.out ?? (st.hits ? st.total : '') }),
         h('td', { class: 'num', text: ms }), h('td', { class: 'num', text: st.calls || '' })));
       if (isOpen) {
