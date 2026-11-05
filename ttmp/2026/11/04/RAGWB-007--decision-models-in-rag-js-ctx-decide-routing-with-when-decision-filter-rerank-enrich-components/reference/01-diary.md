@@ -69,3 +69,72 @@ This step designed the integration from the engine's actual structure, which has
 
 ### Technical details
 - djev limits observed so far: 32 questions per request, 32768-token context, 8 MiB body.
+
+## Step 2: Phases 1–3 — ctx.decide, routing with classify and when, decision-graded hits
+
+This step built the query-time half of the design. Phase 1 added the bridge (`env.decide` → a geppetto `decision.Provider`), the JS API (`ctx.decide`, its helpers, `rag.decide`), a deterministic `decide.Fake`, and `--decide`/`--decide-model`. Phase 2 added `classify`, the `when` node option and `answer({direct})`. Phase 3 added `filter.decide` and `rerank.decide`. A live run over the bundled reports with `--decide pi` put the section "5.9 The rebalance law" first at p = 1.00. `classify` took 812 ms and grading 20 hits took 1 008 ms.
+
+### Prompt Context
+**User prompt (verbatim):** see Step 1
+**Assistant interpretation:** Implement guide phases 1–3.
+**Inferred user intent:** Route and grade with decision models inside ordinary plans.
+**Commit (code):** 8d97d45 (P1), dd417e1 (P2), d29f7a0 (P3)
+
+### What I did
+- `pkg/ragjs/decide.go`: `newDecide`, a promise bridge that runs the provider on a goroutine, settles on the event loop, cancels on the abort signal, and maps errors with `classifyDecideError`. `module.go`: `Options.Decide`; `configureHost` installs `env.decide` and `env.decideModel`.
+- `pkg/decide/fake.go`: `Fake` (word overlap; `Calls`, `Requests`, `Delay`).
+- `rag.js`:
+  - helpers `wireOptions`, `wireDecision`, `fromWireDecision`, `answerValue`, `answerLine`, `makeDecide`, `eventDecide`;
+  - `Engine.decider`;
+  - `ctx.decide` in `buildCtx` and `Session.ctx`; `ctx.decision`; `rag.decide`;
+  - `classify`;
+  - `normWhen`, `whenRefs`, `whenHolds`, `whenSkipOutput`;
+  - the `when` changes: `splitOpts`, `_addNode` and factories carry it, `finalize` adds decision edges and checks, `ir.digest` includes `when` only when present, and the live loop evaluates it before the memo;
+  - `entry.decision` in the trace; `answer({direct})`; `gradeHits`, `filter.decide`, `rerank.decide`.
+- `pkg/runner/runtime.go`: `Config.Decider`. `cmd/ragwb/cmds/roots.go`: `--decide`, `--decide-model`, `Decider(ctx)`, `DescribeDecider`, `piAgentDirOrEnv`. `run.go`, `serve.go`, `verbs.go` pass `Decider`, and `serve` prints `llm … · decide …`.
+- Tests: `pkg/ragjs/decide_test.go`, `route_test.go`, `grade_test.go`.
+- Live: `ragwb run --decide pi --files examples/apps/reports/corpus --trigger submit --no-store scripts/02-graded.wb.js`; output in `sources/02-graded-live-run.json`.
+
+### Why
+- `ir.digest` gains `when` only for nodes that have one, so existing plans' digests (and anything keyed on them) do not move.
+- `classify`'s answers carry non-enumerable `$decision`/`$meta` markers, so `ctx.decision` and `when` accept only real decision outputs, and JSON views of the answers stay clean.
+- `filter.decide` returns graded hits in their original order. Only `rerank.decide` reorders.
+
+### What worked
+- `go test ./pkg/... ./cmd/...` passes, as does `go test ./web/`.
+- `TestClassifyAndWhenRoute`:
+  - `route` is ordered first although it was added last;
+  - `widgetix` is `skipped:when` with the note `when: route.strategy = law 1.00`;
+  - a `change` run runs both branches;
+  - exactly 1 decision call is made.
+- `TestFilterAndRerankDecide`: 40 hits in batches of 16 → 3 calls and 3 progress events; filter keeps the 10 rebalance sections; `min: 2` keeps 2 under an unreachable threshold; `rerank` is the plan's hits output.
+
+### What didn't work
+- `TestRagDecideBridge` first failed on `Needs:0.66`. The fake's noul overlap was 2 of 3 query terms ("index" absent), so the expectation was wrong, not the code; lowered it to > 0.6.
+- `TestRagDecideErrors`: `ReferenceError: AbortController is not defined` (goja has none). Used a minimal object with `addEventListener('abort')` and `aborted`, which is all the bridge reads.
+- `cmd/ragwb/cmds/run.go:83:17: no new variables on left side of :=`: my scripted insert matched both indentation patterns and inserted the `Decider` block twice. Collapsed the duplicates.
+- `route_test.go:14:6: newRuntime redeclared in this block` (one exists in module_test.go): renamed to `newOptsRuntime`. `SyntaxError: Identifier 'plan' has already been declared` (the shared corpus fixture declares `plan`): renamed to `dplan`.
+- `TestFilterAndRerankDecide`: `progress events 83`. The corpus build also emits progress; the test now counts `unit === 'passages'` only.
+
+### What I learned
+- `refreshFactories` builds `rag.<family>` factories that copy only `id` and `trigger` into params. `when` had to be added there too, or `.then(rag.retrieve(..., {when}))` would drop it.
+- Live grading with two concurrent batches of 10 took about 1 s, against 1.8 s for one batch of 20 in the Step 1 spike.
+
+### What was tricky to build
+- Memo versus `when`. The memo compares inputs and signal reads, not decisions. The `when` check therefore runs before the memo lookup and never writes the memo, so a node skipped in one run can still reuse its previous output in the next run if its inputs are unchanged.
+- Skip outputs. A skipped `retrieve` must contribute `[]` to `fuse.rrf`, not its `queries` input. `whenSkipOutput` passes input through only when the in and out port types match.
+
+### What warrants a second pair of eyes
+- `whenHolds` for choices with `min`/`max` compares the probability mass of the listed options (`in`, or all but `not`), not the top choice. That is the useful semantics for "run the dense branch if P(semantic) ≥ 0.3", but it must be documented clearly.
+- `when` lambdas receive `(s, {decision, signals})`, not the full ctx.
+
+### What should be done in the future
+- `applyOps` (plan patches) does not carry `when` on added nodes yet.
+
+### Code review instructions
+- `git diff 8841551..d29f7a0 -- pkg/ragjs/assets/rag.js` (search for `RAGWB-007`), `pkg/ragjs/decide.go`, `pkg/decide/fake.go`, `cmd/ragwb/cmds/roots.go`.
+- `go test ./pkg/ragjs/ -run 'RagDecide|Classify|WhenCompile|AnswerDirect|FilterAndRerank' -v`.
+
+### Technical details
+- JS error codes: `decide_unavailable`, `invalid_request`, `invalid_response`, `not_granted`, `rate_limited`, `model_not_found`, `prompt_too_large`, `cancelled`, `upstream_error`. Extras: `status`, `providerCode`, `requestId`, `retryAfterMs`.
+- Events: `{type: 'decision', node, call, model, ms, answers: {id: {type, value, p?}}}`, and node end `{status: 'skipped', skippedBy: 'when', notes}`.
