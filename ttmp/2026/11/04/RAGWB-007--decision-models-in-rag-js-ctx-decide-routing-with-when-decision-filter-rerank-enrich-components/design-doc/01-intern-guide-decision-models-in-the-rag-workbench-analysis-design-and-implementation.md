@@ -32,7 +32,7 @@ ExternalSources:
     - https://docs.lunaroute.com/api/systemone/
     - https://arxiv.org/abs/2403.14403
 Summary: 'How rag-workbench gains decision models: a ctx.decide API next to ctx.sample, a classify component plus a per-node when option for routing, decision-graded filter and rerank components, a build-time enrich.decide, and host wiring (CLI, serve, workbench).'
-LastUpdated: 2026-11-04T20:00:00-05:00
+LastUpdated: 2026-11-04T21:30:00-05:00
 WhatFor: Onboarding an engineer who will implement or extend decision-model support in rag-workbench.
 WhenToUse: Read before touching ctx.decide, classify, when, filter.decide, rerank.decide or enrich.decide.
 ---
@@ -472,3 +472,78 @@ Index those fields with `rag.terms({keys: ["kind.kind"]})`, or filter with `filt
 - `examples/apps/reports/lib/plans.js`: example plans.
 - Geppetto: `pkg/decision`, `pkg/decision/systemone`, `pkg/steps/ai/providers/pi/decision.go`.
 - Ticket: `scripts/01-relevance-batch-spike.py` and `sources/01-relevance-batch-spike.txt` (the latency table and the 32-question limit).
+
+---
+
+## Part 6 — Implementation status and results
+
+All six phases are implemented on branch `task/ragwb-007-decision-models`: 23 files and about 1 260 lines outside `ttmp`, of which about 300 are in `rag.js` and `gui.js`. All tests pass (`go test ./pkg/... ./cmd/... ./web/`). The project builds against the local geppetto checkout through the WSM workspace's `go.work`. Outside the workspace it needs a geppetto release that contains GEPPETTO-DECISION-001, because `go.mod` still pins v0.13.13.
+
+| Phase | Commit | What landed |
+|---|---|---|
+| 1 | `8d97d45` | `pkg/ragjs/decide.go` (bridge), `ctx.decide`/`rag.decide` with helpers, `pkg/decide/fake.go`, `--decide`, `--decide-model`, `runner.Config.Decider` |
+| 2 | `dd417e1` | `classify`, the `when` node option, `answer({direct})`, `decision` events, trace `entry.decision` |
+| 3 | `d29f7a0` | `gradeHits`, `filter.decide`, `rerank.decide` |
+| 4 | `6306dd7` | `enrich.decide` |
+| 5 | `b5d1b9d` | `POST /_rt/decide`, the workbench `decide` capability, GUI decision rows and when-skips, the reports plans `graded`/`filtered`/`adaptive`, `ask --plan` |
+| 6 | `6e43be3` | measurements, and the `filtered` example without `min` |
+
+### 6.1 Where the implementation differs from Part 3
+
+- **`when` lambdas** receive `(s, {decision, signals})`, not the full component ctx. They are evaluated before the node's ctx exists.
+- **Choice conditions with `min`/`max`** compare probability mass, not the top choice. The mass is the summed probability of the `in` options (or of all options except `not`). `{decision: 'route.strategy', in: ['semantic'], min: 0.3}` runs the node when P(semantic) ≥ 0.3, even if another option won.
+- **`ir.digest` includes `when` only for nodes that have one**, so the digests of existing plans did not change.
+- **`classify` output** carries non-enumerable `$decision`/`$meta` markers. `ctx.decision(id)` and `when` accept only real decision outputs.
+- **`enrich.decide` writes to `chunk.meta[name]`** as well as to `chunk[name]`, because `index.terms` and `filter.where` read `meta`.
+- **Decision calls are counted in `counter.calls`**, alongside sample calls, so build budgets and trace `calls` include them.
+- **The `filtered` example plan has no `min`.** The measurement below showed that unanswerable questions get uniformly low p, and keeping one irrelevant hit defeats the filter.
+- **Not done:** plan patches (`applyOps`) do not carry `when` on the nodes they add.
+
+### 6.2 Measurements (djev through `--decide pi`, bundled reports corpus)
+
+**Grading latency:**
+
+| Run | Questions | Latency |
+|---|---|---|
+| `classify` (one choice) | 1 | 812 ms |
+| `rerank.decide`, 20 hits in 2 concurrent batches | 20 | 1 008 ms |
+| Spike, one batch of 5, 10, 20 report sections | 5 / 10 / 20 | 1 043 / 1 301 / 1 830 ms |
+
+**The `adaptive` plan:**
+
+| Question | `needs` | Path | Result |
+|---|---|---|---|
+| "hi there, how are you today?" | 0.00009 | retrieval and rerank skipped by `when` | direct answer, `direct: true` |
+| "how does the rebalance law preserve placements?" | 0.914 | retrieve → fuse → rerank.decide → pack → answer | top hit "5.9 The rebalance law" at p = 1.00; the answer cites [E1]; 4.5 s including the LLM answer |
+
+**Golden questions** (`reports goldens --trigger submit`, 12 questions):
+
+| Plan | hit@5 | MRR | nDCG@10 |
+|---|---|---|---|
+| lexical | 1 | 1 | 0.884 |
+| fused | 1 | 0.958 | 0.835 |
+| graded (fused + `rerank.decide`) | 1 | 0.958 | 0.855 |
+| filtered (fused + `filter.decide`) | 1 | 1 | 0.837 |
+
+The goldens are saturated: hit@5 is 1 for every plan. They cannot show a ranking gain beyond the small nDCG and MRR differences above.
+
+**Rejection** (`scripts/03-offtopic-probe`, max p over the 20 graded hits):
+
+| Query | Kind | max p | hits with p ≥ 0.5 |
+|---|---|---|---|
+| boiling point of water | off-topic | 0.003 | 0 / 20 |
+| carbonara recipe | off-topic | 0 | 0 / 2 |
+| 1998 football world cup | off-topic | 0.006 | 0 / 20 |
+| "what is the bleve index used for" | unanswerable (no corpus mentions it) | 0.058 | 0 / 20 |
+| rebalance law | on-topic | 1.0 | 4 / 20 |
+| delta builds | on-topic | 0.965 | 2 / 20 |
+| PBUI headless engine | on-topic | 0.999 | 8 / 20 |
+
+On this corpus, the clearest result is that decision grading separates answerable from unanswerable questions by two orders of magnitude in p. The ranking gains on the saturated goldens are small.
+
+### 6.3 Follow-ups
+
+- A harder eval set with distractor and unanswerable questions, to calibrate `threshold` and measure ranking.
+- `when` in `applyOps`.
+- A workbench preset that demonstrates routing.
+- A geppetto release, so rag-workbench builds without `go.work`.
