@@ -59,7 +59,16 @@
   const isBake = v => isObj(v) && typeof v.$bake === 'string';
   const arr = v => (v == null ? [] : Array.isArray(v) ? v : [v]);
   const uniq = xs => [...new Set(xs)];
-  const slug = s => String(s || '').toLowerCase().replace(/[`'"’]/g, '').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 64) || 'x';
+  const slugFull = s => String(s || '').toLowerCase().replace(/[`'"’]/g, '').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+  const slug = s => slugFull(s).slice(0, 64) || 'x';
+  // a document's id from its own path only (RAGWB-003 §6.2): the uncapped slug, or past
+  // 160 chars a prefix + 8 hex of cyrb53(name); 64-char cuts made distinct notes collide
+  const DOC_ID_MAX = 160;
+  const docIdFor = name => {
+    const full = slugFull(String(name).replace(/\.md$/i, ''));
+    if (!full) return 'x';
+    return full.length <= DOC_ID_MAX ? full : full.slice(0, DOC_ID_MAX - 9).replace(/-+$/, '') + '-' + cyrb53(String(name)).slice(0, 8);
+  };
   const tokens = t => Math.ceil(String(Array.isArray(t) ? t.map(b => (b && b.text) || b).join('\n') : (t && t.text) || t || '').length / 4);
   const clip = (s, n) => (s && s.length > n ? s.slice(0, n - 1) + '…' : s || '');
 
@@ -281,7 +290,7 @@
     }
     flush();
     const name = file.name;
-    const id = slug(name.replace(/\.md$/i, ''));
+    const id = docIdFor(name);
     const title = String(meta.title || h1 || name.replace(/\.md$/i, '')).replace(/^"|"$/g, '');
     const links = [];
     const linkRe = /\[\[([^\]|#]+)(?:#[^\]|]*)?(?:\|[^\]]*)?\]\]/g;
@@ -329,14 +338,17 @@
       hasCode: blocks.some(b => b.kind === 'fence'), hasTable: blocks.some(b => b.kind === 'table'), tokens: tokens(text), ...extra, text,
     };
   }
+  // ids depend only on the chunk's own document (bases start with docId#, doc ids are
+  // unique per file) and ord is the position within the document (RAGWB-003 §6.2)
   function assignIds(chunks) {
-    const seen = new Map();
-    chunks.forEach((c, i) => {
+    const seen = new Map(), pos = new Map();
+    chunks.forEach(c => {
       const base = c.id || `${c.docId}#${c.kind !== 'section' ? slug(c.kind) + '-' : ''}${slug(c.headingPath[c.headingPath.length - 1] || 'intro')}`;
       const n = seen.get(base) || 0;
       seen.set(base, n + 1);
       c.id = n ? `${base}-${n + 1}` : base;
-      c.ord = i;
+      c.ord = pos.get(c.docId) || 0;
+      pos.set(c.docId, c.ord + 1);
     });
     return chunks;
   }
@@ -1287,12 +1299,14 @@
   const isView = v => v != null && typeof v === 'object' && v.__records !== undefined;
   const asArray = v => (isView(v) ? v.toArray() : v);
   const JSON_PERSIST = { save: v => v, load: x => x };
+  const FULL_DELTA = Object.freeze({ full: true });
   const persistOf = def => (!def || def.persist === false ? null : def.persist || (['docs', 'chunks'].includes(def.out) ? JSON_PERSIST : null));
   const storeKey = (d, def) => hash([d, def.src || '']);
   class Engine {
     constructor(env = {}) {
       this.env = env;
       this.memo = new Map();   // build digest → { value, stats }
+      this.retired = [];       // superseded outputs, closed by the next gc (RAGWB-003 §6.7)
       this.items = new Map();  // item key → value
       this.bakes = new Map();
       this.fileDigests = new Map();
@@ -1326,6 +1340,25 @@
       }
       return out;
     }
+    // lineage keys (RAGWB-003 §6.4): like digests, but a source contributes its
+    // def.lineage(p) instead of its file stats, so "this node of this pipeline" keeps
+    // its key across corpus edits. null: the node (or one upstream) has a digest
+    // hook without a lineage hook and can't be continued incrementally.
+    lineages(ir) {
+      const out = new Map();
+      for (const n of ir.nodes) {
+        if (n.phase !== 'build') continue;
+        const def = REG.get(n.t);
+        let extra = '';
+        if (n.t === 'source.files') extra = null;
+        else if (def && typeof def.lineage === 'function') extra = String(def.lineage(n.p, this));
+        else if (def && typeof def.digest === 'function') extra = null;
+        const ins = n.in.map(i => out.get(i));
+        out.set(n.id, extra === null || ins.some(x => x === null) ? null
+          : hash(['lineage', n.t, n.p, ins, extra, ...(def && def.src ? [def.src] : [])]));
+      }
+      return out;
+    }
     dirty(ir) {
       const d = this.digests(ir);
       return [...d].filter(([, dg]) => !this.memo.has(dg)).map(([id]) => id);
@@ -1355,12 +1388,18 @@
       ir = compile(ir);
       const t0 = now();
       const dg = this.digests(ir);
+      let lineages = new Map();
+      if (this.env.artifacts && this.env.artifacts.lineageRecord) {
+        try { lineages = this.lineages(ir); } catch (e) { this.env.log && this.env.log(`lineage keys: ${e.message || e}`); }
+      }
       const report = { ok: true, ms: 0, nodes: {}, errors: [] };
       const outputs = new Outputs();
+      const deltas = new Map(); // node id → its change since the base the next node continues from (RAGWB-003 §6.5)
       const counter = { calls: 0 };
       for (const n of ir.nodes) {
         if (n.phase !== 'build') continue;
         const d = dg.get(n.id);
+        deltas.set(n.id, FULL_DELTA);
         const st = { id: n.id, t: n.t, digest: d, reused: false, ms: 0, count: 0, computed: 0, cached: 0, calls: 0 };
         report.nodes[n.id] = st;
         const allowCalls = opts.calls ?? (this.env.buildCalls !== 'explicit');
@@ -1378,6 +1417,7 @@
           const m = this.memo.get(d);
           outputs.set(n.id, m.lazy && !m.lazy.done ? m.lazy : m.value);
           Object.assign(st, { reused: true, count: m.count, ms: 0 });
+          deltas.set(n.id, { none: true, from: d });
           continue;
         }
         if (costly && !allowCalls && this.partial.has(d)) {
@@ -1391,11 +1431,18 @@
         const c0 = counter.calls;
         try {
           const p = await this.resolveBakes(n, n.p, outputs, ir);
-          const inputs = n.in.map(i => asArray(outputs.get(i)));
+          const inputArrays = () => n.in.map(i => asArray(outputs.get(i))); // not before a delta build: it would read every input
           const ctx = this.buildCtx(n, ir, outputs, counter, opts.signal);
-          let value;
-          if (def.map) {
-            const items = inputs[0] || [];
+          let value, lazy = null;
+          const inc = def.delta && !def.map && !(opts.full ?? this.env.fullBuild) && !opts.force && opts.persist !== false
+            ? await this.tryDelta(n, def, d, lineages.get(n.id), deltas, outputs, ctx, p, opts) : null;
+          if (inc) {
+            if (inc.lazy) { lazy = new Lazy(inc.lazy, ms => timed('load', n.id, ms, n.t)); outputs.set(n.id, lazy); }
+            else value = inc.value;
+            deltas.set(n.id, { ...inc.delta, full: false, from: inc.base.digest });
+            Object.assign(st, { incremental: true, base: inc.base.storeKey, delta: inc.summary || {} });
+          } else if (def.map) {
+            const items = inputArrays()[0] || [];
             const fnKey = hash([n.t, p]);
             const results = new Array(items.length);
             let next = 0, budget = (p.budget && p.budget.calls) ?? Infinity;
@@ -1424,18 +1471,29 @@
             value = results.flat().filter(x => x != null);
             if (def.post) value = def.post(value);
           } else {
-            value = await def.all(inputs, ctx, p, n);
+            value = await def.all(inputArrays(), ctx, p, n);
           }
-          outputs.set(n.id, value);
-          st.count = Array.isArray(value) ? value.length : value && value.N != null ? value.N : value ? Object.keys(value).length : 0;
+          if (inc) st.count = inc.count ?? (lazy ? 0 : value.length ?? 0);
+          else {
+            outputs.set(n.id, value);
+            st.count = Array.isArray(value) ? value.length : value && value.N != null ? value.N : value ? Object.keys(value).length : 0;
+          }
+          if (inc && !lazy) outputs.set(n.id, value);
           st.calls = counter.calls - c0;
           if (st.deferred || st.skipped) this.partial.set(d, { value, count: st.count, deferred: (st.deferred || 0) + (st.skipped || 0) });
           else {
-            this.memo.set(d, { value, count: st.count });
+            if (lazy) { const lz = lazy, count = st.count; this.memo.set(d, { get value() { return lz.force(); }, count, lazy: lz }); }
+            else this.memo.set(d, { value, count: st.count });
             this.partial.delete(d);
             const store = this.env.artifacts, codec = store ? persistOf(def) : null;
             if (codec && opts.persist !== false) {
-              try { store.save(storeKey(d, def), n.t, codec.save(value), st.count); st.saved = true; } catch (e) { this.env.log && this.env.log(`[${n.id}] not persisted: ${e.message || e}`); }
+              try {
+                const sk = storeKey(d, def);
+                store.save(sk, n.t, codec.save(lazy || value, n.p), st.count);
+                st.saved = true;
+                const lin = lineages.get(n.id);
+                if (lin && store.lineageRecord) store.lineageRecord(lin, sk, d, n.in.map(i => dg.get(i)));
+              } catch (e) { this.env.log && this.env.log(`[${n.id}] not persisted: ${e.message || e}`); }
             }
           }
         } catch (e) {
@@ -1458,6 +1516,65 @@
       this.lastBuild = report;
       this.emit({ type: 'built', report });
       return report;
+    }
+    // Release superseded build outputs (RAGWB-003 §6.7) for an engine that serves
+    // ir alone (serve): memo entries whose digest ir no longer has are dropped, and
+    // their Go handles (record views, bleve indexes) closed one gc later, so a
+    // query that started before the rebuild keeps working. Values still reachable
+    // from live entries are never closed.
+    gc(ir) {
+      ir = compile(ir);
+      const liveDigests = new Set(this.digests(ir).values());
+      const live = new Set();
+      for (const [d, m] of this.memo) if (liveDigests.has(d) && !(m.lazy && !m.lazy.done)) live.add(m.value);
+      const closing = this.retired.filter(v => !live.has(v));
+      this.retired = [];
+      for (const [d, m] of [...this.memo]) {
+        if (liveDigests.has(d)) continue;
+        this.memo.delete(d);
+        if (!(m.lazy && !m.lazy.done) && !live.has(m.value)) this.retired.push(m.value);
+      }
+      for (const d of [...this.partial.keys()]) if (!liveDigests.has(d)) this.partial.delete(d);
+      let closed = 0;
+      for (const v of closing) {
+        const h = isView(v) ? v.__records : v && v.__ix;
+        if (h && typeof h.close === 'function') { try { h.close(); closed++; } catch (e) { this.env.log && this.env.log(`gc: ${e.message || e}`); } }
+      }
+      return { closed, retired: this.retired.length, memo: this.memo.size };
+    }
+    // Delta build of one node (RAGWB-003 §6.5): continue from the newest stored
+    // version of this node's lineage that was computed from exactly the versions
+    // the input deltas start from. null (no base, an input without a delta, the
+    // component declined or threw) → the node is computed fully.
+    async tryDelta(n, def, d, lin, deltas, outputs, ctx, p, opts) {
+      const store = this.env.artifacts;
+      if (!lin || !store || !store.lineageList) return null;
+      const ins = n.in.map(i => deltas.get(i) || FULL_DELTA);
+      if (ins.some(x => x.full && !def.delta.acceptsFull)) return null;
+      const froms = ins.map(x => x.from);
+      const base = store.lineageList(lin).find(e => e.digest !== d && e.inputs.length === froms.length && e.inputs.every((x, i) => x === froms[i]));
+      if (!base) return null;
+      const codec = persistOf(def);
+      // the previous version is usually still in memory (serve): use it, don't reopen it
+      const loadBase = () => {
+        // a computed docs/chunks array is not the record store a delta continues from: open that
+        const m = this.memo.get(base.digest);
+        if (m && !(m.lazy && !m.lazy.done) && (isView(m.value) || (m.value && m.value.__ix))) return m.value;
+        const v = codec.load(store.load(base.storeKey), n.p);
+        this.retired.push(v); // opened for this delta only: closed by the next gc
+        return v;
+      };
+      const b = { storeKey: base.storeKey, digest: base.digest, raw: () => store.load(base.storeKey), load: loadBase };
+      const inputs = n.in.map((id, i) => ({ get value() { return outputs.get(id); }, delta: ins[i] }));
+      // inherit, don't spread: ctx.docs/ctx.chunks are getters that read every doc and chunk
+      const dctx = Object.assign(Object.create(ctx), { store, deltaMaxFraction: opts.deltaMaxFraction ?? this.env.deltaMaxFraction ?? 0.2 });
+      try {
+        const r = await def.delta.apply(b, inputs, dctx, p);
+        return r ? { ...r, base: b } : null;
+      } catch (e) {
+        ctx.log(`delta build failed, building fully: ${e.message || e}`);
+        return null;
+      }
     }
     buildCtx(n, ir, outputs, counter, signal) {
       const firstOf = t => { const id = ir.nodes.find(x => x.phase === 'build' && x.out === t && outputs.has(x.id)); return id ? asArray(outputs.get(id.id)) : []; };
@@ -1519,7 +1636,13 @@
       }
       let docs = null, links = null;
       const docsMap = () => {
-        if (!docs) { docs = new Map(); for (const id of docNodes) for (const d of byId.get(id)) docs.set(d.id, d); }
+        if (!docs) {
+          docs = new Map();
+          const dup = [];
+          for (const id of docNodes) for (const d of byId.get(id)) { if (docs.has(d.id)) dup.push(d.name || d.id); else docs.set(d.id, d); }
+          // keep the first, say so: a silent overwrite hid notes (RAGWB-003 §4.3)
+          if (dup.length && this.env.log) this.env.log(`[artifacts] ${dup.length} doc(s) share an id with an earlier doc and are not in art.docs: ${dup.slice(0, 5).join(', ')}`);
+        }
         return docs;
       };
       // reading order per doc from the first chunk stream

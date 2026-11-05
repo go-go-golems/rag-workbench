@@ -88,12 +88,25 @@ const serveHarness = `(async (__mode, __path, __src, __opts) => {
     return { chunks, neighbors: nb };
   };
   const NB_HITS = 40;
+  // after a rebuild (a query found the sources changed, or refresh): release the old version
+  let artKey = art0.key;
+  const collect = () => { const a = art(); if (a && a.key !== artKey) { artKey = a.key; return eng.gc(ir); } return null; };
   globalThis.__serve = {
+    // refresh: rebuild now if the sources changed (serve --watch), so the next query doesn't wait
+    refresh: async () => {
+      if (eng.artifacts(ir)) return 'null';
+      const rep = await eng.build(ir);
+      if (!rep.ok) return JSON.stringify({ ok: false, errors: rep.errors });
+      const gc = collect();
+      const nodes = Object.values(rep.nodes).filter(n => !n.reused).map(n => ({ id: n.id, ms: n.ms, incremental: !!n.incremental, delta: n.delta || null }));
+      return JSON.stringify({ ok: true, ms: rep.ms, nodes, gc, chunks: art().chunks.size });
+    },
     run: async (signalsJson, trigger, onText) => {
       const r = await session.run(JSON.parse(signalsJson || '{}'), {
         trigger: trigger || 'change',
         ...(onText ? { onText: (node, text) => onText(String(node), String(text)) } : {}),
       });
+      collect();
       const t1 = now();
       const a = art();
       const ids = new Set();
@@ -227,6 +240,13 @@ func (a *ServedApp) Run(ctx context.Context, signals json.RawMessage, trigger st
 }
 
 // Chunk returns {chunks, neighbors} for one chunk id (a cache miss in the browser).
+// Refresh rebuilds the app's plan if its sources changed since the last build
+// (incrementally, from the stored previous version) and releases the old
+// artifacts. It returns "null" when nothing changed, else a JSON summary.
+func (a *ServedApp) Refresh(ctx context.Context) (string, error) {
+	return a.call(ctx, "refresh", "")
+}
+
 func (a *ServedApp) Chunk(ctx context.Context, id string) (string, error) {
 	return a.call(ctx, "chunk", id)
 }

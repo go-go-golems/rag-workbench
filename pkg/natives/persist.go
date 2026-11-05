@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/dop251/goja"
@@ -17,7 +18,7 @@ import (
 // component's output changes for the same input (a port fix, a new field), so
 // persisted artifacts from the old version are not reused (it is part of the
 // artifact namespace, see runner.ArtifactNamespace).
-const Version = "2026-11-04.1" // RAGWB-002: records, bleve and terms codecs
+const Version = "2026-11-04.3" // RAGWB-003: path-derived doc ids, per-doc chunk ord; bleve BM25 field statistics
 
 // Persist installs rag's env.artifacts hook backed by an artifact store:
 //
@@ -62,6 +63,61 @@ func (p Persist) InstallEnv(vm *goja.Runtime, rag *goja.Object, env rtenv.Env) e
 		return fmt.Errorf("artifacts: JSON is not available")
 	}
 	a := vm.NewObject()
+	// lineage index (RAGWB-003 §6.4): the previous stored output of "this node of this pipeline"
+	_ = a.Set("lineageLatest", func(lineage string) goja.Value {
+		e, err := p.Store.LineageLatest(lineage)
+		if err != nil || e == nil {
+			return goja.Null()
+		}
+		o := vm.NewObject()
+		_ = o.Set("storeKey", e.StoreKey)
+		_ = o.Set("digest", e.Digest)
+		return o
+	})
+	_ = a.Set("lineageList", func(lineage string) goja.Value {
+		es, err := p.Store.LineageList(lineage)
+		if err != nil {
+			debugf("lineage %s: %v", lineage, err)
+		}
+		out := make([]any, len(es))
+		for i, e := range es {
+			o := vm.NewObject()
+			_ = o.Set("storeKey", e.StoreKey)
+			_ = o.Set("digest", e.Digest)
+			_ = o.Set("inputs", strArray(vm, e.Inputs))
+			out[i] = o
+		}
+		return vm.NewArray(out...)
+	})
+	_ = a.Set("lineageRecord", func(lineage, storeKey, digest string, inputs []string) {
+		if err := p.Store.LineageRecord(artifacts.LineageEntry{Lineage: lineage, StoreKey: storeKey, Digest: digest, Inputs: inputs}); err != nil {
+			debugf("lineage %s: %v", lineage, err)
+		}
+	})
+	// delta builds write their outputs into temp directories of the store's
+	// namespace (saved = moved in); the ones never saved go when the runtime closes
+	var temps []string
+	addCloser(func() error {
+		for _, t := range temps {
+			_ = os.RemoveAll(t)
+		}
+		return nil
+	})
+	_ = a.Set("tempDir", func() string {
+		t, err := p.Store.TempDir()
+		if err != nil {
+			panic(vm.NewGoError(err))
+		}
+		temps = append(temps, t)
+		return t
+	})
+	_ = a.Set("view", func(r goja.Value) goja.Value {
+		v, err := mkView(goja.Undefined(), r)
+		if err != nil {
+			panic(err)
+		}
+		return v
+	})
 	_ = a.Set("has", func(key string) goja.Value {
 		m, err := p.Store.Has(key)
 		if err != nil {
@@ -92,17 +148,38 @@ func (p Persist) InstallEnv(vm *goja.Runtime, rag *goja.Object, env rtenv.Env) e
 			}
 			return
 		}
+		if r := records2Handle(v); r != nil {
+			// a delta output (RAGWB-003): built in the store's temp area, moved in and reopened there
+			err := p.saveRecords2(key, typ, count, r)
+			debugf("save %s records2 (delta): %v", typ, time.Since(t0))
+			if err != nil {
+				panic(vm.NewGoError(fmt.Errorf("%s: %w", typ, err)))
+			}
+			return
+		}
+		var r2 []R2Doc
+		var kind string
+		var err error
 		if chunks := chunksHandle(v); chunks != nil {
-			// a file payload read one chunk at a time (codec "records")
-			tmp, err := p.Store.TempDir()
+			kind = kindChunks
+			r2, err = ChunksToR2(chunks)
+		} else if docs := docsHandle(v); docs != nil {
+			kind = kindDocs
+			r2, err = DocsToR2(docs)
+		}
+		if kind != "" {
+			// a directory payload of 64 shards read one record at a time (codec "records2")
+			var tmp string
 			if err == nil {
-				f := filepath.Join(tmp, "chunks.records")
-				if err = WriteChunkRecords(f, chunks); err == nil {
-					err = p.Store.SaveFile(key, typ, "records", count, f)
+				tmp, err = p.Store.TempDir()
+			}
+			if err == nil {
+				if err = WriteRecords2(tmp, kind, r2); err == nil {
+					err = p.Store.SaveDir(key, typ, "records2", count, tmp)
 				}
 				_ = os.RemoveAll(tmp)
 			}
-			debugf("save %s records: %v", typ, time.Since(t0))
+			debugf("save %s records2: %v", typ, time.Since(t0))
 			if err != nil {
 				panic(vm.NewGoError(fmt.Errorf("%s: %w", typ, err)))
 			}
@@ -136,6 +213,24 @@ func (p Persist) InstallEnv(vm *goja.Runtime, rag *goja.Object, env rtenv.Env) e
 			}
 			p.Timing.Add("store", m.Type, float64(time.Since(t0).Microseconds())/1000,
 				fmt.Sprintf("records · open %v · %d chunks · %.1f MB on disk", time.Since(t0).Round(time.Microsecond), r.Len(), float64(m.Size)/(1<<20)))
+			return view
+		}
+		if m, err := p.Store.Has(key); err == nil && m != nil && m.Kind == artifacts.KindDir && m.Codec == "records2" {
+			_, path, err := p.Store.Path(key)
+			var r *Records2
+			if err == nil {
+				r, err = OpenRecords2(path)
+			}
+			if err != nil {
+				panic(vm.NewGoError(fmt.Errorf("stored artifact %s (%s) could not be opened: %w; delete it with `ragwb store prune --all`", key, m.Type, err)))
+			}
+			addCloser(r.Close)
+			view, err := mkView(goja.Undefined(), records2Object(vm, r))
+			if err != nil {
+				panic(err)
+			}
+			p.Timing.Add("store", m.Type, float64(time.Since(t0).Microseconds())/1000,
+				fmt.Sprintf("records2 · open %v · %d %s · %.1f MB on disk", time.Since(t0).Round(time.Microsecond), r.Len(), r.Kind(), float64(m.Size)/(1<<20)))
 			return view
 		}
 		if m, err := p.Store.Has(key); err == nil && m != nil && m.Kind == artifacts.KindDir && m.Codec == "bleve" {
@@ -194,6 +289,9 @@ func encodeArtifact(vm *goja.Runtime, stringify goja.Callable, v goja.Value) (st
 			case *Terms:
 				b, err := EncodeTerms(x)
 				return "terms", b, err
+			case *Manifest:
+				b, err := EncodeManifest(x)
+				return "manifest", b, err
 			default:
 				return "", nil, fmt.Errorf("no artifact codec for %T", x)
 			}
@@ -231,6 +329,12 @@ func decodeArtifact(vm *goja.Runtime, parse goja.Callable, codec string, data []
 			return nil, err
 		}
 		return chunksArray(vm, chunks), nil
+	case "manifest":
+		m, err := DecodeManifest(data)
+		if err != nil {
+			return nil, err
+		}
+		return manifestObject(vm, m), nil
 	case "terms":
 		t, err := DecodeTerms(data)
 		if err != nil {
@@ -320,6 +424,7 @@ func recordsObject(vm *goja.Runtime, r *ChunkRecords) *goja.Object {
 		must(err)
 		return ids
 	})
+	_ = o.Set("close", func() { _ = r.Close() })
 	return o
 }
 
@@ -361,3 +466,33 @@ const recordsViewJS = `(function () {
   }
   return r => new RecordView(r);
 })()`
+
+// saveRecords2 stores a records2 output under key. A directory in the store's
+// temp area (a delta build's output) is moved in; any other (an input passed
+// through, already stored under another key) is linked into a new directory
+// first, so the store never moves an artifact out from under its key.
+func (p Persist) saveRecords2(key, typ string, count int, r *Records2) error {
+	dir := r.Dir()
+	if !strings.HasPrefix(filepath.Base(dir), ".tmp-") || filepath.Dir(dir) != filepath.Join(p.Store.Dir, p.Store.NS) {
+		tmp, err := p.Store.TempDir()
+		if err != nil {
+			return err
+		}
+		if err := CowRecords2(r, tmp, nil, nil); err != nil {
+			_ = os.RemoveAll(tmp)
+			return err
+		}
+		dir = tmp
+	}
+	if err := p.Store.SaveDir(key, typ, "records2", count, dir); err != nil {
+		return err
+	}
+	_, path, err := p.Store.Path(key)
+	if err != nil {
+		return err
+	}
+	if dir != r.Dir() {
+		return nil
+	}
+	return r.Relocate(path)
+}

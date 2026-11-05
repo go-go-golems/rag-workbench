@@ -85,12 +85,12 @@ func TestChunkRecordsReplaceTheChunksMap(t *testing.T) {
 	recs := 0
 	ms, _ := artifacts.List(store.Dir)
 	for _, m := range ms {
-		if m.Kind == artifacts.KindFile && m.Codec == "records" {
+		if m.Kind == artifacts.KindDir && m.Codec == "records2" {
 			recs++
 		}
 	}
-	if recs != 1 {
-		t.Fatalf("want one stored chunk record file, store has %+v", ms)
+	if recs != 2 { // docs and chunks (RAGWB-003 records2)
+		t.Fatalf("want stored docs and chunk records, store has %+v", ms)
 	}
 	warm := run()
 	if !warm.View {

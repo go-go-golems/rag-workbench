@@ -67,6 +67,21 @@ const bm25JS = `(function (rag, h) {
     },
     // artifact store: the Go index travels as its handle (codec "bm25" or "bleve")
     persist: { save: v => v.__ix, load: (ix, p) => wrap(ix, p.fields || DEFAULT_FIELDS) },
+    // delta build (bleve): clone the base index, delete the old chunks of changed
+    // and removed docs, index the new ones. The memory backend rebuilds (8 s on the vault).
+    delta: {
+      apply(base, [chunksIn], ctx, p) {
+        if (backendOf(p) !== 'bleve') return null;
+        const d = chunksIn.delta, prev = base.load();
+        if (!prev || !prev.__ix || prev.__ix.backend !== 'bleve') return null;
+        const fields = p.fields || DEFAULT_FIELDS, names = Object.keys(fields);
+        const up = d.upsert;
+        const texts = up.map(c => names.map(f => fieldText(c, f)));
+        const removedTexts = d.removed.map(c => names.map(f => fieldText(c, f)));
+        const ix = h.deltaBleve(prev.__ix, ctx.store.tempDir(), d.removed.map(c => c.id), removedTexts, up.map(c => c.id), up.map(c => c.docId), texts);
+        return { value: wrap(ix, fields), count: ix.n, delta: { full: false }, summary: { upserts: up.length, removes: d.removeIds.length } };
+      },
+    },
   });
 })`
 
@@ -143,6 +158,31 @@ func (n Bm25Native) InstallEnv(vm *goja.Runtime, rag *goja.Object, env rtenv.Env
 			return nil, err
 		}
 		ix.SetCleanup(root)
+		addCloser(ix.Close)
+		return bleveObject(vm, ix), nil
+	})
+	_ = h.Set("deltaBleve", func(base goja.Value, tmp string, removeIDs []string, removedTexts [][]any, ids, docIDs []string, texts [][]any) (*goja.Object, error) {
+		bo, ok := base.(*goja.Object)
+		var b *BleveBm25
+		if ok {
+			if hv := bo.Get(goHandleKey); hv != nil {
+				b, _ = hv.Export().(*BleveBm25)
+			}
+		}
+		if b == nil {
+			return nil, fmt.Errorf("index.bm25: delta base is not a bleve index")
+		}
+		if len(texts) != len(ids) || len(docIDs) != len(ids) {
+			return nil, fmt.Errorf("index.bm25: %d ids, %d docIds, %d text rows", len(ids), len(docIDs), len(texts))
+		}
+		if len(removedTexts) != len(removeIDs) {
+			return nil, fmt.Errorf("index.bm25: %d removed ids, %d removed text rows", len(removeIDs), len(removedTexts))
+		}
+		ix, err := b.ApplyDelta(filepath.Join(tmp, "index"), removeIDs, textAt(removedTexts), len(ids), func(i int) string { return ids[i] }, func(i int) string { return docIDs[i] }, textAt(texts))
+		if err != nil {
+			return nil, err
+		}
+		ix.SetCleanup(tmp)
 		addCloser(ix.Close)
 		return bleveObject(vm, ix), nil
 	})
@@ -239,6 +279,7 @@ func bleveObject(vm *goja.Runtime, ix *BleveBm25) *goja.Object {
 	o := vm.NewObject()
 	_ = o.DefineDataProperty(goHandleKey, vm.ToValue(ix), goja.FLAG_FALSE, goja.FLAG_FALSE, goja.FLAG_FALSE)
 	_ = o.Set("backend", "bleve")
+	_ = o.Set("close", func() { _ = ix.Close() })
 	_ = o.Set("n", ix.Meta.N)
 	_ = o.Set("terms", ix.Meta.Terms)
 	_ = o.Set("search", func(q string, k int, syn [][]any, only []string) goja.Value {

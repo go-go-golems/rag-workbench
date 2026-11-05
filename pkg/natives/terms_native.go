@@ -17,6 +17,7 @@ const termsJS = `(function (rag, h) {
   const DEFAULT_KEYS = ['type', 'tags', 'status'];
   const arr = v => (v == null ? [] : Array.isArray(v) ? v : [v]);
   const getPath = (obj, path) => { if (!path) return obj; let cur = obj; for (const k of String(path).split('.')) { if (cur == null) return undefined; cur = cur[k]; } return cur; };
+  const valsOf = (chunks, keys) => chunks.map(c => keys.map(key => arr(getPath(c.meta, key)).map(v => String(v).toLowerCase())));
   const wrap = ix => {
     const o = {
       kind: 'terms', keys: ix.keys, N: ix.n,
@@ -33,21 +34,53 @@ const termsJS = `(function (rag, h) {
     all: ([chunks], ctx, p) => {
       chunks = chunks || [];
       const keys = p.keys || DEFAULT_KEYS;
-      const vals = chunks.map(c => keys.map(key => arr(getPath(c.meta, key)).map(v => String(v).toLowerCase())));
-      return wrap(h.build(chunks.map(c => c.id), keys, vals));
+      return wrap(h.build(chunks.map(c => c.id), chunks.map(c => c.docId), keys, valsOf(chunks, keys)));
     },
     // artifact store: the Go index travels as its handle (codec "terms")
     persist: { save: v => v.__ix, load: ix => wrap(ix) },
+    // delta build (D6): extract values for the new chunks only, rebuild from rows
+    delta: {
+      apply(base, [chunksIn], ctx, p) {
+        const d = chunksIn.delta, prev = base.load();
+        if (!prev || !prev.__ix) return null;
+        const keys = p.keys || DEFAULT_KEYS, up = d.upsert;
+        const r = h.delta(prev.__ix, chunksIn.value, up.map(c => c.id), up.map(c => c.docId), valsOf(up, keys), d.removeDocs);
+        if (r.full) { ctx.log('full build: ' + r.full); return null; }
+        return { value: wrap(r), count: r.n, delta: { full: false }, summary: { upserts: up.length, removes: d.removeIds.length } };
+      },
+    },
   });
 })`
 
 func (TermsNative) Install(vm *goja.Runtime, rag *goja.Object) error {
 	h := vm.NewObject()
-	_ = h.Set("build", func(ids, keys []string, vals [][][]string) (*goja.Object, error) {
-		if len(vals) != len(ids) {
-			return nil, fmt.Errorf("index.terms: %d ids, %d value rows", len(ids), len(vals))
+	_ = h.Set("build", func(ids, docIDs, keys []string, vals [][][]string) (*goja.Object, error) {
+		if len(vals) != len(ids) || len(docIDs) != len(ids) {
+			return nil, fmt.Errorf("index.terms: %d ids, %d doc ids, %d value rows", len(ids), len(docIDs), len(vals))
 		}
-		return termsObject(vm, NewTerms(ids, keys, vals)), nil
+		return termsObject(vm, NewTermsRows(ids, docIDs, keys, vals)), nil
+	})
+	// delta(baseIx, newChunksView, ids, docIds, vals, goneDocs) → index | {full: reason}
+	_ = h.Set("delta", func(base, chunks goja.Value, ids, docIDs []string, vals [][][]string, gone []string) goja.Value {
+		var t *Terms
+		if bo, ok := base.(*goja.Object); ok {
+			if hv := bo.Get(goHandleKey); hv != nil {
+				t, _ = hv.Export().(*Terms)
+			}
+		}
+		r := records2Handle(chunks)
+		if t == nil || r == nil {
+			return fullResult(vm, "base or chunks are not Go-backed")
+		}
+		order := make([]string, len(r.Docs()))
+		for i, d := range r.Docs() {
+			order[i] = d.ID
+		}
+		nt, reason := t.Delta(order, ids, docIDs, vals, gone)
+		if reason != "" {
+			return fullResult(vm, reason)
+		}
+		return termsObject(vm, nt)
 	})
 	v, err := vm.RunString(termsJS)
 	if err != nil {

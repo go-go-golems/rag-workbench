@@ -27,6 +27,7 @@ func DefaultChunkParams() ChunkParams {
 type Chunk struct {
 	ID          string
 	DocID       string
+	DocName     string `json:"-"` // the source name (records2 order); not part of the JS chunk
 	Title       string
 	HeadingPath []string
 	Kind        string
@@ -216,9 +217,13 @@ func ChunkSections(doc *Doc, p ChunkParams) []Chunk {
 	return out
 }
 
-// AssignIDs ports assignIds over the node's whole chunk list.
+// AssignIDs ports assignIds over the node's chunk list. Ids depend only on a
+// chunk's own document (bases start with docId#, and doc ids are unique per
+// file), and ord is the position within the document (RAGWB-003 §6.2), so
+// editing one file never renames or renumbers another file's chunks.
 func AssignIDs(chunks []Chunk) {
 	seen := map[string]int{}
+	pos := map[string]int{}
 	for i := range chunks {
 		c := &chunks[i]
 		base := c.ID
@@ -240,6 +245,7 @@ func AssignIDs(chunks []Chunk) {
 		} else {
 			c.ID = base
 		}
-		c.Ord = i
+		c.Ord = pos[c.DocID]
+		pos[c.DocID]++
 	}
 }

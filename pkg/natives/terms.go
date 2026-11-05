@@ -25,6 +25,10 @@ type Terms struct {
 	IDs  []string // chunk ids by ordinal
 	Vals []termVal
 	N    int
+	// the build input, kept for delta builds (RAGWB-003 D6): each chunk's doc id
+	// and extracted values, in chunk order; a delta rebuilds from these rows
+	DocIDs []string
+	Rows   [][][]string
 }
 
 type termVal struct {
@@ -78,6 +82,61 @@ func NewTerms(ids []string, keys []string, vals [][][]string) *Terms {
 		}
 	}
 	return t
+}
+
+// NewTermsRows builds the index and keeps its rows for delta builds.
+func NewTermsRows(ids, docIDs []string, keys []string, vals [][][]string) *Terms {
+	t := NewTerms(ids, keys, vals)
+	t.DocIDs, t.Rows = docIDs, vals
+	return t
+}
+
+// Delta rebuilds the index for a new chunk set: docOrder is the new canonical
+// document order; each document's rows come from the upserts if it has any,
+// else from this index, unless it is in gone (removed or replaced). The rows
+// are in the order a full build would see them, so the result equals one
+// (D6). A non-empty reason means "can't, build fully".
+func (t *Terms) Delta(docOrder []string, upIDs, upDocIDs []string, upVals [][][]string, gone []string) (*Terms, string) {
+	if len(t.DocIDs) != len(t.IDs) || len(t.Rows) != len(t.IDs) {
+		return nil, "base terms index has no rows"
+	}
+	type span struct{ from, to int }
+	baseAt := map[string]span{}
+	for i := 0; i < len(t.DocIDs); {
+		j := i
+		for j < len(t.DocIDs) && t.DocIDs[j] == t.DocIDs[i] {
+			j++
+		}
+		if _, dup := baseAt[t.DocIDs[i]]; dup {
+			return nil, "base rows are not grouped by document"
+		}
+		baseAt[t.DocIDs[i]] = span{i, j}
+		i = j
+	}
+	upAt := map[string][]int{}
+	for i, d := range upDocIDs {
+		upAt[d] = append(upAt[d], i)
+	}
+	isGone := make(map[string]bool, len(gone))
+	for _, d := range gone {
+		isGone[d] = true
+	}
+	var ids, docIDs []string
+	var vals [][][]string
+	for _, d := range docOrder {
+		if rows, ok := upAt[d]; ok {
+			for _, i := range rows {
+				ids, docIDs, vals = append(ids, upIDs[i]), append(docIDs, d), append(vals, upVals[i])
+			}
+			continue
+		}
+		sp, ok := baseAt[d]
+		if !ok || isGone[d] {
+			return nil, fmt.Sprintf("no rows for document %s", d)
+		}
+		ids, docIDs, vals = append(ids, t.IDs[sp.from:sp.to]...), append(docIDs, t.DocIDs[sp.from:sp.to]...), append(vals, t.Rows[sp.from:sp.to]...)
+	}
+	return NewTermsRows(ids, docIDs, t.Keys, vals), ""
 }
 
 // Search ports TermsIndex#search, including its order: score descending, then

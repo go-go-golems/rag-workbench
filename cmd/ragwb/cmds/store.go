@@ -15,6 +15,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/go-go-golems/rag-workbench/pkg/artifacts"
+	"github.com/go-go-golems/rag-workbench/pkg/natives"
 	"github.com/go-go-golems/rag-workbench/pkg/runner"
 )
 
@@ -90,6 +91,52 @@ func NewStoreCommand() (*cobra.Command, error) {
 	}
 	prune.Flags().BoolVar(&all, "all", false, "Also delete the current namespace")
 	storeCmd.AddCommand(prune)
+	var keep int
+	gc := &cobra.Command{
+		Use:   "gc",
+		Short: "Delete superseded versions in the current namespace (keep the newest --keep per pipeline node)",
+		Long: "Delta builds (RAGWB-003) store a new version of every changed node and remember the versions per node\n" +
+			"(its lineage). gc keeps the newest --keep of each and deletes the rest; files a kept version shares through\n" +
+			"hard links stay. Run it while no ragwb serve uses an old version, or keep at least 2.",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			s, err := artifacts.Open(storeRoot(), runner.ArtifactNamespace(jsComponents, indexBackend))
+			if err != nil {
+				return err
+			}
+			r, err := s.GC(keep)
+			if err != nil {
+				return err
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "gc %s: %d lineage(s), removed %d output(s), freed %.1f MB, %d abandoned temp dir(s)\n",
+				s.NS, r.Lineages, r.Removed, float64(r.Freed)/(1<<20), r.Temps)
+			return nil
+		},
+	}
+	gc.Flags().IntVar(&keep, "keep", 3, "Versions to keep per pipeline node")
+	storeCmd.AddCommand(gc)
+	verify := &cobra.Command{
+		Use:   "verify",
+		Short: "Open every stored output of the current namespace and check it against its metadata",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			s, err := artifacts.Open(storeRoot(), runner.ArtifactNamespace(jsComponents, indexBackend))
+			if err != nil {
+				return err
+			}
+			n, problems, err := natives.VerifyStore(s)
+			if err != nil {
+				return err
+			}
+			for _, p := range problems {
+				fmt.Fprintln(cmd.OutOrStdout(), p)
+			}
+			fmt.Fprintf(cmd.OutOrStdout(), "verify %s: %d output(s), %d problem(s)\n", s.NS, n, len(problems))
+			if len(problems) > 0 {
+				return fmt.Errorf("%d stored output(s) failed verification; delete them with `ragwb store prune --all` or rebuild with --full", len(problems))
+			}
+			return nil
+		},
+	}
+	storeCmd.AddCommand(verify)
 	return storeCmd, nil
 }
 

@@ -50,6 +50,8 @@ type Config struct {
 	EmbedCache *natives.EmbedCache
 	// BuildCalls allows LLM-costing build nodes to run during build.
 	BuildCalls bool
+	// FullBuild disables delta builds: every changed node is computed from scratch.
+	FullBuild bool
 	// Artifacts persists build outputs by digest (docs, chunks, BM25 indexes), so a
 	// later run over an unchanged corpus loads them instead of rebuilding. Open it with
 	// ArtifactNamespace(JSComponents). Nil keeps everything in memory.
@@ -115,7 +117,7 @@ func NewFactory(cfg Config) (*engine.RuntimeFactory, error) {
 		timingFn = cfg.Timing.Add
 	}
 	b := engine.NewRuntimeFactoryBuilder().
-		WithModules(ragjs.Modules(ragjs.Options{Log: logf, Natives: nat, Sample: cfg.LLM, BuildCalls: cfg.BuildCalls, Timing: timingFn})...).
+		WithModules(ragjs.Modules(ragjs.Options{Log: logf, Natives: nat, Sample: cfg.LLM, BuildCalls: cfg.BuildCalls, FullBuild: cfg.FullBuild, Timing: timingFn})...).
 		UseModuleMiddleware(engine.MiddlewareExclude(excludedModules...))
 	if cfg.SourceLoader != nil {
 		b = b.WithRequireOptions(require.WithLoader(cfg.SourceLoader))

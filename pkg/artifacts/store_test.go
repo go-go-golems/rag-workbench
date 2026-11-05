@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestSaveHasLoad(t *testing.T) {
@@ -174,4 +175,61 @@ func p0(t *testing.T, s *Store, key string) string {
 		t.Fatal(err)
 	}
 	return p
+}
+
+func TestLineage(t *testing.T) {
+	s, err := Open(t.TempDir(), "ns1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if e, err := s.LineageLatest("lin1"); e != nil || err != nil {
+		t.Fatalf("empty lineage: %v %v", e, err)
+	}
+	for i, k := range []string{"k1", "k2", "k3", "k4"} {
+		_ = s.Save(k, "x", "json", 1, []byte("[1]"))
+		if err := s.LineageRecord(LineageEntry{Lineage: "lin1", StoreKey: k, Digest: "d" + k}); err != nil {
+			t.Fatal(err)
+		}
+		if e, _ := s.LineageLatest("lin1"); e == nil || e.StoreKey != k {
+			t.Fatalf("after %d records latest = %+v", i+1, e)
+		}
+	}
+	es, _ := s.lineageRead("lin1")
+	if len(es) != 4 || es[0].StoreKey != "k4" || es[2].StoreKey != "k2" {
+		t.Fatalf("kept %+v", es)
+	}
+	// the newest payload disappears (pruned/damaged): the next one serves
+	_ = os.Remove(filepath.Join(s.Dir, s.NS, "k4"[:2], "k4.bin"))
+	if e, _ := s.LineageLatest("lin1"); e == nil || e.StoreKey != "k3" {
+		t.Fatalf("fallback latest = %+v", e)
+	}
+	// List reads metadata only (k4's meta is still there); lineage files must not show up as entries
+	ms, _ := List(s.Dir)
+	for _, m := range ms {
+		if m.Key != "k1" && m.Key != "k2" && m.Key != "k3" && m.Key != "k4" {
+			t.Fatalf("List saw a non-artifact: %+v", m)
+		}
+	}
+	if len(ms) != 4 {
+		t.Fatalf("List = %+v", ms)
+	}
+	// gc keeps the newest 2 stored versions (k3, k2), deletes k1, forgets k4 (no payload)
+	_ = os.MkdirAll(filepath.Join(s.Dir, s.NS, ".tmp-old"), 0o755)
+	old := time.Now().Add(-2 * time.Hour)
+	_ = os.Chtimes(filepath.Join(s.Dir, s.NS, ".tmp-old"), old, old)
+	r, err := s.GC(2)
+	if err != nil || r.Removed != 1 || r.Temps != 1 || r.Freed == 0 {
+		t.Fatalf("gc = %+v, %v", r, err)
+	}
+	if m, _ := s.Has("k1"); m != nil {
+		t.Fatal("k1 survived gc")
+	}
+	for _, k := range []string{"k2", "k3"} {
+		if m, _ := s.Has(k); m == nil {
+			t.Fatalf("%s was deleted", k)
+		}
+	}
+	if es, _ := s.lineageRead("lin1"); len(es) != 2 || es[0].StoreKey != "k3" || es[1].StoreKey != "k2" {
+		t.Fatalf("lineage after gc %+v", es)
+	}
 }

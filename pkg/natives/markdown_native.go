@@ -20,12 +20,45 @@ const markdownJS = `(function (rag, h) {
   // id: the op layer names inserted nodes def.id(p) || family; keep the built-ins' family ids.
   rag.define('parse.markdown', {
     id: () => 'parse', phase: 'build', in: ['files'], out: 'docs', describe: () => 'frontmatter · headings · fences · tables (Go)',
-    all: ([files], ctx, p) => h.parse(files || [], p || {}),
+    all: ([files], ctx, p) => {
+      const docs = h.parse(files || [], p || {});
+      // ids come from paths (docIdFor), so a duplicate means two paths with the same slug
+      const seen = new Map(), dup = [];
+      for (const d of docs) { if (seen.has(d.id)) dup.push(seen.get(d.id) + ' / ' + d.name + ' → ' + d.id); else seen.set(d.id, d.name); }
+      if (dup.length) ctx.log('duplicate doc ids (' + dup.length + '; the first file keeps the id): ' + dup.slice(0, 5).join('; '));
+      return docs;
+    },
+    // delta build: parse only added and changed files, copy-on-write the base docs
+    delta: {
+      apply(base, [filesIn], ctx, p) {
+        const d = filesIn.delta;
+        const r = h.parseDelta(base.load(), [...d.added, ...d.changed], d.removed, p || {}, ctx.store.tempDir());
+        if (r.full) { ctx.log('full build: ' + r.full); return null; }
+        return {
+          value: ctx.store.view(r.records), count: r.count,
+          delta: { full: false, upsert: r.upsert, remove: r.remove },
+          summary: { upserts: r.upsert.length, removes: r.remove.length },
+        };
+      },
+    },
   });
   rag.define('chunk.sections', {
     id: () => 'chunk', phase: 'build', in: ['docs'], out: 'chunks',
     describe: p => 'depth ' + (p.depth ?? 3) + ' · ≤' + (p.maxTokens ?? 450) + ' tok (Go)',
     all: ([docs], ctx, p) => h.chunk(docs || [], p || {}),
+    // delta build: chunk only the upserted docs (per-doc ids), copy-on-write the base records
+    delta: {
+      apply(base, [docsIn], ctx, p) {
+        const d = docsIn.delta;
+        const r = h.chunkDelta(base.load(), d.upsert, d.remove, p || {}, ctx.store.tempDir());
+        if (r.full) { ctx.log('full build: ' + r.full); return null; }
+        return {
+          value: ctx.store.view(r.records), count: r.count,
+          delta: { full: false, upsert: r.upsert, removeDocs: r.removeDocs, removeIds: r.removeIds, removed: r.removed },
+          summary: { upserts: r.upsert.length, removes: r.removeIds.length, docs: r.docs },
+        };
+      },
+    },
   });
 })`
 
@@ -57,10 +90,87 @@ func (m Markdown) Install(vm *goja.Runtime, rag *goja.Object) error {
 		all := []Chunk{}
 		for i := 0; i < n; i++ {
 			d := docs.Get(fmt.Sprint(i)).ToObject(vm)
-			all = append(all, ChunkSections(docFromJS(vm, d), p)...)
+			doc := docFromJS(vm, d)
+			cs := ChunkSections(doc, p)
+			for j := range cs {
+				cs[j].DocName = doc.Name
+			}
+			all = append(all, cs...)
 		}
 		AssignIDs(all)
 		return chunksArray(vm, all)
+	})
+	// parseDelta(baseDocsView, files, removedNames, p, dir) → {records, count, upsert, remove} | {full: reason}
+	_ = h.Set("parseDelta", func(call goja.FunctionCall) goja.Value {
+		base := records2Handle(call.Argument(0))
+		if base == nil || base.Kind() != kindDocs {
+			return fullResult(vm, "base docs are not records2")
+		}
+		files := call.Argument(1).ToObject(vm)
+		removed := strsFromJS(vm, call.Argument(2))
+		frontmatter := true
+		if v := optObject(vm, call.Argument(3)).Get("frontmatter"); v != nil && !goja.IsUndefined(v) && !v.ToBoolean() {
+			frontmatter = false
+		}
+		dir := call.Argument(4).String()
+		n := int(files.Get("length").ToInteger())
+		docs := make([]*Doc, 0, n)
+		for i := 0; i < n; i++ {
+			f := files.Get(fmt.Sprint(i)).ToObject(vm)
+			docs = append(docs, ParseMarkdown(str(f.Get("name")), str(f.Get("text")), frontmatter))
+		}
+		r, remove, reason, err := ParseDelta(base, docs, removed, dir)
+		if err != nil {
+			panic(vm.NewGoError(err))
+		}
+		if reason != "" {
+			return fullResult(vm, reason)
+		}
+		o := vm.NewObject()
+		_ = o.Set("records", records2Object(vm, r))
+		_ = o.Set("count", r.Len())
+		_ = o.Set("upsert", docsArray(vm, docs))
+		_ = o.Set("remove", strArray(vm, remove))
+		return o
+	})
+	// chunkDelta(baseChunksView, upsertDocs, removeDocIds, p, dir) → {records, count, upsert, removeDocs, removeIds, docs} | {full: reason}
+	_ = h.Set("chunkDelta", func(call goja.FunctionCall) goja.Value {
+		base := records2Handle(call.Argument(0))
+		if base == nil || base.Kind() != kindChunks {
+			return fullResult(vm, "base chunks are not records2")
+		}
+		up := call.Argument(1).ToObject(vm)
+		n := int(up.Get("length").ToInteger())
+		docs := docsHandle(up)
+		if docs == nil {
+			docs = make([]*Doc, n)
+			for i := range docs {
+				docs[i] = docFromJS(vm, up.Get(fmt.Sprint(i)).ToObject(vm))
+			}
+		}
+		remove := strsFromJS(vm, call.Argument(2))
+		p := chunkParams(vm, optObject(vm, call.Argument(3)))
+		dir := call.Argument(4).String()
+		r, chunks, removeDocs, removed, reason, err := ChunkDelta(base, docs, remove, p, dir)
+		if err != nil {
+			panic(vm.NewGoError(err))
+		}
+		if reason != "" {
+			return fullResult(vm, reason)
+		}
+		o := vm.NewObject()
+		_ = o.Set("records", records2Object(vm, r))
+		_ = o.Set("count", r.Len())
+		_ = o.Set("upsert", chunksArray(vm, chunks))
+		_ = o.Set("removeDocs", strArray(vm, removeDocs))
+		removeIDs := make([]string, len(removed))
+		for i := range removed {
+			removeIDs[i] = removed[i].ID
+		}
+		_ = o.Set("removeIds", strArray(vm, removeIDs))
+		_ = o.Set("removed", chunksArray(vm, removed))
+		_ = o.Set("docs", len(docs))
+		return o
 	})
 	v, err := vm.RunString(markdownJS)
 	if err != nil {
@@ -300,4 +410,10 @@ func scalarFromJS(v any) any {
 		return out
 	}
 	return v
+}
+
+func fullResult(vm *goja.Runtime, reason string) goja.Value {
+	o := vm.NewObject()
+	_ = o.Set("full", reason)
+	return o
 }
