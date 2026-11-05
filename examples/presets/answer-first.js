@@ -1,5 +1,6 @@
 // Answer first · tabs for the answer, its sources, and how it was made.
-// The layout is plain gui: tabs(t => t.tab(…)). The Trace tab embeds the run trace and a compact
+// The layout is plain gui: tabs(t => t.tab(…)). The Trace tab shows every step's output (expand a row;
+// it fills in live while a submit runs: trace({ details: true })), the section a click selects, and a compact
 // DAG of the plan, both live.
 // Try: press Enter, then switch to Trace.
 
@@ -20,7 +21,7 @@ const app = gui.app('answer-first').title('Answer first').use(plan).state({ sele
     .tabs(t => t
       .tab('Answer', b => b.answer({ title: 'Answer' }).chunk(s => s.selected))
       .tab('Sources', b => b.facets('filters', { fields: ['type', 'tags'] }).results({ limit: 20 }))
-      .tab('Trace', b => b.trace().dag()))));
+      .tab('Trace', b => b.trace({ details: true }).chunk(s => s.selected).dag()))));
 
 const ops = []; // end ops
 return { plan: plan.patch(ops), evals: kit.goldens(), app };

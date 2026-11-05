@@ -1835,6 +1835,14 @@
       const runId = ++this.runs;
       const detail = opts.detail || {};
       emit({ type: 'run', plan: ir.id, trigger, signals: s });
+      // a step's output in the trace entry (top hits) and the event stream (hits, context)
+      const describe = (n, out, entry) => {
+        if (n.out === 'hits' && Array.isArray(out)) {
+          entry.top = out.slice(0, 50).map(h => ({ id: h.id, score: h.score, why: h.why, parts: h.parts, reason: h.reason }));
+          if (opts.onEvent) emit(hitsEvent(n.id, out, art, detail));
+        }
+        if (n.out === 'context' && out && opts.onEvent) emit({ type: 'context', node: n.id, evidence: arr(out.evidence).map(e => ({ label: e.label, id: e.id })), bytes: out.bytes });
+      };
       for (const n of ir.nodes) {
         if (n.phase === 'build') continue;
         if (n.phase === 'signal') { outputs[n.id] = s[n.id]; continue; }
@@ -1856,6 +1864,7 @@
           entry.status = m.full ? 'cached' : 'skipped';
           entry.out = countOf(m.out);
           if (m.notes) entry.notes = m.notes;
+          if (m.full) describe(n, m.out, entry); // a cached step reports its output like one that ran
           trace.push(entry);
           emit({ type: 'node', node: n.id, component: n.t, phase: 'end', status: entry.status, ms: 0, in: entry.in, out: entry.out });
           continue;
@@ -1882,9 +1891,7 @@
           if (n.out === 'hits') out = normHits(out, n.id);
           outputs[n.id] = out;
           entry.out = countOf(out);
-          if (n.out === 'hits') entry.top = out.slice(0, 50).map(h => ({ id: h.id, score: h.score, why: h.why, parts: h.parts, reason: h.reason }));
-          if (n.out === 'hits' && opts.onEvent) emit(hitsEvent(n.id, out, art, detail));
-          if (n.out === 'context' && out && opts.onEvent) emit({ type: 'context', node: n.id, evidence: arr(out.evidence).map(e => ({ label: e.label, id: e.id })), bytes: out.bytes });
+          describe(n, out, entry);
           this.memo.set(n.id, { digest: nd, inputs, reads, out, full: true, notes });
         } catch (e) {
           const msg = e && (e.message || e.code) ? `${e.code && !e.message ? e.code : e.message}` : String(e);
