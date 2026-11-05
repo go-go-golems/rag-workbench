@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/dop251/goja_nodejs/require"
+	"github.com/go-go-golems/geppetto/pkg/decision"
 	"github.com/go-go-golems/go-go-goja/pkg/engine"
 
 	"github.com/go-go-golems/rag-workbench/pkg/artifacts"
@@ -44,6 +45,9 @@ type Config struct {
 	Natives []ragjs.Native
 	// LLM backs ctx.sample for LLM nodes (nil = LLM nodes unavailable).
 	LLM llm.Backend
+	// Decider backs ctx.decide / rag.decide and the decision components
+	// (classify, filter.decide, rerank.decide, enrich.decide; RAGWB-007). Nil = they fail with a hint.
+	Decider decision.Provider
 	// Embedder backs index.vector and rerank.model (nil = those components fail with a hint).
 	Embedder natives.Embedder
 	// EmbedCache persists embeddings across runs (nil = no cache).
@@ -117,7 +121,7 @@ func NewFactory(cfg Config) (*engine.RuntimeFactory, error) {
 		timingFn = cfg.Timing.Add
 	}
 	b := engine.NewRuntimeFactoryBuilder().
-		WithModules(ragjs.Modules(ragjs.Options{Log: logf, Natives: nat, Sample: cfg.LLM, BuildCalls: cfg.BuildCalls, FullBuild: cfg.FullBuild, Timing: timingFn})...).
+		WithModules(ragjs.Modules(ragjs.Options{Log: logf, Natives: nat, Sample: cfg.LLM, Decide: cfg.Decider, BuildCalls: cfg.BuildCalls, FullBuild: cfg.FullBuild, Timing: timingFn})...).
 		UseModuleMiddleware(engine.MiddlewareExclude(excludedModules...))
 	if cfg.SourceLoader != nil {
 		b = b.WithRequireOptions(require.WithLoader(cfg.SourceLoader))

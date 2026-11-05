@@ -1,14 +1,19 @@
 package cmds
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/go-go-golems/geppetto/pkg/decision"
+	"github.com/go-go-golems/geppetto/pkg/decision/systemone"
+	"github.com/go-go-golems/geppetto/pkg/steps/ai/providers/pi"
 	"github.com/spf13/cobra"
 
+	"github.com/go-go-golems/rag-workbench/pkg/decide"
 	"github.com/go-go-golems/rag-workbench/pkg/llm"
 	"github.com/go-go-golems/rag-workbench/pkg/llm/gepp"
 	"github.com/go-go-golems/rag-workbench/pkg/natives"
@@ -24,6 +29,8 @@ var (
 	buildCalls   bool
 	fullBuild    bool
 	embedName    string
+	decideName   string
+	decideModel  string
 	maxRounds    int
 )
 
@@ -42,6 +49,8 @@ func AddGlobalFlags(root *cobra.Command) {
 	f.StringVar(&llmTiers.Complex, "llm-complex", "", fmt.Sprintf("Model for modelTier 'complex' (default %s; with --llm pi, %s)", lt.Complex, pt.Complex))
 	f.StringVar(&piAgentDir, "pi-agent-dir", "", "Pi's agent directory for --llm pi (models, credentials, settings; default $PI_CODING_AGENT_DIR or ~/.pi/agent)")
 	f.IntVar(&maxRounds, "llm-max-rounds", llm.DefaultMaxRounds, "Most model rounds per sample() call with tools (the last is forced to answer)")
+	f.StringVar(&decideName, "decide", "none", "Decision-model backend for ctx.decide, classify, when, filter.decide, rerank.decide, enrich.decide: none, pi (Pi's credentials), lunaroute (key: $LUNAROUTE_API_KEY or Pi's models.json), fake (offline word overlap)")
+	f.StringVar(&decideModel, "decide-model", "", "Decision model (default: lunaroute/djev with --decide pi, djev with --decide lunaroute)")
 	f.StringVar(&embedName, "embed", "none", "Embeddings/rerank backend for index.vector and rerank.model: none, lunaroute (cache: ~/.ragwb/cache/embeddings.db)")
 	f.BoolVar(&buildCalls, "build-calls", false, "Let LLM-costing build nodes (enrich.llm, doc cards) run instead of deferring them")
 	f.BoolVar(&fullBuild, "full", false, "Rebuild changed nodes from scratch instead of continuing from their stored previous version (delta builds)")
@@ -81,6 +90,55 @@ func LLM() (llm.Backend, error) {
 		return c, nil
 	}
 	return nil, fmt.Errorf("unknown --llm %q (none, fake, pi, lunaroute)", llmName)
+}
+
+// piAgentDirOrEnv is --pi-agent-dir, else $PI_CODING_AGENT_DIR ("" = ~/.pi/agent).
+func piAgentDirOrEnv() string {
+	if piAgentDir != "" {
+		return piAgentDir
+	}
+	return os.Getenv(pi.EnvAgentDir)
+}
+
+// Decider returns the decision backend selected by --decide (nil for "none").
+func Decider(ctx context.Context) (decision.Provider, error) {
+	switch decideName {
+	case "", "none":
+		return nil, nil
+	case "fake":
+		return &decide.Fake{}, nil
+	case "pi":
+		dir, err := pi.LoadAgentDir(pi.DefaultDir(piAgentDirOrEnv()))
+		if err != nil {
+			return nil, err
+		}
+		return dir.Decider(ctx, firstNonEmpty(decideModel, "lunaroute/djev"), pi.DecisionOptions{})
+	case "lunaroute":
+		key, err := llm.LoadLunaRouteKey()
+		if err != nil {
+			return nil, err
+		}
+		return systemone.New(systemone.Options{APIKey: key, BaseURL: os.Getenv("LUNAROUTE_BASE_URL"), Model: firstNonEmpty(decideModel, "djev")})
+	}
+	return nil, fmt.Errorf("unknown --decide %q (none, pi, lunaroute, fake)", decideName)
+}
+
+// DescribeDecider names a decision backend for startup lines.
+func DescribeDecider(p decision.Provider) string {
+	if p == nil {
+		return "none"
+	}
+	m := p.Model()
+	return m.Provider + "/" + m.Name
+}
+
+func firstNonEmpty(vals ...string) string {
+	for _, v := range vals {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 // tiersOr fills the tiers not set by --llm-quick/-default/-complex from def.
