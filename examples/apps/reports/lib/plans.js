@@ -73,7 +73,7 @@ const filtered = rag.plan("filtered").over(corpus)
   .retrieve("meta", { k: 30 })
   .fuse.rrf({ k: 60 })
   .filter.where({ field: "filters" })
-  .filter.decide({ top: 20, threshold: 0.5, min: 1, corpus: CORPUS })
+  .filter.decide({ top: 20, threshold: 0.5, corpus: CORPUS }) // no min: a question the corpus cannot answer returns no hits
   .limit();
 
 // Adaptive-RAG: classify the question first; skip retrieval for chit-chat,

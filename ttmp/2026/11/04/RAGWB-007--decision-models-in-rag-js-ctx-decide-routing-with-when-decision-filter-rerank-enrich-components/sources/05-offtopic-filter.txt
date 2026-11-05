@@ -1,0 +1,10 @@
+fused	10	what is the boiling point of water at sea level
+filtered	1	what is the boiling point of water at sea level
+fused	2	best pasta carbonara recipe
+filtered	1	best pasta carbonara recipe
+fused	10	who won the 1998 football world cup
+filtered	1	who won the 1998 football world cup
+fused	10	how does the rebalance law preserve placements
+filtered	4	how does the rebalance law preserve placements
+fused	10	what is the bleve index used for
+filtered	1	what is the bleve index used for

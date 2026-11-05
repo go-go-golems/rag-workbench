@@ -11,9 +11,17 @@ Topics:
 DocType: reference
 Intent: long-term
 Owners: []
-RelatedFiles: []
+RelatedFiles:
+    - Path: repo://examples/apps/reports/lib/plans.js
+      Note: Example decision plans
+    - Path: repo://pkg/decide/fake.go
+      Note: Deterministic fake provider
+    - Path: repo://pkg/ragjs/decide.go
+      Note: Go bridge for env.decide
+    - Path: repo://pkg/server/decide.go
+      Note: Workbench endpoint
 ExternalSources: []
-Summary: "Chronological implementation diary for RAGWB-007 (decision models in rag.js)."
+Summary: Chronological implementation diary for RAGWB-007 (decision models in rag.js).
 LastUpdated: 2026-11-04T18:56:37.980167615-05:00
 WhatFor: ""
 WhenToUse: ""
@@ -138,3 +146,84 @@ This step built the query-time half of the design. Phase 1 added the bridge (`en
 ### Technical details
 - JS error codes: `decide_unavailable`, `invalid_request`, `invalid_response`, `not_granted`, `rate_limited`, `model_not_found`, `prompt_too_large`, `cancelled`, `upstream_error`. Extras: `status`, `providerCode`, `requestId`, `retryAfterMs`.
 - Events: `{type: 'decision', node, call, model, ms, answers: {id: {type, value, p?}}}`, and node end `{status: 'skipped', skippedBy: 'when', notes}`.
+
+## Step 3: Phases 4–6 — enrich.decide, hosts and GUI, example plans, measurement
+
+This step finished the feature and measured it. `enrich.decide` classifies chunks at build time into `chunk.meta`, where `index.terms` and `filter.where` read it. The workbench gets `POST /_rt/decide` and a `decide` capability. The GUI shows decision rows and when-skips. The reports app gains the `graded`, `filtered` and `adaptive` plans and `ask --plan adaptive`.
+
+On the bundled goldens, decisions change little, because the eval is saturated: hit@5 = 1 for every plan. The measurement that matters is rejection. Off-topic queries peak at p ≤ 0.006, while answerable ones reach 0.965–1.0.
+
+### Prompt Context
+**User prompt (verbatim):** see Step 1
+**Assistant interpretation:** Implement guide phases 4–6.
+**Inferred user intent:** Decisions available everywhere plans run, with evidence of what they do on real data.
+**Commit (code):** 6306dd7 (P4 enrich.decide), b5d1b9d (P5 hosts, GUI, plans); the phase 6 commit follows this entry
+
+### What I did
+- `rag.js`: `build('enrich.decide')` (`llm: true`; per-chunk state `{title, section, text, corpus?}`; compact values `id`, `id_p`).
+- `pkg/server/decide.go`: `handleDecide`; `server.Config.Decider`; `/healthz` reports `decide`.
+- `pkg/ragjs/decide.go`: exported `DecideErrorCode`.
+- `cmd/ragwb/cmds/workbench.go`: passes `Decider` and prints `decide: …`.
+- `web/workbench/claude.js`: `caps.decide(reqJSON, signal)`. `app.js`: `get('decide')`, `rag.configure({decide})`.
+- `gui.js`:
+  - `foldEvent` keeps `decision` events and `skippedBy`;
+  - `decisionTable`/`decisionRows`/`eventDecisionRows` render one row per question: answer, a probability bar, the top alternatives;
+  - step status shows `skipped (when)`.
+- `examples/apps/reports/lib/plans.js`: `graded`, `filtered`, `adaptive`. `search.js` plan choices. `app.js`: `ask` takes `--plan` and returns `route` and `direct`.
+- Tests: `enrich_decide_test.go`, `pkg/server/decide_test.go`, `TestTraceFoldsDecisions`.
+- Measurements:
+  - `reports goldens --names lexical,fused,graded,filtered --trigger submit` → `sources/04-goldens-submit.txt`;
+  - the off-topic probe app `scripts/03-offtopic-probe/` → `sources/05-offtopic-probe.txt`;
+  - adaptive live runs → `sources/03-adaptive-*.json`.
+
+### Why
+- `enrich.decide` writes to `meta` as well as to `chunk[name]`, because `TermsIndex` and `filter.where` read `getPath(c.meta, key)`.
+- The `filtered` example drops `min: 1`. The probe showed that a question the corpus cannot answer gets all-low p, and keeping one irrelevant hit defeats the purpose.
+
+### What worked
+- `adaptive`, live (`--decide pi --llm pi`):
+  - "hi there, how are you today?" → `needs` 0.00009, retrieval and rerank skipped, a direct answer, `direct: true`;
+  - "how does the rebalance law preserve placements?" → `needs` 0.914; rerank.decide top is "5.9 The rebalance law" p = 1.00; the answer cites [E1]; 4.5 s wall clock including the LLM answer.
+- Goldens (12 questions, submit):
+
+  | plan | hit@5 | MRR | nDCG@10 |
+  |---|---|---|---|
+  | lexical | 1 | 1 | 0.884 |
+  | fused | 1 | 0.958 | 0.835 |
+  | graded | 1 | 0.958 | 0.855 |
+  | filtered | 1 | 1 | 0.837 |
+
+  The run took 16.3 s for 48 runs. `filtered` without `min` gives the same result.
+- Off-topic probe (max p over 20 graded hits):
+  - off-topic: boiling point 0.003, carbonara 0 (2 hits), world cup 0.006, passport (no BM25 hits);
+  - on-topic: rebalance law 1.0 (4 ≥ 0.5), delta builds 0.965 (2), PBUI headless engine 0.999 (8);
+  - 330–910 ms per query.
+
+### What didn't work
+- `TestEnrichDecide` first failed with `topics {Topics:map[Law notes:law More widgets:widgets Rebalance law:law Widgets:widgets] ...}`. `headingPath` excludes the document title, so the test's keys were wrong; fixed the keys.
+- My probe labelled "what is the bleve index used for" on-topic. It scored max p 0.058, and `grep -il bleve examples/apps/reports/corpus/*.md | wc -l` → 0: the corpus never mentions bleve. The model was right and the label was wrong.
+
+### What I learned
+- The goldens are too easy to separate plans (hit@5 saturates). Decision grading lifted fused's nDCG@10 by 0.02 and filtering lifted its MRR to 1. Neither beats lexical on this set. A harder eval with distractors and unanswerable questions is needed to measure ranking gains.
+- Rejection is the strong signal. Thresholds near 0.5 separate off-topic from on-topic with a wide margin on this corpus.
+
+### What was tricky to build
+- Browser parity. `env.decide` in the browser must have the Go host's signature (`requestJSON, signal` → `responseJSON`), so `rag.js` works unchanged in both. `claude.js` posts the already-normalised JSON as-is and unwraps the server's `{error: {code, message}}` envelope into the same `{code, message}` rejection.
+
+### What warrants a second pair of eyes
+- `handleDecide` uses status 499 for cancellation (nginx convention) when the request context is cancelled. The client has gone by then, so the status is cosmetic.
+- `adaptive` gates `rerank.decide` with the same `when` as the retrieves. Without the gate, a skipped retrieve's `[]` would reach rerank and grade nothing, which is harmless but still records a step.
+
+### What should be done in the future
+- A harder eval set (unanswerable and distractor questions) to calibrate `threshold`.
+- `applyOps` support for `when`.
+- Workbench presets that use decisions (a "routing" preset).
+
+### Code review instructions
+- `git diff d29f7a0..HEAD` for `pkg/server/decide.go`, `web/workbench/{claude,app}.js`, `pkg/ragjs/assets/gui.js`, `examples/apps/reports/lib/plans.js`.
+- Live:
+  - `ragwb --decide pi --llm pi --no-store verbs --dir examples/apps/reports reports ask "…" --plan adaptive`;
+  - `ragwb --decide pi --no-store verbs --dir examples/apps/reports reports goldens --names fused,graded,filtered --trigger submit`.
+
+### Technical details
+- `/_rt/decide`: request = `decision.Request` JSON (options as `[{name, description}]`), response = `decision.Response` JSON; errors `{error: {code, message}}` with 503 `decide_unavailable`, 400 `invalid_request`/`prompt_too_large`/`model_not_found`, 403 `not_granted`, 429 `rate_limited`, 502 otherwise.

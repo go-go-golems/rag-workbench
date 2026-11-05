@@ -1,0 +1,12 @@
++-----------+--------+------+-------+-------+--------------------------------------------------------+
+| above_0_5 | graded | kind | max_p | ms    | q                                                      |
++-----------+--------+------+-------+-------+--------------------------------------------------------+
+| 0         | 20     | off  | 0.003 | 468.7 | what is the boiling point of water at sea level        |
+| 0         | 2      | off  | 0     | 351.5 | best pasta carbonara recipe                            |
+| 0         | 20     | off  | 0.006 | 329.8 | who won the 1998 football world cup                    |
+| 0         | 0      | off  | -Inf  | 0.7   | how do I renew my passport                             |
+| 4         | 20     | on   | 1     | 430.8 | how does the rebalance law preserve placements         |
+| 0         | 20     | on   | 0.058 | 349.1 | what is the bleve index used for                       |
+| 2         | 20     | on   | 0.965 | 910   | how are delta builds stored                            |
+| 8         | 20     | on   | 0.999 | 857.9 | what does the headless engine do in the PBUI workbench |
++-----------+--------+------+-------+-------+--------------------------------------------------------+
