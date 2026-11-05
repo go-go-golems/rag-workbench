@@ -680,6 +680,66 @@
       return (out.length ? out : top).slice(0, keep);
     },
   });
+  // RAGWB-007 §3.4: grade hits with noul relevance questions — one shared state
+  // (the query), batches of ≤ 32 questions (djev's max_questions), ≤ p.concurrency in flight.
+  const RELEVANCE = { question: 'Does this passage help answer the query?', true: 'The passage contains facts needed to answer the query', false: 'The passage is off-topic or only loosely related' };
+  async function gradeHits(s, ctx, hits, p) {
+    const top = hits.slice(0, p.top ?? 20);
+    if (!top.length) return [];
+    const size = Math.min(32, Math.max(1, p.batch ?? 16));
+    const state = { query: s.q, ...(p.corpus ? { corpus: p.corpus } : {}) };
+    const batches = [];
+    for (let i = 0; i < top.length; i += size) batches.push(top.slice(i, i + size).map((h, j) => [i + j, h]));
+    const ps = new Array(top.length);
+    let next = 0, done = 0;
+    const worker = async () => {
+      while (next < batches.length) {
+        const b = batches[next++];
+        const questions = {};
+        for (const [i, h] of b) {
+          const c = ctx.chunk(h.id) || {};
+          questions['h' + i] = {
+            type: 'noul',
+            instructions: { passage: `${c.title || ''} › ${(c.headingPath || []).join(' › ')}\n${clip((c.text || '').replace(/\s+/g, ' '), p.clip ?? 1500)}`, question: p.instructions || RELEVANCE.question },
+            true: p.true || RELEVANCE.true, false: p.false || RELEVANCE.false,
+          };
+        }
+        const r = await ctx.decide({ state, questions });
+        for (const [i] of b) ps[i] = r.answers['h' + i].probability;
+        done += b.length;
+        ctx.progress(done, top.length, 'passages');
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(batches.length, Math.max(1, p.concurrency ?? 2)) }, worker));
+    return top.map((h, i) => ({ ...h, p: +(+ps[i]).toFixed(4) }));
+  }
+  live('filter.decide', {
+    in: ['hits'], out: 'hits', args: optArgs, id: () => 'filter', skip: 'pass', trigger: 'submit', reads: () => ['q'],
+    describe: p => `top ${p.top ?? 20} · keep p ≥ ${p.threshold ?? 0.5}${p.min ? ` · min ${p.min}` : ''} · decision`,
+    run: async (s, ctx, hits, p) => {
+      const graded = await gradeHits(s, ctx, hits, p);
+      const th = p.threshold ?? 0.5;
+      let kept = graded.filter(h => h.p >= th);
+      if (p.min && kept.length < p.min) {
+        const best = new Set([...graded].sort((a, b) => b.p - a.p).slice(0, p.min).map(h => h.id));
+        kept = graded.filter(h => best.has(h.id));
+      }
+      ctx.note(`graded ${graded.length} · kept ${kept.length} with p ≥ ${th}${kept.length && kept.some(h => h.p < th) ? ` (min ${p.min})` : ''}`);
+      return kept.map(h => ({ ...h, reason: `p=${h.p.toFixed(2)}` }));
+    },
+  });
+  live('rerank.decide', {
+    in: ['hits'], out: 'hits', args: optArgs, id: () => 'rerank', skip: 'pass', trigger: 'submit', reads: () => ['q', 'k'],
+    describe: p => `top ${p.top ?? 20} → keep ${typeof p.keep === 'number' ? p.keep : 's.k'} by p(relevant) · decision`,
+    run: async (s, ctx, hits, p) => {
+      const graded = await gradeHits(s, ctx, hits, p);
+      const keep = Number(p.keep ?? s.k ?? 8);
+      const out = graded.map((h, i) => [h, i]).sort((a, b) => b[0].p - a[0].p || a[1] - b[1]).slice(0, keep)
+        .map(([h]) => ({ ...h, score: h.p, reason: `p=${h.p.toFixed(2)}` }));
+      ctx.note(`graded ${graded.length} · kept top ${out.length}`);
+      return out;
+    },
+  });
   live('limit', {
     in: ['hits'], out: 'hits', args: a => (typeof a === 'number' || isLambda(a) || typeof a === 'function' ? { k: typeof a === 'number' ? a : lam(a) } : { ...(a || {}) }),
     describe: p => `k ${typeof p.k === 'number' ? p.k : 's.k'}`,
