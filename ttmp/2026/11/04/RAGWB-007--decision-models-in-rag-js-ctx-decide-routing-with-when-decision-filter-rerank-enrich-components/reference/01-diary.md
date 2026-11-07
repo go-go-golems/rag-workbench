@@ -227,3 +227,54 @@ On the bundled goldens, decisions change little, because the eval is saturated: 
 
 ### Technical details
 - `/_rt/decide`: request = `decision.Request` JSON (options as `[{name, description}]`), response = `decision.Response` JSON; errors `{error: {code, message}}` with 503 `decide_unavailable`, 400 `invalid_request`/`prompt_too_large`/`model_not_found`, 403 `not_granted`, 429 `rate_limited`, 502 otherwise.
+
+## Step 4: Resume after the Geppetto integration and constructor cleanup
+
+Resume RAGWB-007 from the completed decision pipeline implementation. The immediate goal is a reproducible dependency on released Geppetto, followed by harder decision evaluations and the small routing follow-ups already recorded in Part 6. Geppetto PRs #447 and #449 have merged; the latest published release is still v0.13.13.
+
+The original rag-workbench checkout has its common Git directory outside the writable workspace. Created isolated sibling `rag-workbench-resume` on branch `task/ragwb-007-resume`, based on `7a00da6`, and copied only the newly added continuation tasks. Restored the original checkout's task file after copying, preserving its initial clean state.
+
+### Prompt Context
+**User prompt (verbatim):** "ok, continue with that, bump geppetto and such as well. (make release). commit at appropriate intervals and keep a detailed diary as you work (using the diary format from the skill)"
+**User question (verbatim):** "what's that ? - Three reports-app plans: graded, filtered, and adaptive."
+**User steering (verbatim):** "you can run `make release` in geppetto I think" and "after rebasing on main".
+**Assistant interpretation:** Release the merged Geppetto work, update the actual project dependency/workspace, then improve evaluation and routing support while maintaining the full diary format.
+**Inferred user intent:** Return to measurable RAG behavior after the supporting credential/API work, with a release-backed dependency instead of relying on old workspace overrides.
+
+### What I did
+- Checked rag-workbench Git state, RAGWB-007 guide/results and task list. The feature implementation is complete at `7a00da6`, but go.mod still pins Geppetto v0.13.13 and parent go.work selects the old local `geppetto` branch.
+- Confirmed Geppetto #449 merged at `c9e989e8` and latest published release is v0.13.13. The constructor API break warrants v0.14.0.
+- Inspected the actual release targets: `tag-minor` creates a tag using svu; `release` pushes origin tags and requests the current module version through proxy.golang.org. Tag pushes trigger release automation.
+- Added explicit continuation tasks using docmgr and created the isolated writable checkout.
+
+### Why
+- `make release` alone does not create a new tag, and the isolated Geppetto checkout's origin originally pointed at the old local worktree. Correct source revision and upstream destination must be established before publication.
+- A real module release is necessary to validate rag-workbench without go.work supplying unreleased APIs.
+
+### What worked
+- Read-only GitHub connector checks confirm merged main and the release baseline.
+- The isolated rag-workbench clone/branch and copied tasks are ready for commits.
+
+### What didn't work
+- `gh release list --repo go-go-golems/geppetto --limit 5` failed: `error connecting to api.github.com`.
+- The GitHub connector exposes release reads but no tag/release creation or workflow-dispatch mutation. A standalone browser reached GitHub's sign-in page; the supported browser runtime reports `No browser is available` and its browser list is empty. No credentials or browser storage were inspected.
+
+### What I learned
+- Release automation already exists; use the repository's tag/release targets once upstream Git networking is available rather than inventing another release mechanism.
+
+### What was tricky to build
+- Separating the merged remote history from the isolated local source commits, which have equivalent trees but different IDs because publication used the connector.
+
+### What warrants a second pair of eyes
+- Release from merged main, not the old source branch, and verify that the module version resolves without workspace substitution.
+
+### What should be done in the future
+- Publish v0.14.0, bump the module, verify integration, then add harder evaluations plus when-preserving plan edits and a routing preset.
+
+### Code review instructions
+- Start with the new tasks and this continuation entry, then inspect go.mod/go.sum and the evaluation additions as they are committed.
+
+### Technical details
+- Working clone: /home/manuel/workspaces/2026-11-02/rag-workbench/rag-workbench-resume.
+- Original source branch: task/ragwb-007-decision-models; source head: 7a00da6.
+- Proposed version: v0.14.0 (not yet tagged or published at this checkpoint).
