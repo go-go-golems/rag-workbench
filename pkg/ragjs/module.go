@@ -15,6 +15,7 @@ import (
 
 	"github.com/dop251/goja"
 	"github.com/dop251/goja_nodejs/require"
+	"github.com/go-go-golems/geppetto/pkg/decision"
 	"github.com/go-go-golems/go-go-goja/pkg/engine"
 
 	"github.com/go-go-golems/rag-workbench/pkg/llm"
@@ -91,6 +92,9 @@ type Options struct {
 	// Sample, when set, backs rag's LLM nodes (ctx.sample / ctx.sample.json) with
 	// the claude.ai sample contract. Nil leaves LLM nodes failing with sampling_unavailable.
 	Sample llm.Backend
+	// Decide, when set, backs ctx.decide / rag.decide with a decision model
+	// (geppetto pkg/decision, RAGWB-007). Nil leaves them failing with decide_unavailable.
+	Decide decision.Provider
 	// BuildCalls lets LLM-costing build nodes (enrich.llm, doc cards) run during
 	// build; otherwise they are deferred like the workbench's explicit Build button.
 	BuildCalls bool
@@ -258,6 +262,11 @@ func configureHost(vm *goja.Runtime, rag *goja.Object, opts Options) error {
 			return err
 		}
 		_ = env.Set("sample", sample)
+	}
+	if opts.Decide != nil {
+		_ = env.Set("decide", newDecide(vm, opts.Decide))
+		m := opts.Decide.Model()
+		_ = env.Set("decideModel", m.Provider+"/"+m.Name)
 	}
 	_, err := configure(rag, env)
 	return err

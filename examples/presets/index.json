@@ -18,6 +18,15 @@
   "llm": ""
  },
  {
+  "id": "decision-routing",
+  "file": "decision-routing.js",
+  "group": "Start here",
+  "title": "Decision routing",
+  "blurb": "Classify each question; retrieve and grade only when the reports are needed. Requires --decide and --llm.",
+  "level": 2,
+  "llm": "enter"
+ },
+ {
   "id": "graph",
   "file": "graph.js",
   "group": "Start here",

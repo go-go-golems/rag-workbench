@@ -545,6 +545,26 @@
     },
     async: true,
   });
+  // RAGWB-007 §3.5: ask the questions about every chunk (the chunk is the state);
+  // compact answers go to chunk[name] and chunk.meta[name], so index.terms and
+  // filter.where can use them. Costs one decision call per chunk: deferred like enrich.llm.
+  build('enrich.decide', {
+    in: ['chunks'], out: 'chunks', args: optArgs, llm: true,
+    describe: p => `${p.name} · ${Object.keys(p.questions || {}).join(' · ')} · 1 decision per chunk`,
+    map: async (chunk, ctx, p) => {
+      if (!isObj(p.questions) || !Object.keys(p.questions).length) throw new RagError('build', `enrich.decide '${p.name}': questions are required`);
+      const state = { title: chunk.title, section: (chunk.headingPath || []).join(' › '), text: clip(chunk.text || '', p.clip ?? 4000), ...(p.corpus ? { corpus: p.corpus } : {}) };
+      const r = await ctx.decide({ state, questions: p.questions });
+      const v = {};
+      for (const [id, a] of Object.entries(r.answers)) {
+        if (a.type === 'choice') { v[id] = a.choice; v[id + '_p'] = +(+(a.probabilities[a.choice] ?? a.confidence)).toFixed(4); }
+        else if (a.type === 'noul') v[id] = +(+a.probability).toFixed(4);
+        else v[id] = +(+a.score).toFixed(3);
+      }
+      return { ...chunk, [p.name]: v, meta: { ...(chunk.meta || {}), [p.name]: v } };
+    },
+    async: true,
+  });
   build('index.bm25', {
     in: ['chunks'], out: 'index', args: optArgs, describe: p => Object.entries(p.fields || { title: 2, headingPath: 3, text: 1 }).map(([k, v]) => `${k}×${v}`).join(' '),
     all: ([chunks], ctx, p) => new Bm25Index(chunks, p),
@@ -680,6 +700,66 @@
       return (out.length ? out : top).slice(0, keep);
     },
   });
+  // RAGWB-007 §3.4: grade hits with noul relevance questions — one shared state
+  // (the query), batches of ≤ 32 questions (djev's max_questions), ≤ p.concurrency in flight.
+  const RELEVANCE = { question: 'Does this passage help answer the query?', true: 'The passage contains facts needed to answer the query', false: 'The passage is off-topic or only loosely related' };
+  async function gradeHits(s, ctx, hits, p) {
+    const top = hits.slice(0, p.top ?? 20);
+    if (!top.length) return [];
+    const size = Math.min(32, Math.max(1, p.batch ?? 16));
+    const state = { query: s.q, ...(p.corpus ? { corpus: p.corpus } : {}) };
+    const batches = [];
+    for (let i = 0; i < top.length; i += size) batches.push(top.slice(i, i + size).map((h, j) => [i + j, h]));
+    const ps = new Array(top.length);
+    let next = 0, done = 0;
+    const worker = async () => {
+      while (next < batches.length) {
+        const b = batches[next++];
+        const questions = {};
+        for (const [i, h] of b) {
+          const c = ctx.chunk(h.id) || {};
+          questions['h' + i] = {
+            type: 'noul',
+            instructions: { passage: `${c.title || ''} › ${(c.headingPath || []).join(' › ')}\n${clip((c.text || '').replace(/\s+/g, ' '), p.clip ?? 1500)}`, question: p.instructions || RELEVANCE.question },
+            true: p.true || RELEVANCE.true, false: p.false || RELEVANCE.false,
+          };
+        }
+        const r = await ctx.decide({ state, questions });
+        for (const [i] of b) ps[i] = r.answers['h' + i].probability;
+        done += b.length;
+        ctx.progress(done, top.length, 'passages');
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(batches.length, Math.max(1, p.concurrency ?? 2)) }, worker));
+    return top.map((h, i) => ({ ...h, p: +(+ps[i]).toFixed(4) }));
+  }
+  live('filter.decide', {
+    in: ['hits'], out: 'hits', args: optArgs, id: () => 'filter', skip: 'pass', trigger: 'submit', reads: () => ['q'],
+    describe: p => `top ${p.top ?? 20} · keep p ≥ ${p.threshold ?? 0.5}${p.min ? ` · min ${p.min}` : ''} · decision`,
+    run: async (s, ctx, hits, p) => {
+      const graded = await gradeHits(s, ctx, hits, p);
+      const th = p.threshold ?? 0.5;
+      let kept = graded.filter(h => h.p >= th);
+      if (p.min && kept.length < p.min) {
+        const best = new Set([...graded].sort((a, b) => b.p - a.p).slice(0, p.min).map(h => h.id));
+        kept = graded.filter(h => best.has(h.id));
+      }
+      ctx.note(`graded ${graded.length} · kept ${kept.length} with p ≥ ${th}${kept.length && kept.some(h => h.p < th) ? ` (min ${p.min})` : ''}`);
+      return kept.map(h => ({ ...h, reason: `p=${h.p.toFixed(2)}` }));
+    },
+  });
+  live('rerank.decide', {
+    in: ['hits'], out: 'hits', args: optArgs, id: () => 'rerank', skip: 'pass', trigger: 'submit', reads: () => ['q', 'k'],
+    describe: p => `top ${p.top ?? 20} → keep ${typeof p.keep === 'number' ? p.keep : 's.k'} by p(relevant) · decision`,
+    run: async (s, ctx, hits, p) => {
+      const graded = await gradeHits(s, ctx, hits, p);
+      const keep = Number(p.keep ?? s.k ?? 8);
+      const out = graded.map((h, i) => [h, i]).sort((a, b) => b[0].p - a[0].p || a[1] - b[1]).slice(0, keep)
+        .map(([h]) => ({ ...h, score: h.p, reason: `p=${h.p.toFixed(2)}` }));
+      ctx.note(`graded ${graded.length} · kept top ${out.length}`);
+      return out;
+    },
+  });
   live('limit', {
     in: ['hits'], out: 'hits', args: a => (typeof a === 'number' || isLambda(a) || typeof a === 'function' ? { k: typeof a === 'number' ? a : lam(a) } : { ...(a || {}) }),
     describe: p => `k ${typeof p.k === 'number' ? p.k : 's.k'}`,
@@ -749,12 +829,36 @@
     in: ['context'], out: 'answer', args: optArgs, skip: 'null', trigger: 'submit', reads: () => ['q'],
     describe: p => `${p.tier || 'default'} · cites [E#]`,
     run: async (s, ctx, context, p) => {
-      if (!context || !context.evidence.length) return { text: 'No evidence was retrieved for this question.', evidence: [], cited: [] };
+      if (!context || !context.evidence.length) {
+        if (!p.direct) return { text: 'No evidence was retrieved for this question.', evidence: [], cited: [] };
+        // RAGWB-007: retrieval was skipped (e.g. a when-condition) — answer without documents, and say so
+        ctx.note('answered without retrieval');
+        const r = await ctx.sample((p.directInstructions || 'Answer the question directly and briefly. No documents were consulted, so do not cite sources; if the question needs facts from a specific document collection, say that you would need to look them up.') + `\n\nQuestion: ${s.q}`,
+          { modelTier: p.tier || 'default', onText: ({ text }) => ctx.emit(text) });
+        return { text: r.text, evidence: [], cited: [], direct: true, truncated: r.truncated };
+      }
       const prompt = (p.instructions || 'Answer the question using only the evidence below, drawn from a set of engineering project reports. Cite evidence inline as [E1], [E2]. If the evidence does not answer the question, say what is missing. Be specific and concise: under 200 words unless the question needs more. Use plain markdown.') +
         `\n\n<evidence>\n${context.text}\n</evidence>\n\nQuestion: ${s.q}`;
       const r = await ctx.sample(prompt, { modelTier: p.tier || 'default', onText: ({ text }) => ctx.emit(text) });
       const labels = uniq((r.text.match(/\bE\d+\b/g) || []));
       return { text: r.text, evidence: context.evidence, cited: labels, truncated: r.truncated };
+    },
+  });
+  // RAGWB-007 §3.3: ask a question set about the query; the answers are this
+  // node's 'decision' output, read by when-conditions and ctx.decision(id).
+  live('classify', {
+    in: [], out: 'decision', args: optArgs, trigger: 'submit', skip: 'null', reads: () => ['q'],
+    id: () => 'route',
+    describe: p => `${Object.keys(p.questions || {}).join(' · ') || 'no questions'} · decision`,
+    run: async (s, ctx, _in, p) => {
+      if (!isObj(p.questions) || !Object.keys(p.questions).length) throw new RagError('run', `classify '${ctx.node.id}': questions are required`);
+      const state = p.state ?? { query: s.q, ...(p.corpus ? { corpus: p.corpus } : {}) };
+      const r = await ctx.decide({ state, questions: p.questions });
+      for (const [id, a] of Object.entries(r.answers)) ctx.note(`${id} → ${answerLine(a)}`);
+      return Object.defineProperties({ ...r.answers }, {
+        $decision: { value: true, enumerable: false },
+        $meta: { value: { model: r.model, ms: r.ms }, enumerable: false },
+      });
     },
   });
   live('agentic', {
@@ -830,8 +934,8 @@
   // ────────────────────────────────────────────────────────────── specs
   // Specs are immutable: every builder call returns a new spec.
   function splitOpts(p) {
-    const { id, trigger, from, in: inn, ...rest } = p || {};
-    return [rest, { id, trigger, from: from ?? inn }];
+    const { id, trigger, from, in: inn, when, ...rest } = p || {};
+    return [rest, { id, trigger, from: from ?? inn, ...(when != null ? { when } : {}) }];
   }
   function normalize(type, args) {
     const def = REG.get(type);
@@ -948,6 +1052,7 @@
       const id = opts.id || freshId([...nodes, ...Object.keys(this.st.signals).map(k => ({ id: k })), ...(this.st.corpus ? this.st.corpus.st.nodes : [])], def.id ? def.id(p) : t.split('.')[0]);
       const node = { id, t, phase: 'live', in: inn, p };
       if (opts.trigger) node.trigger = opts.trigger;
+      if (opts.when != null) node.when = normWhen(opts.when, id);
       if (ports.out === 'hits') cur.hits = def.source && opts.from == null ? [...cur.hits, id] : [id];
       else if (ports.out) cur[ports.out] = id;
       return this._with({ nodes: [...nodes, node], cursor: cur });
@@ -997,6 +1102,63 @@
   }
 
   // ────────────────────────────────────────────────────────────── IR
+  // ── when (RAGWB-007 §3.3): a live node runs only if its condition holds.
+  // Forms: {decision: 'node.question', in, not, min, max} or a lambda (s, ctx) => bool.
+  const WHEN_KEYS = ['decision', 'in', 'not', 'min', 'max'];
+  function normWhen(w, id) {
+    if (typeof w === 'function' || isLambda(w) || typeof w === 'string') return lam(w);
+    if (!isObj(w) || typeof w.decision !== 'string' || !/^[A-Za-z][\w-]*\.[\w.-]+$/.test(w.decision)) throw new RagError('compile', `${id}: when must be (s, ctx) => boolean or {decision: 'node.question', in?, not?, min?, max?}`);
+    const bad = Object.keys(w).filter(k => !WHEN_KEYS.includes(k));
+    if (bad.length) throw new RagError('compile', `${id}: when has unknown key${bad.length > 1 ? 's' : ''} ${bad.join(', ')} (expected ${WHEN_KEYS.join(', ')})`);
+    const out = { decision: w.decision };
+    if (w.in != null) out.in = arr(w.in).map(String);
+    if (w.not != null) out.not = arr(w.not).map(String);
+    if (w.min != null) out.min = Number(w.min);
+    if (w.max != null) out.max = Number(w.max);
+    return out;
+  }
+  // the decision nodes a when-condition reads
+  function whenRefs(w) {
+    if (!w) return [];
+    if (isLambda(w)) return uniq([...w.$fn.matchAll(/\.decision\(\s*['"`]([A-Za-z][\w-]*)['"`]\s*\)/g)].map(m => m[1]));
+    return [w.decision.split('.')[0]];
+  }
+  // does a declarative condition hold for these answers? Fails open (runs) when the decision is missing.
+  function whenHolds(w, decision) {
+    const [nodeId, ...rest] = w.decision.split('.');
+    const qid = rest.join('.');
+    const d = decision(nodeId);
+    const a = d && d[qid];
+    if (!a) return { on: true, why: `${w.decision} unavailable → run` };
+    let on = true;
+    if (a.type === 'choice') {
+      const names = Object.keys(a.probabilities || {});
+      const chosen = w.in ? w.in : w.not ? names.filter(x => !w.not.includes(x)) : [a.choice];
+      if (w.min != null || w.max != null) {
+        const mass = chosen.reduce((t, x) => t + (a.probabilities[x] || 0), 0);
+        if (w.min != null) on = on && mass >= w.min;
+        if (w.max != null) on = on && mass <= w.max;
+      } else {
+        if (w.in) on = on && w.in.includes(a.choice);
+        if (w.not) on = on && !w.not.includes(a.choice);
+      }
+    } else {
+      const v = a.type === 'noul' ? a.probability : a.score;
+      if (w.min != null) on = on && v >= w.min;
+      if (w.max != null) on = on && v <= w.max;
+      if (w.in) on = on && w.in.includes(String(v));
+    }
+    return { on, why: `${w.decision} = ${answerLine(a)}` };
+  }
+  // what a node skipped by when outputs: its input for same-type ports, else empty
+  function whenSkipOutput(n, input) {
+    const ports = portsOf(n);
+    const inT = ports.in[0] || '';
+    if (inT === ports.out) return input;
+    if (ports.out === 'hits') return [];
+    if (ports.out === 'queries') return arr(input);
+    return null;
+  }
   const ID_RE = /^[A-Za-z][\w-]*$/;
   function finalize(raw) {
     const problems = [];
@@ -1033,6 +1195,16 @@
       for (const u of n.uses) {
         if (!byId.has(u)) problems.push(`${n.id}: uses '${u}', which does not exist${u.startsWith('ix-') ? ` (indexes: ${nodes.filter(x => x.id.startsWith('ix-')).map(x => x.id.slice(3)).join(', ') || 'none'})` : ''}`);
         else edges.push([u, n.id, 'artifact']);
+      }
+      if (n.when) {
+        if (def.phase !== 'live') problems.push(`${n.id}: when applies only to live nodes`);
+        if (isLambda(n.when)) { const err = checkLambda(n.when, `${n.id}.when`); if (err) problems.push(err); }
+        for (const r of whenRefs(n.when)) {
+          const from = byId.get(r);
+          if (!from) problems.push(`${n.id}: when reads decision '${r}', which does not exist`);
+          else if (from.t === 'signal' || portsOf(from).out !== 'decision') problems.push(`${n.id}: when reads '${r}', which is not a decision node (classify)`);
+          else edges.push([r, n.id, 'decision']);
+        }
       }
       const reads = new Set(def.reads ? def.reads(n.p) : []);
       const walk = (v, key) => {
@@ -1075,7 +1247,7 @@
       kind: 'rag', version: 1, id: raw.id, corpus: raw.corpus || null, signals,
       nodes: order.map(id => byId.get(id)), edges, outputs, pinned,
     };
-    ir.digest = hash({ n: ir.nodes.map(n => [n.id, n.t, n.in, n.p, n.trigger]), s: signals, o: outputs });
+    ir.digest = hash({ n: ir.nodes.map(n => (n.when ? [n.id, n.t, n.in, n.p, n.trigger, n.when] : [n.id, n.t, n.in, n.p, n.trigger])), s: signals, o: outputs });
     return withMethods(ir);
   }
 
@@ -1161,11 +1333,11 @@
   function normValue(v) { return clone(normParams(v)); }
   function specOf(nodeSpec) {
     if (!nodeSpec) throw new Error('missing node: {t, p}');
-    if (nodeSpec.$c) { const c = normalize(nodeSpec.$c, [nodeSpec]); return { t: c.t, p: c.p, trigger: c.opts.trigger, id: c.opts.id }; }
+    if (nodeSpec.$c) { const c = normalize(nodeSpec.$c, [nodeSpec]); return { t: c.t, p: c.p, trigger: c.opts.trigger, id: c.opts.id, when: c.opts.when }; }
     if (!REG.get(nodeSpec.t)) throw new Error(`unknown component '${nodeSpec.t}'`);
     const p = {};
     for (const [k, v] of Object.entries(nodeSpec.p || {})) p[k] = normValue(v);
-    return { t: nodeSpec.t, p, trigger: nodeSpec.trigger, id: nodeSpec.id };
+    return { t: nodeSpec.t, p, trigger: nodeSpec.trigger, id: nodeSpec.id, when: nodeSpec.when };
   }
   function applyOp(raw, op) {
     raw = { ...raw, nodes: raw.nodes.map(n => ({ ...n, in: [...n.in], p: clone(n.p) })), signals: { ...raw.signals }, outputs: { ...raw.outputs }, pinned: [...raw.pinned] };
@@ -1196,6 +1368,7 @@
         const s = specOf(op.with);
         n.t = s.t; n.p = s.p;
         if (s.trigger) n.trigger = s.trigger; else delete n.trigger;
+        if (s.when != null) n.when = normWhen(s.when, n.id);
         return raw;
       }
       case 'insert': {
@@ -1205,6 +1378,7 @@
         if (raw.nodes.find(n => n.id === id)) throw new Error(`node '${id}' already exists`);
         const node = { id, t: s.t, phase: def.phase, in: [], p: s.p };
         if (s.trigger || op.trigger) node.trigger = s.trigger || op.trigger;
+        if (s.when != null || op.when != null) node.when = normWhen(s.when != null ? s.when : op.when, id);
         if (op.after) {
           nodeOf(raw, op.after);
           node.in = [op.after];
@@ -1362,6 +1536,79 @@
   }
   const summarize = v => (Array.isArray(v) ? `${v.length} result${v.length === 1 ? '' : 's'}` : typeof v === 'string' ? clip(v, 120) : v && typeof v === 'object' ? clip(JSON.stringify(v), 120) : String(v));
   // tool calls of an LLM node as events: wrap each tool's execute
+  // ── decisions (RAGWB-007): env.decide(requestJSON, signal) → response JSON.
+  // Requests are normalised here so choice options keep their order on the
+  // wire ([{name, description}]); responses come back camelCase.
+  const DECISION_TYPES = ['noul', 'choice', 'score'];
+  function wireOptions(o) {
+    if (o == null) return undefined;
+    if (Array.isArray(o)) return o.map(x => (typeof x === 'string' ? { name: x } : { name: String(x && x.name), ...(x && x.description != null ? { description: String(x.description) } : {}) }));
+    if (isObj(o)) return Object.entries(o).map(([name, d]) => ({ name, ...(d != null && d !== '' ? { description: String(d) } : {}) }));
+    throw new RagError('decide', 'options must be an object {name: description} or an array');
+  }
+  function wireDecision(req) {
+    if (!isObj(req) || !isObj(req.questions)) throw new RagError('decide', 'decide({state, questions}) needs questions keyed by id');
+    const questions = {};
+    for (const [id, q] of Object.entries(req.questions)) {
+      if (!isObj(q) || !DECISION_TYPES.includes(q.type)) throw new RagError('decide', `question '${id}': type must be one of ${DECISION_TYPES.join(', ')}`);
+      const w = { type: q.type, instructions: q.instructions };
+      if (q.options != null) w.options = wireOptions(q.options);
+      if (q.levels != null) w.levels = arr(q.levels).map(String);
+      if (q.true != null) w.true = String(q.true);
+      if (q.false != null) w.false = String(q.false);
+      questions[id] = w;
+    }
+    return { state: req.state, questions, ...(req.images ? { images: arr(req.images) } : {}), ...(req.model ? { model: String(req.model) } : {}) };
+  }
+  function fromWireDecision(r, ms) {
+    const answers = {};
+    for (const [id, a] of Object.entries(r.answers || {})) {
+      answers[id] = a.type === 'noul' ? { type: 'noul', probability: a.probability }
+        : a.type === 'choice' ? { type: 'choice', choice: a.choice, confidence: a.confidence, probabilities: a.probabilities || {} }
+        : { type: 'score', score: a.score, confidence: a.confidence, levelProbabilities: a.level_probabilities || [] };
+    }
+    return { provider: r.provider, model: r.model, answers, ms: r.duration_ms ?? ms,
+      ...(r.usage ? { usage: { inputTokens: r.usage.input_tokens || 0, outputTokens: r.usage.output_tokens || 0 } } : {}),
+      ...(r.request_id ? { requestId: r.request_id } : {}) };
+  }
+  // the one-line form of an answer: "semantic 0.92", "0.97", "level 1.9"
+  function answerValue(a) {
+    if (!a) return null;
+    if (a.type === 'noul') return a.probability;
+    if (a.type === 'choice') return a.choice;
+    return a.score;
+  }
+  function answerLine(a) {
+    if (!a) return 'none';
+    if (a.type === 'noul') return (+a.probability).toFixed(2);
+    if (a.type === 'choice') return `${a.choice} ${(+(a.probabilities[a.choice] ?? a.confidence)).toFixed(2)}`;
+    return `level ${(+a.score).toFixed(1)}`;
+  }
+  // makeDecide wraps a call(request) → Promise<response> with the one-question helpers.
+  function makeDecide(call) {
+    const f = call || (() => Promise.reject({ code: 'decide_unavailable', message: 'no decision model is configured (start ragwb with --decide pi|lunaroute|fake)' }));
+    const one = (type, crit) => async (state, instructions, x) => {
+      const q = { type, instructions, ...crit(x) };
+      const r = await f({ state, questions: { q } });
+      return type === 'noul' ? r.answers.q.probability : r.answers.q;
+    };
+    f.noul = one('noul', o => ({ ...(o && o.true ? { true: o.true } : {}), ...(o && o.false ? { false: o.false } : {}) }));
+    f.choice = one('choice', options => ({ options }));
+    f.score = one('score', levels => ({ levels }));
+    return f;
+  }
+  // eventDecide emits one 'decision' event per call (node, model, ms, compact answers).
+  function eventDecide(decide, node, emit) {
+    let calls = 0;
+    return makeDecide(async req => {
+      const call = ++calls;
+      const r = await decide(req);
+      const answers = {};
+      for (const [id, a] of Object.entries(r.answers)) answers[id] = { type: a.type, value: answerValue(a), ...(a.type === 'choice' ? { p: a.probabilities[a.choice] } : a.type === 'score' ? { p: a.confidence } : {}) };
+      emit({ type: 'decision', node, call, model: r.model, ms: r.ms, answers });
+      return r;
+    });
+  }
   function eventSample(sample, node, emit) {
     let calls = 0;
     const wrap = o => (!o || !Array.isArray(o.tools) || !o.tools.length ? o : {
@@ -1470,6 +1717,17 @@
       const f = (input, opts = {}) => { counter.calls++; return base(input, { ...(signal ? { signal } : {}), ...opts }); };
       f.json = (input, opts = {}) => { counter.calls++; return base.json(input, { ...(signal ? { signal } : {}), ...opts }); };
       return f;
+    }
+    decider(counter, signal) {
+      const base = this.env.decide;
+      if (!base) return makeDecide(null);
+      return makeDecide(async req => {
+        const wire = wireDecision(req);
+        counter.calls++;
+        const t0 = now();
+        const s = await base(JSON.stringify(wire), signal || null);
+        return fromWireDecision(JSON.parse(s), +(now() - t0).toFixed(1));
+      });
     }
     async build(ir, opts = {}) {
       ir = compile(ir);
@@ -1671,7 +1929,7 @@
     buildCtx(n, ir, outputs, counter, signal) {
       const firstOf = t => { const id = ir.nodes.find(x => x.phase === 'build' && x.out === t && outputs.has(x.id)); return id ? asArray(outputs.get(id.id)) : []; };
       return {
-        node: n, sample: this.sampler(counter, signal), tokens, slug, hash, clip,
+        node: n, sample: this.sampler(counter, signal), decide: this.decider(counter, signal), tokens, slug, hash, clip,
         log: (...a) => this.env.log && this.env.log(`[${n.id}]`, ...a),
         files: () => this.files(),
         get docs() { return firstOf('docs'); },
@@ -1832,6 +2090,7 @@
       const outputs = {}, trace = [], errors = [];
       const counter = { calls: 0 };
       const sample = engine.sampler(counter, opts.signal);
+      const decider = engine.decider(counter, opts.signal);
       const runId = ++this.runs;
       const detail = opts.detail || {};
       emit({ type: 'run', plan: ir.id, trigger, signals: s });
@@ -1841,6 +2100,7 @@
           entry.top = out.slice(0, 50).map(h => ({ id: h.id, score: h.score, why: h.why, parts: h.parts, reason: h.reason }));
           if (opts.onEvent) emit(hitsEvent(n.id, out, art, detail));
         }
+        if (n.out === 'decision' && out) entry.decision = Object.fromEntries(Object.entries(out).map(([id, a]) => [id, answerLine(a)]));
         if (n.out === 'context' && out && opts.onEvent) emit({ type: 'context', node: n.id, evidence: arr(out.evidence).map(e => ({ label: e.label, id: e.id })), bytes: out.bytes });
       };
       for (const n of ir.nodes) {
@@ -1853,6 +2113,22 @@
           return src.t === 'signal' && (portsOf(n).in[0] || '').startsWith('queries') ? this.queries(v) : v;
         });
         const input = (portsOf(n).in[0] || '') === 'hits*' ? inputs : inputs[0];
+        if (n.when) {
+          const decision = id => { const v = outputs[id]; return v && v.$decision ? v : null; };
+          let w;
+          try {
+            w = isLambda(n.when) ? { on: !!(await fnOf(n.when, `${n.id}.when`)(s, { decision, signals: s })), why: 'when λ' } : whenHolds(n.when, decision);
+          } catch (e) {
+            w = { on: true, why: `when failed (${e.message || e}) → run` };
+          }
+          if (!w.on) {
+            outputs[n.id] = whenSkipOutput(n, input);
+            const entry = { node: n.id, t: n.t, ms: 0, in: countOf(input), out: countOf(outputs[n.id]), status: 'skipped', skippedBy: 'when', notes: [`when: ${w.why}`] };
+            trace.push(entry);
+            emit({ type: 'node', node: n.id, component: n.t, phase: 'end', status: 'skipped', skippedBy: 'when', ms: 0, in: entry.in, out: entry.out, notes: entry.notes });
+            continue;
+          }
+        }
         const nd = hash([n.t, n.p, n.trigger, def.src || '']); // a redefined live component reruns
         const wants = trigger === 'submit' || triggerOf(n) === 'change';
         const m = this.memo.get(n.id);
@@ -1882,7 +2158,7 @@
         const sp = new Proxy(s, { get: (t, k) => { if (typeof k === 'string') reads[k] = stable(t[k]); return t[k]; } });
         const notes = [];
         const c0 = counter.calls;
-        const ctx = this.ctx(n, ir, art, sample, s, notes, opts, opts.onEvent ? emit : null);
+        const ctx = this.ctx(n, ir, art, sample, s, notes, opts, opts.onEvent ? emit : null, decider, outputs);
         const t1 = now();
         emit({ type: 'node', node: n.id, component: n.t, phase: 'start' });
         try {
@@ -1929,12 +2205,16 @@
       }
       return out;
     }
-    ctx(n, ir, art, sample, s, notes, opts, emit) {
+    ctx(n, ir, art, sample, s, notes, opts, emit, decider, outputs) {
       let chunkList = null; // all chunks, only for components that ask (ctx.chunks)
       const allChunks = () => chunkList || (chunkList = [...art.chunks.values()]);
       let lastText = ''; // ctx.emit takes the text so far; events carry what is new
       return {
-        node: n, sample: emit ? eventSample(sample, n.id, emit) : sample, signal: opts.signal, signals: Object.freeze({ ...s }), synonyms: art.synonyms, tokens, clip,
+        node: n, sample: emit ? eventSample(sample, n.id, emit) : sample,
+        decide: decider ? (emit ? eventDecide(decider, n.id, emit) : decider) : makeDecide(null),
+        // a classify node's answers in this run (null if it did not run): RAGWB-007 §3.3
+        decision: id => { const v = outputs ? outputs[String(id)] : null; return v && v.$decision ? v : null; },
+        signal: opts.signal, signals: Object.freeze({ ...s }), synonyms: art.synonyms, tokens, clip,
         index: name => art.indexes.get(String(name)) || null,
         indexNames: () => [...art.indexes.keys()],
         firstIndex: kind => [...art.indexes.values()].find(x => x.kind === kind) || null,
@@ -2378,6 +2658,8 @@ q.value = ${json(ir.signals.q || '')}; go();
     explain,
     workspace: (target, opts) => new Workspace(target, opts),
     engine: () => defaultEngine(),
+    // ask a decision model outside a plan run (RAGWB-007)
+    decide: makeDecide(req => defaultEngine().decider({ calls: 0 })(req)),
     configure(env) { env0 = Object.assign(env0, env); if (engine0) engine0.env = env0; return env0; },
     define,
     components: () => [...REG.values()].map(d => ({ type: d.type, phase: d.phase, in: d.in, out: d.out, trigger: d.trigger || 'change' })),
@@ -2397,7 +2679,7 @@ q.value = ${json(ir.signals.q || '')}; go();
     }
     for (const [fam, vs] of fams) {
       if (['source', 'parse', 'index', 'bake'].includes(fam) && !vs['']) { /* namespaces only */ }
-      const make = type => (...args) => { const c = normalize(type, args); return { $c: c.t, p: { ...c.p, ...(c.opts.id ? { id: c.opts.id } : {}), ...(c.opts.trigger ? { trigger: c.opts.trigger } : {}) } }; };
+      const make = type => (...args) => { const c = normalize(type, args); return { $c: c.t, p: { ...c.p, ...(c.opts.id ? { id: c.opts.id } : {}), ...(c.opts.trigger ? { trigger: c.opts.trigger } : {}), ...(c.opts.when != null ? { when: c.opts.when } : {}) } }; };
       const f = vs[''] ? make(vs['']) : {};
       for (const [v, type] of Object.entries(vs)) if (v) f[v] = make(type);
       if (fam === 'bake') continue;

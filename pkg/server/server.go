@@ -12,6 +12,8 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/go-go-golems/geppetto/pkg/decision"
+
 	"github.com/go-go-golems/rag-workbench/pkg/llm"
 	"github.com/go-go-golems/rag-workbench/pkg/ragjs"
 	"github.com/go-go-golems/rag-workbench/pkg/store"
@@ -20,7 +22,8 @@ import (
 
 // Config for the workbench server.
 type Config struct {
-	LLM        llm.Backend // nil disables sample (the page shows its own message)
+	LLM        llm.Backend       // nil disables sample (the page shows its own message)
+	Decider    decision.Provider // nil disables /_rt/decide (decision nodes fail with decide_unavailable)
 	Docs       *DocStore
 	PresetsDir string      // presets/index.json + *.js
 	CorpusDir  string      // *.md served as corpus.json {files:[{name,text}]}
@@ -51,10 +54,11 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /_rt/sample", s.handleSample)
 	mux.HandleFunc("POST /_rt/sample/{call}/tools/{use}", s.handleSampleTool)
 	mux.HandleFunc("POST /_rt/sample/{call}/cancel", s.handleSampleCancel)
+	mux.HandleFunc("POST /_rt/decide", s.handleDecide)
 	mux.HandleFunc("POST /_rt/db/{op}", s.handleDB)
 	s.appsRoutes(mux)
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, map[string]any{"ok": true, "llm": s.LLM != nil, "apps": s.Apps != nil})
+		writeJSON(w, map[string]any{"ok": true, "llm": s.LLM != nil, "decide": s.Decider != nil, "apps": s.Apps != nil})
 	})
 	return mux
 }

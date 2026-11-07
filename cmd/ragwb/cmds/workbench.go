@@ -30,6 +30,10 @@ func NewWorkbenchCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			decider, err := Decider(cmd.Context())
+			if err != nil {
+				return err
+			}
 			if dbPath == "" {
 				dbPath = DefaultDBPath()
 			}
@@ -46,7 +50,7 @@ func NewWorkbenchCommand() *cobra.Command {
 				return err
 			}
 			defer apps.Close()
-			s := server.New(server.Config{LLM: backend, Docs: docs, PresetsDir: presets, CorpusDir: corpus, Apps: apps})
+			s := server.New(server.Config{LLM: backend, Decider: decider, Docs: docs, PresetsDir: presets, CorpusDir: corpus, Apps: apps})
 			ln, err := net.Listen("tcp", addr)
 			if err != nil {
 				return err
@@ -56,7 +60,7 @@ func NewWorkbenchCommand() *cobra.Command {
 			if backend != nil {
 				llmName = DescribeLLM(backend)
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "ragwb workbench on http://%s  (llm: %s, db: %s, apps: %s)\n", ln.Addr(), llmName, dbPath, apps.Dir)
+			fmt.Fprintf(cmd.OutOrStdout(), "ragwb workbench on http://%s  (llm: %s, decide: %s, db: %s, apps: %s)\n", ln.Addr(), llmName, DescribeDecider(decider), dbPath, apps.Dir)
 			ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt)
 			defer stop()
 			go func() {

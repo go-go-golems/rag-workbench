@@ -8,7 +8,7 @@ require (
 	github.com/bmatcuk/doublestar/v4 v4.10.0
 	github.com/dop251/goja v0.0.0-20261103151521-97b96e1e55f5
 	github.com/dop251/goja_nodejs v0.0.0-20260918173711-b481721df8a2
-	github.com/go-go-golems/geppetto v0.13.13
+	github.com/go-go-golems/geppetto v0.14.0
 	github.com/go-go-golems/glazed v1.4.3
 	github.com/go-go-golems/go-go-goja v0.10.7
 	github.com/mattn/go-sqlite3 v1.14.42

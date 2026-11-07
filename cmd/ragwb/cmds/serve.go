@@ -52,6 +52,10 @@ func NewServeCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			decider, err := Decider(cmd.Context())
+			if err != nil {
+				return err
+			}
 			embedder, embedCache, err := Embedder()
 			if err != nil {
 				return err
@@ -98,7 +102,7 @@ func NewServeCommand() *cobra.Command {
 				if verbs != nil {
 					loader = verbs.RequireLoader()
 				}
-				factory, err := runner.NewFactory(runner.Config{SourceLoader: loader, Roots: Roots(base), Base: base, JSComponents: JSComponents(), IndexBackend: IndexBackend(), LLM: backend, BuildCalls: BuildCalls(), FullBuild: FullBuild(), Embedder: embedder, EmbedCache: embedCache, Artifacts: artStore, Timing: rec, SourceDigestTTL: sourceTTL(watch)})
+				factory, err := runner.NewFactory(runner.Config{SourceLoader: loader, Roots: Roots(base), Base: base, JSComponents: JSComponents(), IndexBackend: IndexBackend(), LLM: backend, Decider: decider, BuildCalls: BuildCalls(), FullBuild: FullBuild(), Embedder: embedder, EmbedCache: embedCache, Artifacts: artStore, Timing: rec, SourceDigestTTL: sourceTTL(watch)})
 				if err != nil {
 					return err
 				}
@@ -124,7 +128,7 @@ func NewServeCommand() *cobra.Command {
 				return err
 			}
 			srv := &http.Server{Handler: rs.Handler(), ReadHeaderTimeout: 10 * time.Second}
-			fmt.Fprintf(cmd.OutOrStdout(), "ragwb serve: llm %s\n", DescribeLLM(backend))
+			fmt.Fprintf(cmd.OutOrStdout(), "ragwb serve: llm %s · decide %s\n", DescribeLLM(backend), DescribeDecider(decider))
 			for _, a := range opened {
 				fmt.Fprintf(cmd.OutOrStdout(), "ragwb serve: http://%s/apps/%s/\n", ln.Addr(), a.Name)
 				if n := len(a.Verbs()); n > 0 {

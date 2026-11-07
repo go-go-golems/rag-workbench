@@ -1,0 +1,95 @@
+{
+  "build": {
+    "ok": true,
+    "ms": 516.5,
+    "errors": [],
+    "nodes": [
+      {
+        "id": "files",
+        "type": "source.files",
+        "count": 11,
+        "ms": 14.9,
+        "reused": false,
+        "deferred": 0
+      },
+      {
+        "id": "parse",
+        "type": "parse.markdown",
+        "count": 11,
+        "ms": 6.9,
+        "reused": false,
+        "deferred": 0
+      },
+      {
+        "id": "chunks",
+        "type": "chunk.sections",
+        "count": 462,
+        "ms": 7,
+        "reused": false,
+        "deferred": 0
+      },
+      {
+        "id": "ix-text",
+        "type": "index.bm25",
+        "count": 462,
+        "ms": 87,
+        "reused": false,
+        "deferred": 0
+      }
+    ]
+  },
+  "run": {
+    "trigger": "submit",
+    "signals": {
+      "q": "how does the rebalance law preserve placements?",
+      "k": 5
+    },
+    "ms": 1091.1,
+    "calls": 3,
+    "errors": [],
+    "top": [
+      {
+        "id": "project-report-pbui-workbench-core-a-headless-engine-a-pure-planner-and-the-hard-cutover-of-the-react-shell#5-9-the-rebalance-law",
+        "score": 0.9988,
+        "doc": "PBUI Workbench Core: A Headless Engine, a Pure Planner, and the Hard Cutover of the React Shell",
+        "heading": "5. The core's modules › 5.9 The rebalance law",
+        "reason": "p=1.00"
+      },
+      {
+        "id": "project-report-pbui-workbench-core-a-headless-engine-a-pure-planner-and-the-hard-cutover-of-the-react-shell#13-conclusion",
+        "score": 0.9928,
+        "doc": "PBUI Workbench Core: A Headless Engine, a Pure Planner, and the Hard Cutover of the React Shell",
+        "heading": "13. Conclusion",
+        "reason": "p=0.99"
+      },
+      {
+        "id": "project-report-pbui-workbench-core-a-headless-engine-a-pure-planner-and-the-hard-cutover-of-the-react-shell#7-verification-2",
+        "score": 0.99,
+        "doc": "PBUI Workbench Core: A Headless Engine, a Pure Planner, and the Hard Cutover of the React Shell",
+        "heading": "7. Verification",
+        "reason": "p=0.99"
+      },
+      {
+        "id": "project-report-pbui-workbench-core-a-headless-engine-a-pure-planner-and-the-hard-cutover-of-the-react-shell#intro-2",
+        "score": 0.9632,
+        "doc": "PBUI Workbench Core: A Headless Engine, a Pure Planner, and the Hard Cutover of the React Shell",
+        "heading": "",
+        "reason": "p=0.96"
+      },
+      {
+        "id": "project-report-pbui-workbench-core-a-headless-engine-a-pure-planner-and-the-hard-cutover-of-the-react-shell#9-5-the-agents-workbench-tools-on-the-command-vocabulary-2",
+        "score": 0.8093,
+        "doc": "PBUI Workbench Core: A Headless Engine, a Pure Planner, and the Hard Cutover of the React Shell",
+        "heading": "9. Phase 8: every consumer on the core, and documents for what tiles bind › 9.5 The agent's workbench tools on the command vocabulary",
+        "reason": "p=0.81"
+      }
+    ],
+    "trace": [
+      "route ran 335.3ms 0→1",
+      "text ran 1.8ms 1→20",
+      "rerank ran 752.6ms 20→5"
+    ],
+    "answer": null
+  },
+  "pending": []
+}
