@@ -458,3 +458,45 @@ The original goldens saturated hit@5, so I added a corpus-relative challenge tha
 
 ### Technical details
 - `--threshold` changes only the filtered plan and is scaled from integer percent to probability. The evaluator runs with the submit trigger, so decision nodes are executed. The source receipt contains deterministic fake results, not model calibration.
+
+## Step 9: Measure the challenge with the configured decision provider
+
+The user explicitly approved sending the evaluation questions and bundled report excerpts to the configured Pi decision provider. Repeated the challenge with the provider at three filter thresholds and recorded the outputs in `sources/07-challenge-live.txt`.
+
+### Prompt Context
+**User prompt (verbatim):** "yes you may"
+**Assistant interpretation:** The user approved the previously described external transfer of challenge questions and report excerpts for live calibration.
+**Prior commit:** `786a733` adds the challenge and its offline baseline.
+
+### What I did
+- Ran the lexical and filtered plans at threshold 0.5, then filtered in separate runs at 0.3 and 0.7. Each filtered run used 40 decision calls.
+- Saved the command outputs and checked off the harder evaluation task in the ticket.
+
+### Why
+- Fake-provider results establish wiring but do not measure the real model. Rejection, false rejection and ranking must be considered together when choosing a threshold.
+
+### What worked
+- With `GOWORK=/tmp/ragwb-resume.work GOCACHE=/tmp/geppetto-bound-go-cache GOFLAGS=-buildvcs=false GOPROXY=off`, the command `go run ./cmd/ragwb --decide pi --no-store verbs --dir examples/apps/reports reports challenge --names lexical,filtered --threshold 50` succeeded with network access.
+- On 12 answerable and 8 corpus-unanswerable cases, filtered at 0.3 and 0.5 rejected 3/8 negatives; 0.7 rejected 4/8. Each returned some passages for all 12 positives and had hit@5 0.833.
+- Filtered MRR was 0.607, 0.653 and 0.639 at 0.3, 0.5 and 0.7 respectively. The lexical baseline had MRR 0.611 and rejected 0/8 negatives.
+
+### What didn't work
+- Nothing failed in the approved live runs. The previous restricted-network failure and automatic review rejection are recorded in Step 8.
+
+### What I learned
+- This small challenge exposes a remaining false-acceptance problem: even at 0.7, four unanswerable cases returned passages. No threshold is justified as a general production setting by these samples alone.
+
+### What was tricky to build
+- The three thresholds were evaluated in separate live executions, not against one fixed set of saved probabilities. Observed differences can reflect model variability as well as the threshold.
+
+### What warrants a second pair of eyes
+- Assess the eight negative labels and the consequences of returning partially relevant passages for questions whose requested detail is absent; passage relevance is not the same as answerability.
+
+### What should be done in the future
+- Expand and independently label the dataset, record model identity and score distributions, and evaluate thresholds on fixed model outputs before making calibration claims.
+
+### Code review instructions
+- Read the live output in `sources/07-challenge-live.txt` and compare the question labels in `examples/apps/reports/lib/challenge.js`. Reproduction sends questions and excerpts to the configured provider and requires its credentials and network access.
+
+### Technical details
+- Runs were independent; each filtered invocation made 40 decision calls. No generated answers were scored. Rejection means the retrieval plan returned zero passages, not that an answer model abstained.

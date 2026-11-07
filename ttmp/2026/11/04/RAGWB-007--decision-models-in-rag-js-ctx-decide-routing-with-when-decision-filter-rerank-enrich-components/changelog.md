@@ -24,3 +24,7 @@ Verify when edits across raw/component/lambda/replace cases and add a tested dec
 ## 2026-11-06
 
 Add corpus-relative challenge evaluation and offline ranking/rejection baseline; live calibration requires approval for external report excerpts.
+
+## 2026-11-06
+
+Measure the harder challenge against the approved Pi decision provider at thresholds 0.3, 0.5 and 0.7; record ranking and rejection results.
