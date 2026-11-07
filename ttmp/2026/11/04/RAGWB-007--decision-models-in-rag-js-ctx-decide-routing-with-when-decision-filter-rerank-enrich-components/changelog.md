@@ -28,3 +28,7 @@ Add corpus-relative challenge evaluation and offline ranking/rejection baseline;
 ## 2026-11-06
 
 Measure the harder challenge against the approved Pi decision provider at thresholds 0.3, 0.5 and 0.7; record ranking and rejection results.
+
+## 2026-11-06
+
+Synchronize shared workspace with Geppetto v0.14.0 and the resumed workbench branch; verify build and focused tests.

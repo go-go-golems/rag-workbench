@@ -500,3 +500,53 @@ The user explicitly approved sending the evaluation questions and bundled report
 
 ### Technical details
 - Runs were independent; each filtered invocation made 40 decision calls. No generated answers were scored. Rejection means the retrieval plan returned zero passages, not that an answer model abstained.
+
+## Step 10: Synchronize the shared workspace and inspect vault-search readiness
+
+Updated the parent `go.work` to use the existing Geppetto release checkout at v0.14.0 and this resumed rag-workbench checkout. Investigated the existing parc example and tested a local-only server on the actual vault to ground the production advice.
+
+### Prompt Context
+**User prompt (verbatim):** "yes, update geppetto and stuff.\n\nTHen, analyze what it would take for us to build a UI for searching the vaultl, and how to index the vault regularly on triggers, and how to put this into production. Study and then tell me what you advise"
+**Assistant interpretation:** Finish the previously proposed workspace integration and review preparation, and study existing vault functionality, refresh, deployment and gaps.
+**Inferred user intent:** A practical recommendation based on the actual vault and implementation.
+
+### What I did
+- Changed the shared, untracked parent `go.work` from `./geppetto` and `./rag-workbench` to `./geppetto-bound-connections` and `./rag-workbench-resume`, leaving other workspace modules unchanged. The former checkout remains on its prior task branch; the latter Geppetto checkout is at tag v0.14.0.
+- Verified the selected module path with `go list -m` and built the workbench and its focused routing/challenge tests under the ordinary shared workspace.
+- Examined `examples/apps/parc`, serve, watch, runtime refresh, source manifests, artifacts, GUI and the vault's ignore file. Counted vault Markdown and surveyed syntax without printing note content.
+- Started a localhost-only `ragwb serve --watch 30s` in tmux against the real vault, with a temporary local artifact store and no model providers. Queried health, app shell and search, then stopped it using `lsof-who`.
+
+### Why
+- A workspace can silently override the released dependency in `go.mod`; validating the actual workspace selection ensures the integration is real.
+- Existing code and measured behavior provide a better production starting point than designing a replacement from assumptions.
+
+### What worked
+- `go env GOWORK` points to the parent workspace; `go list -m -f '{{.Path}} {{.Dir}}' github.com/go-go-golems/geppetto` points to `geppetto-bound-connections`, whose HEAD is v0.14.0.
+- `GOCACHE=/tmp/geppetto-bound-go-cache GOPROXY=off GOFLAGS=-buildvcs=false go build ./...` passed; focused `go test ./pkg/ragjs -run '^(TestReportsChallenge.*|TestWhenInPlanEdits|TestDecisionRoutingPreset)$' -count=1` passed.
+- Full suite passed with local test sockets permitted and a temporary store: `GOCACHE=/tmp/geppetto-bound-go-cache RAGWB_STORE=/tmp/ragwb-test-suite-store GOPROXY=off GOFLAGS=-buildvcs=false go test ./...`.
+- Cold vault build: 86,395 chunks, 24.831 s build, 25.09 s open, temporary artifact store 688 MiB. Health and shell returned HTTP 200; one search returned HTTP 200 in 32 ms. This is a single local sample, not a load test.
+
+### What didn't work
+- With the default cache, `go build ./...` and the focused test could not write `/home/manuel/.cache/go-build/...: read-only file system`; using the writable temporary cache fixed them.
+- Both default and custom tmux sockets failed inside the sandbox with `Operation not permitted`; escalated execution allowed the localhost-only test.
+- An initial sandboxed `go test ./...` could not create the default `/home/manuel/.ragwb/store` and tests using httptest failed with `socket: operation not permitted`. These are sandbox restrictions, not evidence the full suite passes.
+
+### What I learned
+- The parc app already supplies a lexical search UI, facets and a section viewer; `serve --watch` polls for changes and requests incremental refresh. The implementation defaults to loopback and explicitly has no authentication.
+- Source change detection hashes paths, sizes and mtimes rather than contents on each poll; a same-size edit preserving mtime needs reconciliation. The example hardcodes its vault path, does not use the vault's `.vault-ignore` file, excludes all `ttmp`, and covers Markdown rather than attachment contents.
+- The server logs query text unless `--quiet` is set. The indexes and cached chunks contain vault content and require the same protection as the source.
+
+### What was tricky to build
+- Keep the existing worktree branches intact while changing which checkouts the shared workspace resolves. The parent workspace file is outside either repository and therefore is not part of the PR.
+
+### What warrants a second pair of eyes
+- Deployment access control, exclusion policy and Obsidian-specific rendering and links need explicit design. A full-vault search result must be checked after edits, deletes and renames under concurrent query load.
+
+### What should be done in the future
+- Evaluate metadata/content freshness failures, build and query latency under concurrent edits, index retention and recovery, and a representative set of vault queries before production.
+
+### Code review instructions
+- Check `examples/apps/parc/lib/corpus.js`, `pkg/natives/sourcedir.go`, `cmd/ragwb/cmds/serve.go` and `pkg/runner/serve_watch_test.go`; see the recorded commands above.
+
+### Technical details
+- A filesystem survey excluding hidden/tooling/attachment directories found 2,299 Markdown files, about 80.7 MB of text, 1,895 with frontmatter, 1,417 with wiki links and 53 with embedded wiki links. Survey inclusion is approximate and differs from the app's exact globs.
