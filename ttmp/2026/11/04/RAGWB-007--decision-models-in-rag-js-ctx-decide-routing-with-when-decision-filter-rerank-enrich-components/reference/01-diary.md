@@ -410,3 +410,51 @@ Added the requested workbench preset. It classifies a question on submit, runs r
 
 ### Technical details
 - Preset requires `--decide pi` (or fake) and an LLM backend. Both gated retrieval nodes and reranking share `route.needs`; missing decisions follow the engine's existing fail-open policy.
+
+## Step 8: Build a harder reports challenge and measure the offline baseline
+
+The original goldens saturated hit@5, so I added a corpus-relative challenge that separates retrieval ranking from rejection. Twelve answerable questions point to an expected document and section; eight near-topic questions ask for details absent from the bundled reports. The new command can compare plans, vary the filtering threshold and inspect individual cases.
+
+### Prompt Context
+**User prompt (verbatim):** "do 2, 3, 4. commit at appropriate intervals and keep a detailed diary as you work (using the diary format from the skill)"
+**Assistant interpretation:** Complete a more discriminating evaluation, including rejection and ranking measurements, and record how to reproduce it.
+**Prior commits:** `75c9920` and `37acafc` implement conditional plan edits and the routing preset.
+
+### What I did
+- Added `examples/apps/reports/lib/challenge.js` with answerable section labels and corpus-unanswerable cases. Checked the distinctive absent terms against every bundled corpus file.
+- Added `reports challenge`, which scores lexical, fused, graded and filtered plans, accepts the filter threshold in percent and can output case-level results.
+- Counted false rejections of answerable queries and false acceptances of unanswerable queries separately. Provider errors, unsupported triggers and labels that match no section abort evaluation.
+- Added focused runtime tests for all labels, metrics, invalid triggers and missing-provider errors; documented usage and limits in the reports README.
+- Recorded the complete fake-provider comparison in `sources/06-challenge-fake.txt`.
+
+### Why
+- A false acceptance is not visible in ordinary answerable-only retrieval metrics. An evaluation that interprets provider failure as an empty successful result would overstate rejection quality.
+- Empty output for a question with a labeled relevant section is tracked as a false rejection, so a higher rejection rate cannot be assessed in isolation.
+
+### What worked
+- Offline command: `GOWORK=/tmp/ragwb-resume.work GOCACHE=/tmp/geppetto-bound-go-cache GOFLAGS=-buildvcs=false GOPROXY=off go run ./cmd/ragwb --decide fake --no-store verbs --dir examples/apps/reports reports challenge --names lexical,fused,graded,filtered --threshold 50`.
+- Fake lexical: hit@5 0.833, MRR 0.611, 0/8 rejected, 0/12 false rejections. Fake filtered: hit@5 0.417, MRR 0.333, 2/8 rejected, 1/12 false rejections, 40 decision calls. The fake is deterministic and these numbers only validate the test setup.
+- `GOWORK=/tmp/ragwb-resume.work GOCACHE=/tmp/geppetto-bound-go-cache GOFLAGS=-buildvcs=false GOPROXY=off go test ./pkg/ragjs -run '^TestReportsChallenge' -count=1` passed.
+
+### What didn't work
+- A first test run failed because the Go test result struct lacked the JSON tag for `false_accepts`; corrected the decoding and reran successfully.
+- A run with `--decide pi` returned `systemone transport failed: decision provider unavailable`. A network-enabled retry was rejected by automatic approval review because it would send report excerpts to the configured external provider without explicit approval for that data transfer. No live calibration result was obtained.
+
+### What I learned
+- This set is harder than the earlier hit@5-saturated goldens even for lexical retrieval. The fake filter reduces both accepted distractors and answerable retrieval; its behavior should not be generalized to a real model.
+- Unanswerable means unanswerable from the provided corpus. The negative label requires review if the corpus changes.
+
+### What was tricky to build
+- Existing evaluation infrastructure scores ranking but does not measure rejection. The challenge runs negatives separately and treats any execution error as an error, not a successful rejection.
+
+### What warrants a second pair of eyes
+- Check the hand-labeled sections and the corpus-relative negative assumptions before treating the sample as a model benchmark. It is small and is not a statistically robust evaluation.
+
+### What should be done in the future
+- With explicit approval for external transfer of the questions and excerpts, repeat with a real decision provider and compare several thresholds before selecting one.
+
+### Code review instructions
+- Read `examples/apps/reports/lib/challenge.js`, `examples/apps/reports/evals.js`, and `pkg/ragjs/challenge_test.go`. Follow `examples/apps/reports/README.md` for reproduction and case-level inspection.
+
+### Technical details
+- `--threshold` changes only the filtered plan and is scaled from integer percent to probability. The evaluator runs with the submit trigger, so decision nodes are executed. The source receipt contains deterministic fake results, not model calibration.
