@@ -278,3 +278,45 @@ The original rag-workbench checkout has its common Git directory outside the wri
 - Working clone: /home/manuel/workspaces/2026-11-02/rag-workbench/rag-workbench-resume.
 - Original source branch: task/ragwb-007-decision-models; source head: 7a00da6.
 - Proposed version: v0.14.0 (not yet tagged or published at this checkpoint).
+
+## Step 5: Release Geppetto and update the dependency
+
+The user enabled an escalation-capable session. Fetched upstream main and tags successfully. The isolated cleanup branch tree matched upstream main exactly, so created `release/geppetto-v0.14.0` directly from `upstream/main` instead of replaying already merged commits. `make tag-minor` created v0.14.0 and `make release` pushed the tag; the Go proxy resolved it successfully.
+
+### Prompt Context
+**User prompt:** See Step 4. **Follow-up:** "ok try again".
+**Assistant interpretation:** Retry the authorized network operations and continue the dependency integration.
+**Inferred user intent:** Use a published release rather than an unreleased workspace dependency.
+
+### What I did
+- `git fetch upstream main --tags`; verified identical source trees.
+- Created the release branch from upstream main, configured the release origin, ran `make tag-minor` and `make release`.
+- Ran `GOWORK=off go get github.com/go-go-golems/geppetto@v0.14.0` in the isolated rag-workbench checkout.
+
+### Why
+- The minor release includes intentionally breaking constructor changes; the dependency must resolve independently of go.work.
+
+### What worked
+- Tag v0.14.0 was pushed; `go list -m` resolved `github.com/go-go-golems/geppetto v0.14.0`.
+- `go get` upgraded the module from v0.13.13 to v0.14.0.
+
+### What didn't work
+- No new failures observed in this step. Earlier DNS restrictions are recorded in Step 4.
+
+### What I learned
+- The published main and local implementation had identical trees, making a new branch from main sufficient without replaying duplicated connector-created commits.
+
+### What was tricky to build
+- The release target pushes all local tags, so fetched upstream tags first and set origin to the real upstream repository.
+
+### What warrants a second pair of eyes
+- Validate the updated module without workspace substitution and check the release workflow result.
+
+### What should be done in the future
+- Complete dependency verification and the harder evaluation/routing work recorded in the ticket.
+
+### Code review instructions
+- Review go.mod/go.sum and run `GOWORK=off go test ./...` in a suitable environment.
+
+### Technical details
+- Release tag: v0.14.0. Workspace source checkout is unchanged; tests must explicitly disable workspace substitution to validate the released module.
