@@ -17,6 +17,7 @@ import (
 
 	"github.com/bmatcuk/doublestar/v4"
 	"github.com/dop251/goja"
+	"github.com/go-go-golems/rag-workbench/pkg/vaultignore"
 )
 
 // SourceDir is the `source.dir` build component: a recursive directory source.
@@ -58,11 +59,14 @@ const defaultMaxBytes = 4 << 20
 func (s *SourceDir) Name() string { return "source.dir" }
 
 type dirParams struct {
-	root     string
-	include  []string
-	exclude  []string
-	maxBytes int64
-	skipHTML bool
+	root        string
+	include     []string
+	exclude     []string
+	maxBytes    int64
+	skipHTML    bool
+	vaultIgnore bool
+	ignore      *vaultignore.Ignore
+	ignoreBytes []byte
 }
 
 // FileRecord is one matched file.
@@ -96,6 +100,24 @@ func (s *SourceDir) params(p map[string]any) (dirParams, error) {
 		dp.include = []string{"**/*.md"}
 	}
 	dp.exclude = append(append([]string{}, DefaultExclude...), stringList(p["exclude"])...)
+	if enabled, _ := p["vaultIgnore"].(bool); enabled {
+		dp.vaultIgnore = true
+		ignorePath := filepath.Join(dp.root, ".vault-ignore")
+		if info, err := os.Lstat(ignorePath); err == nil && !info.Mode().IsRegular() {
+			return dp, fmt.Errorf("source.dir: .vault-ignore must be a regular file")
+		} else if err != nil && !os.IsNotExist(err) {
+			return dp, err
+		}
+		b, err := os.ReadFile(ignorePath)
+		if err != nil && !os.IsNotExist(err) {
+			return dp, err
+		}
+		dp.ignoreBytes = b
+		dp.ignore, err = vaultignore.Parse(strings.NewReader(string(b)))
+		if err != nil {
+			return dp, fmt.Errorf("source.dir: parse .vault-ignore: %w", err)
+		}
+	}
 	for _, pat := range append(append([]string{}, dp.include...), dp.exclude...) {
 		if !doublestar.ValidatePattern(pat) {
 			return dp, fmt.Errorf("source.dir: invalid glob %q", pat)
@@ -177,6 +199,9 @@ func matches(dp dirParams, fn func(rel, path string, info fs.FileInfo) error) er
 		if !d.Type().IsRegular() {
 			return nil // symlinks and devices are not followed
 		}
+		if dp.ignore != nil && dp.ignore.Match(rel, false) {
+			return nil
+		}
 		for _, pat := range dp.exclude {
 			if ok, _ := doublestar.Match(pat, rel); ok {
 				return nil
@@ -239,7 +264,7 @@ func (s *SourceDir) Digest(p map[string]any) (string, error) {
 	if s.DigestTTL <= 0 {
 		return s.digest(dp)
 	}
-	key := fmt.Sprintf("%s\x00%v\x00%v\x00%d\x00%v", dp.root, dp.include, dp.exclude, dp.maxBytes, dp.skipHTML)
+	key := fmt.Sprintf("%s\x00%v\x00%v\x00%d\x00%v\x00%v\x00%x", dp.root, dp.include, dp.exclude, dp.maxBytes, dp.skipHTML, dp.vaultIgnore, sha256.Sum256(dp.ignoreBytes))
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if c, ok := s.digests[key]; ok && time.Since(c.at) < s.DigestTTL {
@@ -259,6 +284,9 @@ func (s *SourceDir) Digest(p map[string]any) (string, error) {
 func (s *SourceDir) digest(dp dirParams) (string, error) {
 	h := sha256.New()
 	fmt.Fprintf(h, "%s\x00%v\x00%v\x00%d\x00%v\n", dp.root, dp.include, dp.exclude, dp.maxBytes, dp.skipHTML)
+	if dp.vaultIgnore {
+		h.Write(dp.ignoreBytes)
+	}
 	lines := []string{}
 	err := matches(dp, func(rel, _ string, info fs.FileInfo) error {
 		lines = append(lines, fmt.Sprintf("%s\x00%d\x00%d", rel, info.Size(), info.ModTime().UnixNano()))

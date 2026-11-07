@@ -766,7 +766,7 @@
       const r = rt.state.run || {};
       const list = h('ol', { class: 'g-results' });
       if (!hits.length) {
-        list.append(h('li', { class: 'g-empty', text: r.status === 'running' ? 'Searching…' : q ? 'No sections match. Try other words, or clear a filter.' : 'Type a question about the reports.' }));
+        list.append(h('li', { class: 'g-empty', text: r.status === 'running' ? 'Searching…' : q ? 'No sections match. Try other words, or clear a filter.' : (n.p.empty || 'Type a question about the reports.') }));
       }
       hits.slice(0, limit).forEach((hit, i) => {
         const c = rt.host.rag.chunk(hit.id);
@@ -832,12 +832,17 @@
       const id = rt.val(n.p.id, d);
       const c = id && rt.host.rag.chunk(id);
       if (!c) return h('div', { class: 'g-empty', text: 'Select a result to read the section.' });
+      const doc = n.p.obsidianVault && rt.host.rag.doc(c.docId);
+      const notePath = doc && doc.name;
+      const obsidian = notePath ? 'obsidian://open?vault=' + encodeURIComponent(n.p.obsidianVault) + '&file=' + encodeURIComponent(notePath) : null;
       const nb = rt.host.rag.neighbors ? rt.host.rag.neighbors(c.id) : { prev: null, next: null };
       const key = n.p.selectedKey || 'selected';
       return h('section', { class: 'g-chunk' },
         h('div', { class: 'g-card-h' }, h('span', { text: 'Section' }), h('span', { class: 'meta', text: `${c.tokens} tok · ${c.id.split('#')[1] || c.id}` })),
         h('div', { class: 'g-chunk-b' },
           h('div', { class: 'g-crumb', text: [c.title, ...c.headingPath].join(' › ') }),
+          notePath ? h('div', { class: 'g-crumb', text: notePath }) : null,
+          obsidian ? h('a', { href: obsidian, class: 'btn tiny' }, 'Open in Obsidian') : null,
           h('div', { class: 'g-md', html: md(c.text) }),
           h('div', { class: 'g-chunk-nav' },
             h('button', { type: 'button', class: 'btn tiny', disabled: !nb.prev, onclick: () => rt.set({ [key]: nb.prev }) }, '← prev'),

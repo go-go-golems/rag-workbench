@@ -132,3 +132,53 @@ func TestRelativeAllowlistEntry(t *testing.T) {
 		t.Fatalf("relative allowlist entry rejected: %v", err)
 	}
 }
+
+func TestSourceDirVaultIgnoreAndRefresh(t *testing.T) {
+	root := t.TempDir()
+	write := func(name, content string) {
+		t.Helper()
+		p := filepath.Join(root, name)
+		if err := os.MkdirAll(filepath.Dir(p), 0755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(content), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("visible.md", "# visible")
+	write("Secrets/hidden.md", "# secret")
+	write("Secrets/allowed.md", "# allowed")
+	write(".vault-ignore", "/Secrets/\n!Secrets/allowed.md\n")
+	src := &SourceDir{Roots: []string{root}, DigestTTL: time.Hour}
+	p := map[string]any{"root": root, "vaultIgnore": true}
+	files, _, err := src.Walk(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	names := map[string]bool{}
+	for _, f := range files {
+		names[f.Name] = true
+	}
+	if !names["visible.md"] || !names["Secrets/allowed.md"] || names["Secrets/hidden.md"] {
+		t.Fatalf("unexpected files: %v", names)
+	}
+	first, err := src.Digest(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	write(".vault-ignore", "/Secrets/\n")
+	second, err := src.Digest(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first == second {
+		t.Fatal("ignore change did not invalidate cached digest")
+	}
+	files, _, err = src.Walk(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(files) != 1 || files[0].Name != "visible.md" {
+		t.Fatalf("ignore change not applied: %+v", files)
+	}
+}

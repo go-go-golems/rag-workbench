@@ -53,7 +53,7 @@ func hashBytes(b []byte) string {
 }
 
 func (dp dirParams) key() string {
-	return fmt.Sprintf("%s\x00%v\x00%v\x00%d\x00%v", dp.root, dp.include, dp.exclude, dp.maxBytes, dp.skipHTML)
+	return fmt.Sprintf("%s\x00%v\x00%v\x00%d\x00%v\x00%v", dp.root, dp.include, dp.exclude, dp.maxBytes, dp.skipHTML, dp.vaultIgnore)
 }
 
 // readMatched reads one matched file and applies the skip rules, as Walk does.

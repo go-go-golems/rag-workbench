@@ -3,7 +3,7 @@
 // Dense/hybrid variants additionally need: --embed lunaroute
 const rag = require("ragwb");
 
-const VAULT = "~/code/wesen/go-go-golems/go-go-parc";
+const { VAULT, VAULT_NAME } = require("./config");
 // Tooling and noise found by the vault survey (RAGWB-001 analysis §4).
 const EXCLUDE = [".pi/**", "ttmp/**", ".trash/**", "**/_assets/**", "scripts/**", "Attachments/**"];
 
@@ -12,7 +12,7 @@ const EXCLUDE = [".pi/**", "ttmp/**", ".trash/**", "**/_assets/**", "scripts/**"
 function corpus(include, dense) {
   const inc = include && include.length ? include : ["**/*.md"];
   const lexical = rag.corpus("parc")
-    .from(rag.source.dir({ root: VAULT, include: inc, exclude: EXCLUDE }))
+    .from(rag.source.dir({ root: VAULT, include: inc, exclude: EXCLUDE, vaultIgnore: true }))
     .parse(rag.markdown())
     .chunk(rag.sections({ depth: 3, maxTokens: 450 }))
     .index("text", rag.bm25({ fields: { title: 3, headingPath: 2, text: 1 } }))
@@ -30,4 +30,4 @@ function plan(include, mode) {
   return p.filter.where({ field: "filters" }).limit();
 }
 
-module.exports = { rag, corpus, plan, VAULT, EXCLUDE };
+module.exports = { rag, corpus, plan, VAULT, VAULT_NAME, EXCLUDE };

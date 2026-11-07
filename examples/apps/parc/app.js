@@ -3,11 +3,12 @@
 // The plan is built once in the server's runtime (stored artifacts make that a load);
 // each keystroke runs only the live nodes there.
 const kit = require("ragwb/kit");
-const { plan } = require("./lib/corpus");
+const { plan, VAULT_NAME } = require("./lib/corpus");
 
 module.exports = {
   app: kit.searchApp(plan(null, "lexical"), {
-    id: "parc", title: "go-go-parc vault", placeholder: "Search the vault…",
-    facets: ["type", "tags", "status"], answer: false,
+    id: "parc", title: VAULT_NAME + " vault", placeholder: "Search the vault…", submitLabel: "Search",
+    facets: ["type", "tags", "status"], answer: false, obsidianVault: VAULT_NAME,
+    results: { empty: "Search the vault to find notes." },
   }),
 };

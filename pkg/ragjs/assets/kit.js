@@ -46,7 +46,7 @@
             if (facets) c.facets('filters', { fields: facets });
             c.results(o.results || {});
           }, { grow: 3 })
-          .col(c => { if (o.answer !== false) c.answer(); c.chunk(s => s.selected); }, { grow: 2 })));
+          .col(c => { if (o.answer !== false) c.answer(); c.chunk(s => s.selected, { obsidianVault: o.obsidianVault }); }, { grow: 2 })));
     },
   };
   root.kit = kit;

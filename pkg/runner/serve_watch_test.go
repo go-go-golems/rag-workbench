@@ -95,3 +95,69 @@ return { plan: rag.plan("w").over(c).signals({ q: "", k: 5 }).retrieve("text", {
 		t.Fatal("no superseded handles were closed")
 	}
 }
+
+func TestServeRefreshAppliesVaultIgnore(t *testing.T) {
+	root := t.TempDir()
+	write := func(name, contents string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(root, name), []byte(contents), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("public.md", "# Public\n\nordinarytext")
+	write("private.md", "# Private\n\nuniquesecretmarker")
+	write(".vault-ignore", "private.md\n")
+	appDir := t.TempDir()
+	script := fmt.Sprintf(`const c = rag.corpus("w").from(rag.source.dir({root:%q,vaultIgnore:true})).parse(rag.markdown()).chunk(rag.sections()).index("text",rag.bm25()); return {plan:rag.plan("w").over(c).signals({q:"",k:5}).retrieve("text",{k:10}).limit()};`, root)
+	file := filepath.Join(appDir, "w.wb.js")
+	if err := os.WriteFile(file, []byte(script), 0644); err != nil {
+		t.Fatal(err)
+	}
+	store, err := artifacts.Open(t.TempDir(), ArtifactNamespace(false))
+	if err != nil {
+		t.Fatal(err)
+	}
+	factory, err := NewFactory(Config{Roots: []string{root, appDir}, Base: appDir, Artifacts: store, SourceDigestTTL: time.Hour})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	app, err := OpenApp(ctx, factory, AppSpec{Name: "w", Path: file})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer app.Close()
+	search := func() bool {
+		t.Helper()
+		r, err := app.Run(ctx, json.RawMessage(`{"q":"uniquesecretmarker","k":5}`), "change", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var response struct {
+			Result struct {
+				Hits []json.RawMessage `json:"hits"`
+			} `json:"result"`
+		}
+		if err := json.Unmarshal([]byte(r.JSON), &response); err != nil {
+			t.Fatal(err)
+		}
+		return len(response.Result.Hits) > 0
+	}
+	if search() {
+		t.Fatal("excluded content appeared")
+	}
+	write(".vault-ignore", "")
+	if out, err := app.Refresh(ctx); err != nil || out == "null" {
+		t.Fatalf("refresh after inclusion: %s %v", out, err)
+	}
+	if !search() {
+		t.Fatal("newly included content missing")
+	}
+	write(".vault-ignore", "private.md\n")
+	if out, err := app.Refresh(ctx); err != nil || out == "null" {
+		t.Fatalf("refresh after exclusion: %s %v", out, err)
+	}
+	if search() {
+		t.Fatal("excluded content remains searchable")
+	}
+}
