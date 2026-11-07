@@ -16,3 +16,7 @@ Implemented phases 1-6: ctx.decide, classify/when, filter.decide/rerank.decide, 
 
 - /home/manuel/workspaces/2026-11-02/rag-workbench/rag-workbench/pkg/ragjs/assets/rag.js — Decision components and when
 - /home/manuel/workspaces/2026-11-02/rag-workbench/rag-workbench/pkg/ragjs/decide.go — Go bridge
+
+## 2026-11-06
+
+Verify when edits across raw/component/lambda/replace cases and add a tested decision-routing workbench preset.

@@ -363,3 +363,50 @@ Resumed after Geppetto v0.14.0 was published and rag-workbench built successfull
 
 ### Technical details
 - `/tmp/ragwb-resume.work` points to the isolated rag-workbench clone and the Geppetto release checkout. It is not committed.
+
+## Step 7: Exercise conditional edits and ship a routing preset
+
+The first continuation commit retained `when` on inserted and replaced nodes. Expanded verification to exercise raw specifications, operation-level options, component values, replacement with a new condition, replacement retaining the existing condition, lambda conditions, missing references, and preservation of the original IR. Each executable case checks the decision edge and actual run/skip outcome.
+
+Added the requested workbench preset. It classifies a question on submit, runs retrieval and decision reranking only when the reports are needed, and uses a direct answer otherwise. The shipped script is exercised in the Goja runtime using the bundled corpus and deterministic decision/LLM fakes; the test checks both a greeting and a report question and compiles the GUI.
+
+### Prompt Context
+**User prompt (verbatim):** "do 2, 3, 4. commit at appropriate intervals and keep a detailed diary as you work (using the diary format from the skill)"
+**Assistant interpretation:** Complete the harder evaluation set, conditional plan-edit support, and routing preset with validated checkpoints.
+**Inferred user intent:** Resume the actual RAG work without leaving partial routing behavior or undocumented changes.
+**Prior commit:** `75c9920` — preserve `when` in plan edits.
+
+### What I did
+- Added `TestWhenInPlanEdits` with six executable edit forms, decision-edge checks, a rejected missing reference, and an unchanged-original check.
+- Added `examples/presets/decision-routing.js` and registered it in `examples/presets/index.json`; its description states the required decision and LLM backends.
+- Added `TestDecisionRoutingPreset`, which reads the actual preset file, runs it over the bundled reports using fakes, checks the two paths and compiles its GUI.
+
+### Why
+- Routing is an execution property, not only a serialized node property. The checks exercise ordering and branch outcomes.
+- A discoverable preset makes the decision feature usable in the workbench, with the trace explaining skips.
+
+### What worked
+- `GOWORK=/tmp/ragwb-resume.work GOCACHE=/tmp/geppetto-bound-go-cache GOFLAGS=-buildvcs=false GOPROXY=off go test ./pkg/ragjs -run '^TestWhen(InPlanEdits|SurvivesInsertedPlanOperation)$' -count=1` passed.
+- The same environment with `go test ./pkg/ragjs -run '^TestDecisionRoutingPreset$' -count=1` passed, exercising the actual file and both routing outcomes.
+
+### What didn't work
+- No new failures observed in these checks.
+
+### What I learned
+- A component wrapper and a raw node take different paths through normalization. Both preserve the explicit decision dependency.
+
+### What was tricky to build
+- Test the actual preset without network calls while retaining the same host modules, GUI compiler, and corpus used by the workbench.
+
+### What warrants a second pair of eyes
+- Conditions on replacement intentionally remain unchanged when the replacement omits `when`; explicit new conditions replace them. Review whether a future edit operation should explicitly clear a condition.
+- The fake is deterministic and checks wiring; it does not establish decision-model quality or calibration.
+
+### What should be done in the future
+- Build and measure the harder answerable/unanswerable evaluation set, distinguishing ranking metrics from rejection metrics and model errors.
+
+### Code review instructions
+- Read `route_test.go`, `examples/presets/decision-routing.js` and its index entry. Run the two focused test commands above.
+
+### Technical details
+- Preset requires `--decide pi` (or fake) and an LLM backend. Both gated retrieval nodes and reranking share `route.needs`; missing decisions follow the engine's existing fail-open policy.

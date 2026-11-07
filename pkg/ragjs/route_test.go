@@ -2,6 +2,7 @@ package ragjs
 
 import (
 	"context"
+	"os"
 	"strings"
 	"testing"
 
@@ -177,5 +178,83 @@ func TestWhenSurvivesInsertedPlanOperation(t *testing.T) {
  })()`, &got)
 	if !got.When || got.Status != "when" {
 		t.Fatalf("inserted when not enforced: %+v", got)
+	}
+}
+
+// Edits must retain decision dependencies and execute the edited condition.
+func TestWhenInPlanEdits(t *testing.T) {
+	rt := newOptsRuntime(t, Options{Decide: &decide.Fake{}})
+	var got struct {
+		Rows []struct {
+			Name, Status  string
+			Edge, HasWhen bool
+		} `json:"rows"`
+		Invalid  string `json:"invalid"`
+		Original string `json:"original"`
+	}
+	evalJSON(t, rt, nil, `(async () => {
+  const rag = require('ragwb');
+  `+routeCorpus+`
+  const original = rag.compile(routed);
+  const cases = [
+   ['raw insert', [{op:'insert',id:'extra',in:['q'],node:{t:'retrieve',p:{index:'text',k:5},when:{decision:'route.strategy',in:['widgets']}}}], 'extra', 'when'],
+   ['option insert', [{op:'insert',id:'extra',in:['q'],node:{t:'retrieve',p:{index:'text',k:5}},when:{decision:'route.strategy',in:['widgets']}}], 'extra', 'when'],
+   ['component insert', [{op:'insert',id:'extra',in:['q'],node:rag.retrieve('text',{k:5,when:{decision:'route.strategy',in:['widgets']}})}], 'extra', 'when'],
+   ['replace condition', [{op:'replace',node:'widgetix',with:{t:'retrieve',p:{index:'text',k:5},when:{decision:'route.strategy',in:['law']}}}], 'widgetix', 'ran'],
+   ['preserve on replace', [{op:'replace',node:'widgetix',with:{t:'retrieve',p:{index:'text',k:5}}}], 'widgetix', 'when'],
+   ['lambda insert', [{op:'insert',id:'extra',in:['q'],node:{t:'retrieve',p:{index:'text',k:5},when:(s,ctx)=>ctx.decision('route').strategy.value==='widgets'}}], 'extra', 'when'],
+  ];
+  const rows=[];
+  for(const [name,ops,id,want] of cases){
+   const patched=rag.applyOps(original,ops);
+   const res=await rag.run(patched,{q:'rebalance law'},{trigger:'submit'});
+   const node=patched.nodes.find(n=>n.id===id), trace=res.trace.find(n=>n.node===id);
+   rows.push({name,status:trace.skippedBy||trace.status,hasWhen:!!node.when,
+    edge:patched.edges.some(e=>e[0]==='route'&&e[1]===id&&e[2]==='decision')});
+   if((trace.skippedBy||trace.status)!==want) throw Error(name+': '+JSON.stringify(trace));
+  }
+  let invalid='';try { rag.applyOps(original,[{op:'insert',id:'bad',in:['q'],node:{t:'retrieve',p:{index:'text'},when:{decision:'missing.x',min:0.5}}}]); } catch(e){ invalid=e.message; }
+  return JSON.stringify({rows,invalid,original:original.nodes.find(n=>n.id==='widgetix').when.in[0]});
+ })()`, &got)
+	for _, row := range got.Rows {
+		if !row.Edge || !row.HasWhen {
+			t.Fatalf("missing condition or decision edge: %+v", row)
+		}
+	}
+	if len(got.Rows) != 6 || !strings.Contains(got.Invalid, "does not exist") || got.Original != "widgets" {
+		t.Fatalf("unexpected edited plan state: %+v", got)
+	}
+}
+
+// Run the actual shipped preset with recording fakes, rather than duplicating its plan.
+func TestDecisionRoutingPreset(t *testing.T) {
+	src, err := os.ReadFile("../../examples/presets/decision-routing.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rt := newOptsRuntime(t, Options{Decide: &decide.Fake{}, Sample: &llm.Fake{}})
+	var got struct {
+		Greeting, Report struct {
+			Direct bool
+			Errors []string
+			Status map[string]string
+		}
+		App string
+	}
+	evalJSON(t, rt, map[string]any{"__files": readCorpus(t)}, `(async()=>{
+  const rag=require('ragwb'), gui=require('ragwb/gui'), kit=require('ragwb/kit');
+  rag.configure({files:()=>__files});
+  const preset=(function(){`+string(src)+`})();
+  const run=async q=>{const r=await rag.run(preset.plan,{q,k:8},{trigger:'submit'});return {direct:!!r.answer?.direct,errors:r.errors,status:Object.fromEntries(r.trace.map(t=>[t.node,t.skippedBy||t.status]))};};
+  return JSON.stringify({greeting:await run('hello there friend'),report:await run('rebalance law'),app:preset.app.compile().kind});
+ })()`, &got)
+	if got.App != "gui" || len(got.Greeting.Errors) > 0 || len(got.Report.Errors) > 0 {
+		t.Fatalf("preset failures: %+v", got)
+	}
+	if !got.Greeting.Direct || got.Greeting.Status["text"] != "when" {
+		t.Fatalf("greeting must skip retrieval: %+v", got.Greeting)
+	}
+	if got.Report.Direct || got.Report.Status["text"] != "ran" {
+		t.Fatalf("report question must retrieve: %+v", got.Report)
 	}
 }
