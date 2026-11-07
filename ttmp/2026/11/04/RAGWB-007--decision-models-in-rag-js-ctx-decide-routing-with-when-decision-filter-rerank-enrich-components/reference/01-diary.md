@@ -320,3 +320,46 @@ The user enabled an escalation-capable session. Fetched upstream main and tags s
 
 ### Technical details
 - Release tag: v0.14.0. Workspace source checkout is unchanged; tests must explicitly disable workspace substitution to validate the released module.
+
+## Step 6: Preserve routing conditions in plan edits
+
+Resumed after Geppetto v0.14.0 was published and rag-workbench built successfully with `GOWORK=off`. The user noted that normal workspace builds are also acceptable. Because this isolated clone is not listed in the parent workspace, `/tmp/ragwb-resume.work` selects the clone and the release checkout without changing the parent workspace.
+
+### Prompt Context
+**User prompt (verbatim):** "ok,  continue. you can build without GOORK=off i think. continue"
+**Assistant interpretation:** Continue the RAGWB-007 evaluation and routing follow-ups using an appropriate workspace.
+**Inferred user intent:** Return to product behavior and avoid unnecessary workspace restrictions.
+**Prior commit:** `11790da` bumps Geppetto to v0.14.0.
+
+### What I did
+- Carry `when` through component and raw node specifications in `specOf`, and normalize it on inserted or replaced nodes in `applyOp`.
+- Add `TestWhenSurvivesInsertedPlanOperation`, which executes a patched plan and checks the decision actually skips the inserted node.
+
+### Why
+- Conditional routing must remain effective when users edit a plan; retaining only a visible field without enforcing it would be insufficient.
+
+### What worked
+- `GOWORK=/tmp/ragwb-resume.work GOCACHE=/tmp/geppetto-bound-go-cache GOFLAGS=-buildvcs=false GOPROXY=off go test ./pkg/ragjs -run '^TestWhenSurvivesInsertedPlanOperation$' -count=1` passed.
+- Existing `TestClassifyAndWhenRoute` and `TestWhenCompile` passed in the same workspace.
+- Release-backed `GOWORK=off go build ./...` passed before this change.
+
+### What didn't work
+- No new failures observed.
+
+### What I learned
+- The component wrapper stores routing in `opts.when`; raw edit specifications expose it as `when`. Both must reach the same normalization step.
+
+### What was tricky to build
+- Keep an existing node's condition on replacement unless a new one is explicitly provided, while routing all new conditions through `normWhen` and graph finalization.
+
+### What warrants a second pair of eyes
+- Verify insertion and replacement behavior, particularly decision edges and lambda conditions.
+
+### What should be done in the future
+- Complete harder evaluation cases and the workbench routing preset, then validate and document the results.
+
+### Code review instructions
+- Read `specOf` and `applyOp` in `pkg/ragjs/assets/rag.js`; run the tests listed above.
+
+### Technical details
+- `/tmp/ragwb-resume.work` points to the isolated rag-workbench clone and the Geppetto release checkout. It is not committed.

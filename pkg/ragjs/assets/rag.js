@@ -1333,11 +1333,11 @@
   function normValue(v) { return clone(normParams(v)); }
   function specOf(nodeSpec) {
     if (!nodeSpec) throw new Error('missing node: {t, p}');
-    if (nodeSpec.$c) { const c = normalize(nodeSpec.$c, [nodeSpec]); return { t: c.t, p: c.p, trigger: c.opts.trigger, id: c.opts.id }; }
+    if (nodeSpec.$c) { const c = normalize(nodeSpec.$c, [nodeSpec]); return { t: c.t, p: c.p, trigger: c.opts.trigger, id: c.opts.id, when: c.opts.when }; }
     if (!REG.get(nodeSpec.t)) throw new Error(`unknown component '${nodeSpec.t}'`);
     const p = {};
     for (const [k, v] of Object.entries(nodeSpec.p || {})) p[k] = normValue(v);
-    return { t: nodeSpec.t, p, trigger: nodeSpec.trigger, id: nodeSpec.id };
+    return { t: nodeSpec.t, p, trigger: nodeSpec.trigger, id: nodeSpec.id, when: nodeSpec.when };
   }
   function applyOp(raw, op) {
     raw = { ...raw, nodes: raw.nodes.map(n => ({ ...n, in: [...n.in], p: clone(n.p) })), signals: { ...raw.signals }, outputs: { ...raw.outputs }, pinned: [...raw.pinned] };
@@ -1368,6 +1368,7 @@
         const s = specOf(op.with);
         n.t = s.t; n.p = s.p;
         if (s.trigger) n.trigger = s.trigger; else delete n.trigger;
+        if (s.when != null) n.when = normWhen(s.when, n.id);
         return raw;
       }
       case 'insert': {
@@ -1377,6 +1378,7 @@
         if (raw.nodes.find(n => n.id === id)) throw new Error(`node '${id}' already exists`);
         const node = { id, t: s.t, phase: def.phase, in: [], p: s.p };
         if (s.trigger || op.trigger) node.trigger = s.trigger || op.trigger;
+        if (s.when != null || op.when != null) node.when = normWhen(s.when != null ? s.when : op.when, id);
         if (op.after) {
           nodeOf(raw, op.after);
           node.in = [op.after];

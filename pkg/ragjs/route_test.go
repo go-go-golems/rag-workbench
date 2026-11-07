@@ -96,7 +96,7 @@ func TestWhenCompile(t *testing.T) {
 	rt := newOptsRuntime(t, Options{Decide: &decide.Fake{}})
 	var got struct {
 		Missing, NotDecision, BadKey string
-		DigestMoves              bool
+		DigestMoves                  bool
 	}
 	evalJSON(t, rt, nil, `(async () => {
 		const rag = require("ragwb");
@@ -158,5 +158,24 @@ func TestTraceFoldsDecisions(t *testing.T) {
 	}
 	if skipped["skippedBy"] != "when" || skipped["status"] != "skipped" {
 		t.Fatalf("skipped: %v", skipped)
+	}
+}
+
+func TestWhenSurvivesInsertedPlanOperation(t *testing.T) {
+	rt := newOptsRuntime(t, Options{Decide: &decide.Fake{}})
+	var got struct {
+		Status string `json:"status"`
+		When   bool   `json:"when"`
+	}
+	evalJSON(t, rt, nil, `(async () => {
+  const rag = require("ragwb");
+  `+routeCorpus+`
+  const ir = rag.compile(routed);
+  const patched = rag.applyOps(ir, [{op:'insert', id:'extra', node:{t:'retrieve', p:{index:'text',k:5}, when:{decision:'route.strategy',in:['widgets']}}, in:['q']}]);
+  const r = await rag.run(patched, {q:'rebalance law'}, {trigger:'submit'});
+  return JSON.stringify({when:!!patched.nodes.find(n=>n.id==='extra').when,status:r.trace.find(n=>n.node==='extra').skippedBy});
+ })()`, &got)
+	if !got.When || got.Status != "when" {
+		t.Fatalf("inserted when not enforced: %+v", got)
 	}
 }
