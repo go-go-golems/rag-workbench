@@ -12,3 +12,4 @@
 - [ ] Correct dotted store root and deterministic Pi model fallback <!-- t:51b3 -->
 - [ ] Delete replaced mechanisms, migrate examples and verify behavior and performance <!-- t:lj62 -->
 - [x] Test candidate intern-guide skill with three independent Sol-medium drafts and compare clarity and technical fidelity <!-- t:detn -->
+- [ ] Evaluate generic two-pass guidance with three Codex and two Opus-medium research-and-writing runs; compare whole-document clarity and correctness <!-- t:4sol -->

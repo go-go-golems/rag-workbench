@@ -294,3 +294,67 @@ After the user explicitly approved disclosure of candidate B and relevant source
 - **Limits:** this is a model-simulated newcomer review, not a human comprehension study. Claude ran no tests; source-based conclusions remain source-based. The report is preserved without endorsing every individual judgment or reconciling it with our prior review.
 - **Validation:** checked successful exit and completion marker, preserved report body exactly, recorded source/report hashes, and validated the docmgr report frontmatter and whitespace. No implementation or installed skill changed.
 - **Next action:** report completion to the user and stop. Any final guide revision or skill installation remains a separate decision.
+
+## Step 8: Freeze generic two-pass guidance and a five-writer experiment
+
+Prepared a second ticket-local skill candidate that applies across design domains. It replaces the first experiment's task-specific examples with general instructions about system research, reader orientation, entity scope/relationships, consequential transitions, evidence and a full-draft review before revision. Installed skills remain unchanged. The evaluation will assess consistency across every output, not merely choose one attractive document.
+
+### Prompt Context
+
+**User prompt (verbatim):**
+
+> the instructions and guidance update should be generic and apply to each possible design doc in general / at large, so we don't overindex on one specific task / design case.
+>
+> Now do the the second pass on guidance, and restart 3 codex subagents + 2 opus medium tmux agents to first read up on the design doc and the codebase to properly understand what things are about, and then write their own document. then review and let me know what you think.
+
+**User clarification (verbatim):**
+
+> yes this will prob have more variance, but it also will show us in all 3 cases the documents should be similarly well explained to a new developer
+
+**Assistant interpretation:** Prepare general reusable guidance; commission three independent Codex writers and two Opus-medium tmux writers; require research before drafting and saved second-pass notes before revision; compare full documents and technical accuracy, emphasizing minimum quality across the batch.
+
+**Inferred user intent:** Determine whether the instructions reliably teach a new developer, even when authors choose different organization and examples.
+
+### What I did
+
+- Created `scripts/02-general-guidance-experiment/` with a full candidate skill, shared neutral context, separate writer prompts, frozen evaluation plan and input hashes.
+- Removed domain-specific teaching examples from the generic skill. Added conditional/proportional guidance so unrelated designs do not acquire unnecessary lifecycle or persistence sections.
+- Required each writer to save research notes, a complete first draft, specific pre-revision review notes and a final guide in its exclusive directory.
+- Gave all writers the original design and source access, withholding earlier candidates, reviews and example answers. The evaluator's technical checks are separate from writer input.
+- Added one experiment task and a comparison document; implementation tasks remain open.
+
+### Why
+
+Research, drafting and diagnostic rereading serve different purposes. Separating artifacts makes it possible to inspect whether the second pass fixes substantive omissions rather than merely polishing sentences. Withholding prior answer material tests the general instructions more meaningfully on this project.
+
+### What worked
+
+All five assignments have disjoint output directories and the same substantive instructions. The prior successful Claude launch established the model identifier and external-service authorization; the new runners request `claude-opus-5-5 --effort medium` explicitly.
+
+### What didn't work
+
+No new launch attempted at this checkpoint. As before, explicit Codex model overrides require fresh context rather than a full-history fork; the common context packet supplies the authorized task consistently.
+
+### What I learned
+
+The success criterion is a quality floor across all writers, not a preferred document. Better organization in one candidate cannot hide recurring unexplained relationships in another.
+
+### What was tricky to build
+
+This round changes guidance, mandatory source study and writing procedure together, and includes two model families. It cannot isolate causal improvements from any single change. The original design still contains the same problems as prior rounds, but writers do not receive the earlier reviewers' solutions.
+
+### What warrants a second pair of eyes
+
+Check whether generic guidance remains proportionate and reusable, whether all writers inspect sufficient source, and whether new policy choices are labelled proposals rather than silently altering accepted requirements.
+
+### What should be done in the future
+
+Launch the five writers from this checkpoint, preserve their artifacts, read their entire final documents and inspect actual first-to-final changes. Report conclusions and stop; do not install the candidate or replace the original automatically.
+
+### Code review instructions
+
+Start with candidate `references/writing-style.md`, shared `context.md`, and `evaluation-plan.md`. Writer model configuration: three `gpt-6.1-sol` medium agents (continuing the user's original selection), two `claude-opus-5-5` medium CLI processes under tmux. No runtime implementation changes are part of this experiment.
+
+### Technical details
+
+Codex output directories are `writers/codex-a`, `codex-b`, `codex-c`; Claude output directories are `writers/opus-d`, `opus-e`. Each contains research.md, first-draft.md, review-notes.md and final.md when complete. Claude uses safe mode with Read/Glob/Grep/Write tools, no command execution, and writes a structured CLI result receipt. Raw prompts and model/session configuration remain in the experiment directory.
