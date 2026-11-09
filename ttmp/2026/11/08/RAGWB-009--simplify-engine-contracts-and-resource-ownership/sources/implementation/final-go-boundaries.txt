@@ -1,0 +1,4 @@
+ok  	github.com/go-go-golems/rag-workbench/pkg/server	2.345s
+ok  	github.com/go-go-golems/rag-workbench/pkg/rtenv	(cached)
+ok  	github.com/go-go-golems/rag-workbench/pkg/artifacts	0.237s
+ok  	github.com/go-go-golems/rag-workbench/pkg/llm/gepp	0.028s

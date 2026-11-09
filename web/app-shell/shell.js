@@ -25,6 +25,9 @@
   $('#sh-title').textContent = info.title;
   $('#sh-meta').textContent = `plan ${info.id} · ${info.stats.chunks} chunks · ${info.stats.indexes.join(', ')} · server-side session`;
 
+  let snapshotId = info.snapshotId;
+  let newestRun = 0;
+
   // ── cache of what the server sent
   const chunks = new Map(), nbs = new Map(), docs = new Map(), missing = new Set(), inflight = new Set();
   const absorb = p => {
@@ -34,10 +37,14 @@
   let rt = null;
   const rerender = () => { if (rt) rt.refresh(new Set([...Object.keys(rt.state), ...Object.keys(rt.der)])); };
   const fetchMiss = (kind, id) => {
-    const key = kind + '\0' + id;
+    const generation = snapshotId;
+    const key = generation + '\0' + kind + '\0' + id;
     if (missing.has(key) || inflight.has(key)) return;
     inflight.add(key);
-    fetch(api(`/${kind}?id=${encodeURIComponent(id)}`)).then(r => r.json()).then(p => {
+    fetch(api(`/${kind}?id=${encodeURIComponent(id)}&snapshotId=${encodeURIComponent(generation)}`)).then(async r => {
+      const payload=await r.json();if(!r.ok)throw new Error(payload.error?.message||'lookup failed');return payload;
+    }).then(p => {
+      if(generation!==snapshotId)return;
       if (kind === 'doc') { if (p) docs.set(id, p); else missing.add(key); }
       else { absorb(p); if (!chunks.has(id)) missing.add(key); else if (!nbs.has(id)) nbs.set(id, { prev: null, next: null }); } // no links: the chunk has no reading order
       if (!missing.has(key)) rerender();
@@ -46,11 +53,11 @@
   const chunk = id => { const c = chunks.get(id); if (!c && id) fetchMiss('chunk', id); return c || null; };
 
   // ── results: the engine's result plus the methods rag.js decorates it with
-  const decorate = result => {
+  const decorate = (result, records) => {
     const def = (k, v) => Object.defineProperty(result, k, { value: v, enumerable: false });
-    def('chunk', id => chunks.get(id) || null);
+    def('chunk', id => records[id] || null);
     def('top', (n = 5, from) => (from ? result.outputs[from] || [] : result.hits).slice(0, n).map(h => {
-      const c = chunks.get(h.id) || {};
+      const c = records[h.id] || {};
       return { id: h.id, score: h.score, doc: c.title, heading: (c.headingPath || []).join(' › '), ...(h.reason ? { reason: h.reason } : {}) };
     }));
     def('explain', id => rag.explain(result, typeof id === 'object' ? id.id : id));
@@ -94,6 +101,7 @@
   // o.onText(node, textSoFar) for LLM nodes; o.onEvent(event) for every engine event
   // (node start/end, hits, text deltas, tools, progress; RAGWB-004 §6.4)
   async function run(signals, o = {}) {
+    const request = ++newestRun;
     const trigger = o.trigger || 'change';
     const stream = (!!o.onText && trigger === 'submit') || !!o.onEvent;
     const t0 = performance.now();
@@ -119,9 +127,15 @@
       }
       if (!out) throw new Error('the run stream ended without a result');
     }
-    absorb(out);
-    showTiming(out.timing, performance.now() - t0, trigger);
-    return decorate(out.result);
+    if (request === newestRun) {
+      if (snapshotId !== out.result.snapshotId) {
+        snapshotId = out.result.snapshotId;
+        chunks.clear(); nbs.clear(); docs.clear(); missing.clear();
+      }
+      absorb(out);
+      showTiming(out.timing, performance.now() - t0, trigger);
+    }
+    return decorate(out.result, out.chunks || {});
   }
 
   const host = {

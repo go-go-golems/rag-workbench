@@ -45,8 +45,8 @@ func (p Persist) InstallEnv(vm *goja.Runtime, rag *goja.Object, env rtenv.Env) e
 		return nil
 	}
 	addCloser := env.AddCloser
-	if addCloser == nil {
-		addCloser = func(func() error) {}
+	if addCloser == nil || env.Resources == nil {
+		return fmt.Errorf("artifacts: resource registry is required")
 	}
 	mv, err := vm.RunString(recordsViewJS)
 	if err != nil {
@@ -63,6 +63,39 @@ func (p Persist) InstallEnv(vm *goja.Runtime, rag *goja.Object, env rtenv.Env) e
 		return fmt.Errorf("artifacts: JSON is not available")
 	}
 	a := vm.NewObject()
+	_ = a.Set("beginBuild", func() func() {
+		release, err := p.Store.BeginBuild()
+		if err != nil {
+			panic(vm.NewGoError(err))
+		}
+		managed, err := env.Resources.Lease(release)
+		if err != nil {
+			panic(vm.NewGoError(err))
+		}
+		return managed
+	})
+	_ = a.Set("describe", func(key, lineage string, deps []string) {
+		if err := p.Store.Describe(key, lineage, deps); err != nil {
+			panic(vm.NewGoError(err))
+		}
+	})
+	_ = a.Set("publish", func(slot, id string, roots []string) {
+		if err := p.Store.Publish(artifacts.Snapshot{ID: id, Slot: slot, Roots: roots}); err != nil {
+			panic(vm.NewGoError(err))
+		}
+	})
+	_ = a.Set("pin", func(keys []string) func() {
+		release, err := p.Store.Pin(keys)
+		if err != nil {
+			panic(vm.NewGoError(err))
+		}
+		managed, err := env.Resources.Lease(release)
+		if err != nil {
+			panic(vm.NewGoError(err))
+		}
+		return managed
+	})
+
 	// lineage index (RAGWB-003 §6.4): the previous stored output of "this node of this pipeline"
 	_ = a.Set("lineageLatest", func(lineage string) goja.Value {
 		e, err := p.Store.LineageLatest(lineage)
@@ -206,8 +239,7 @@ func (p Persist) InstallEnv(vm *goja.Runtime, rag *goja.Object, env rtenv.Env) e
 			if err != nil {
 				panic(vm.NewGoError(fmt.Errorf("stored artifact %s (%s) could not be opened: %w; delete it with `ragwb store prune --all`", key, m.Type, err)))
 			}
-			addCloser(r.Close)
-			view, err := mkView(goja.Undefined(), recordsObject(vm, r))
+			view, err := mkView(goja.Undefined(), ownResource(vm, env, recordsObject(vm, r), r))
 			if err != nil {
 				panic(err)
 			}
@@ -224,8 +256,7 @@ func (p Persist) InstallEnv(vm *goja.Runtime, rag *goja.Object, env rtenv.Env) e
 			if err != nil {
 				panic(vm.NewGoError(fmt.Errorf("stored artifact %s (%s) could not be opened: %w; delete it with `ragwb store prune --all`", key, m.Type, err)))
 			}
-			addCloser(r.Close)
-			view, err := mkView(goja.Undefined(), records2Object(vm, r))
+			view, err := mkView(goja.Undefined(), ownResource(vm, env, records2Object(vm, r), r))
 			if err != nil {
 				panic(err)
 			}
@@ -242,10 +273,9 @@ func (p Persist) InstallEnv(vm *goja.Runtime, rag *goja.Object, env rtenv.Env) e
 			if err != nil {
 				panic(vm.NewGoError(fmt.Errorf("stored artifact %s (%s) could not be opened: %w; delete it with `ragwb store prune --all`", key, m.Type, err)))
 			}
-			addCloser(ix.Close)
 			p.Timing.Add("store", m.Type, float64(time.Since(t0).Microseconds())/1000,
 				fmt.Sprintf("bleve · open %v · %.1f MB on disk", time.Since(t0).Round(time.Microsecond), float64(m.Size)/(1<<20)))
-			return bleveObject(vm, ix)
+			return ownResource(vm, env, bleveObject(vm, ix), ix)
 		}
 		m, data, err := p.Store.Load(key)
 		t1 := time.Now()

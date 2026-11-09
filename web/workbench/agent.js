@@ -78,7 +78,7 @@ Everything is reachable from code. The agent's eval code and the pipeline script
 |---|---|---|
 | build callback \`b => b.x()\` | once, while building | a builder |
 | build slot, e.g. \`.chunk((doc, ctx) => …)\` | at build, per item, cached by digest | item, build ctx |
-| \`rag.bake(ctx => value)\` | at build, once | \`{ docs, chunks }\` |
+| \`rag.bake({datasets:{docs:'parse'}}, ctx => value)\` | at build, once | \`{ datasets }\` |
 | live slot, e.g. \`.filter((s, ctx, hit) => …)\` | per query | signals \`s\`, ctx, input |
 
 Lambdas are stored as source and run **closed**: a free identifier throws. Pass values through signals, \`rag.bake\`, or params:
@@ -92,7 +92,7 @@ rag.corpus(id).from(rag.files('*.md')).parse(rag.markdown())
   .chunk('name', (doc, ctx) => [{ headingPath, text }])        // extra chunk stream
   .enrich('sem', (chunk, ctx) => value, { concurrency: 3, budget: { calls: 100 } })
   .enrich('sem', rag.enrich.llm(), { from: 'cards' })         // summary, questions, keywords; 1 quick call per chunk; from = a named stream
-  .synonyms(rag.bake(ctx => ({ phrase: ['expansion'] })))
+  .synonyms(rag.bake({datasets:{docs:'parse'}}, ctx => ({ phrase: ['expansion'] })))
   .index('text', rag.bm25({ fields: { title: 2, headingPath: 3, text: 1, 'sem.questions': 3 } }), { from: 'chunks' })
   .index('meta', rag.terms({ keys: ['type', 'tags'] }))
 \`\`\`
@@ -122,7 +122,7 @@ rag.plan(id).over(corpus).signals({ q: '', k: 8, filters: {} })
 Any param may be a live lambda \`s => value\`. Options on every step: \`{ id, trigger: 'change' | 'submit' }\`.
 Triggers: typing runs only \`change\` nodes; Enter runs everything. Skipped transforms pass their input through.
 Graph form: \`rag.graph(id, g => { g.over(c); const q = g.signal('q', ''); const a = g.node('a', rag.retrieve('text'), { from: q }); g.output('hits', a); })\`.
-Variants: \`plan.variant('lex', [{ op: 'remove', node: 'rerank' }])\`. Fragments: \`rag.fragment(id, (spec, p) => spec…)\`, \`plan.use(fragment, p)\`.
+Variants: \`plan.variant('lex', [{ op: 'remove', bypass: true, node: 'rerank' }])\`. Fragments: \`rag.fragment(id, (spec, p) => spec…)\`, \`plan.use(fragment, p)\`.
 Custom components: \`rag.define('boost.recent', { phase: 'live', in: 'hits', out: 'hits', params: {…}, run: (s, ctx, hits, p) => hits })\` then \`plan.boost.recent({…})\`.
 
 ## Compile, build, run
@@ -136,7 +136,7 @@ Custom components: \`rag.define('boost.recent', { phase: 'live', in: 'hits', out
 await ws.apply([
   { op: 'set', node: 'ix-text', path: 'fields.title', value: 4 },
   { op: 'insert', after: 'fuse', id: 'links', node: { t: 'expand.links', p: { decay: 0.5 } } },
-  { op: 'remove', node: 'rerank' },
+  { op: 'remove', bypass: true, node: 'rerank' },
   { op: 'replace', node: 'filter', with: { t: 'filter', p: { fn: '(s, ctx, hit) => hit.tokens > 40' } } },
   { op: 'wire', node: 'fuse', in: ['text', 'meta'] },
   { op: 'signal', key: 'k', value: 6 },

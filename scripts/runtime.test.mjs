@@ -22,7 +22,7 @@ test('bundle publishes only rag in a browser and uses CommonJS when supplied', (
   const common = runtime({ module: { exports: {} } });
   assert.equal(common.rag, undefined);
   assert.deepEqual(Object.keys(common.module.exports).sort(), Object.keys(browser.rag).sort());
-  assert.equal(browser.rag.components().length, 31);
+  assert.equal(browser.rag.components().length, 32);
 });
 
 test('separate evaluations isolate registration, default engine and request scopes', () => {
@@ -167,4 +167,163 @@ test('runtime source modules have explicit local imports and no dependency cycle
     visited.add(file);
   }
   for (const file of graph.keys()) visit(file);
+});
+
+test('graph rename rewrites declared decision and index references atomically', () => {
+  const context = runtime();
+  const result = vm.runInContext(
+    `(() => {
+    ${fixture}
+    const routed = plan.classify({id:'route',questions:{needs:{type:'noul',question:'Search?'}}})
+      .retrieve('text',{id:'gated',when:{decision:'route.needs',min:0.5}});
+    const original=rag.compile(routed);
+    const renamed=rag.applyOps(original,[{op:'rename',node:'route',to:'routing'},{op:'rename',node:'ix-text',to:'ix-lexical'}]);
+    let collision='';try {rag.applyOps(original,[{op:'rename',node:'route',to:'gated'}]);}catch(e){collision=e.message;}
+    return JSON.stringify({condition:renamed.node('gated').when.decision,index:renamed.node('gated').p.index,original:original.node('gated').when.decision,collision});
+  })()`,
+    context,
+  );
+  const got = JSON.parse(result);
+  assert.equal(got.condition, 'routing.needs');
+  assert.equal(got.index, 'lexical');
+  assert.equal(got.original, 'route.needs');
+  assert.match(got.collision, /already exists/);
+});
+
+test('lexical export removes model gates in one transaction and retains local submit work', async () => {
+  const context = runtime({ library: source });
+  const html = await vm.runInContext(
+    `(async()=>{
+    ${fixture}
+    rag.configure({librarySource:()=>library});
+    const adaptive=rag.plan('adaptive').over(corpus).signals({q:'snapshot'})
+      .classify({id:'route',questions:{needs:{type:'noul',question:'Search?'}}})
+      .retrieve('text',{when:{decision:'route.needs',min:0.5}})
+      .limit({k:3,trigger:'submit'});
+    return rag.export(adaptive);
+  })()`,
+    context,
+  );
+  const elements = { q: { value: '', addEventListener() {} }, out: { innerHTML: '' } };
+  const browser = vm.createContext({ document: { getElementById: (id) => elements[id] } });
+  for (const [, script] of html.matchAll(/<script>([\s\S]*?)<\/script>/g))
+    vm.runInContext(script, browser);
+  for (let i = 0; i < 20 && !elements.out.innerHTML; i++) await setImmediate();
+  assert.match(elements.out.innerHTML, /ownership/);
+  assert.equal(vm.runInContext("ir.nodes.some(n=>n.t==='classify')", browser), false);
+  assert.equal(vm.runInContext("ir.nodes.some(n=>n.t==='limit')", browser), true);
+});
+
+test('dataset identities preserve duplicate local records through fusion and result detachment', async () => {
+  const context = runtime();
+  const output = await vm.runInContext(
+    `(async()=>{
+    ${fixture}
+    const enriched=corpus.enrich('summary',c=>'enriched '+c.text)
+      .index('enriched',rag.bm25());
+    const fused=rag.plan('both').over(enriched).signals({q:'snapshot'})
+      .retrieve('text').retrieve('enriched').fuse.rrf();
+    const result=await rag.run(fused);
+    const records=result.hits.map(h=>result.chunk(h.id));
+    let bareError='';try{rag.engine().artifacts(rag.compile(fused)).chunks.get(JSON.parse(result.hits[0].id)[1]);}catch(e){bareError=e.code;}
+    return JSON.stringify({ids:result.hits.map(h=>JSON.parse(h.id)),records,bareError});
+  })()`,
+    context,
+  );
+  const got = JSON.parse(output);
+  assert.equal(got.ids.length, 2);
+  assert.notEqual(got.ids[0][0], got.ids[1][0]);
+  assert.equal(got.ids[0][1], got.ids[1][1]);
+  assert.equal(got.records.filter((r) => r.summary).length, 1);
+  assert.equal(got.bareError, 'reference');
+});
+
+test('named bake datasets are immutable and changed equal-sized content invalidates the value', async () => {
+  const context = runtime();
+  const result = await vm.runInContext(
+    `(async()=>{
+    let text='# Note\\n\\nAAAA';
+    rag.configure({files:()=>[{name:'note.md',text}]});
+    const corpus=rag.corpus('bake').from(rag.files()).parse().chunk(rag.sections())
+      .synonyms(rag.bake({datasets:{source:'chunks'}},({datasets})=>({value:datasets.source.materialize()[0].text})))
+      .index('text',rag.bm25());
+    const ir=rag.compile(corpus),engine=rag.engine();
+    await engine.build(ir);const first=engine.artifacts(ir).synonyms.value;
+    text='# Note\\n\\nBBBB';await engine.build(ir);const second=engine.artifacts(ir).synonyms.value;
+    return JSON.stringify({first,second});
+  })()`,
+    context,
+  );
+  const got = JSON.parse(result);
+  assert.notEqual(got.first, got.second);
+  assert.match(got.second, /BBBB/);
+});
+
+test('shared build cancellation detaches one waiter and not the remaining owner', async () => {
+  const context = runtime();
+  const result = await vm.runInContext(
+    `(async()=>{
+    let calls=0, finish;
+    rag.define('source.wait',{phase:'build',in:[],out:'files',persist:false,
+      all:async()=>{calls++;await new Promise(resolve=>{finish=resolve});return [{name:'x.md',text:'# X\\n\\nshared work'}]}});
+    const corpus=rag.corpus('shared').from(rag.source.wait()).parse().chunk(rag.sections());
+    const ir=rag.compile(corpus),engine=rag.engine();
+    const a=rag.newScope(()=>{}),b=rag.newScope(()=>{});
+    const first=engine.buildShared(ir,{signal:a.signal}).catch(e=>e.code);
+    const second=engine.buildShared(ir,{signal:b.signal});
+    while(!finish) await Promise.resolve();
+    a.abort(); finish();
+    return JSON.stringify({first:await first,second:(await second).ok,calls});
+  })()`,
+    context,
+  );
+  assert.deepEqual(JSON.parse(result), { first: 'cancelled', second: true, calls: 1 });
+});
+
+test('detached results survive multiple refreshes and reverting a source selects the earlier generation', async () => {
+  const context = runtime();
+  const output = await vm.runInContext(
+    `(async()=>{
+    let text='# Note\\n\\napples';
+    rag.configure({files:()=>[{name:'note.md',text}]});
+    const c=rag.corpus('refresh').from(rag.files()).parse().chunk(rag.sections()).index('text',rag.bm25());
+    const p=rag.plan('refresh').over(c).signals({q:'apples'}).retrieve('text');
+    const a=await rag.run(p), bytes=JSON.stringify(a.records);
+    for(const word of ['bananas','cherries','apples']){text='# Note\\n\\n'+word;await rag.run(p);}
+    const current=await rag.run(p);
+    return JSON.stringify({stable:bytes===JSON.stringify(a.records),oldText:a.chunk(a.hits[0].id).text,current:current.hits.length});
+  })()`,
+    context,
+  );
+  const got = JSON.parse(output);
+  assert.equal(got.stable, true);
+  assert.match(got.oldText, /apples/);
+  assert.equal(got.current, 1);
+});
+
+test('an awaiting query keeps its original snapshot across three refreshes', async () => {
+  const context = runtime();
+  const output = await vm.runInContext(
+    `(async()=>{
+    let text='# Note\\n\\napples original',resume,started;
+    const waiting=new Promise(resolve=>{started=resolve});
+    rag.configure({files:()=>[{name:'note.md',text}]});
+    rag.define('pause',{phase:'live',in:['hits'],out:'hits',run:async(s,ctx,hits)=>{
+      started();await new Promise(resolve=>{resume=resolve});
+      return hits.map(h=>({...h,reason:ctx.chunk(h.id).text}));
+    }});
+    const c=rag.corpus('lease').from(rag.files()).parse().chunk(rag.sections()).index('text',rag.bm25());
+    const p=rag.plan('lease').over(c).signals({q:'apples'}).retrieve('text').pause();
+    const pending=rag.run(p);await waiting;
+    const engine=rag.engine(),ir=rag.compile(p);
+    for(const word of ['bananas','cherries','dates']){text='# Note\\n\\n'+word;await engine.build(ir);engine.gc([ir]);}
+    resume();const result=await pending;
+    return JSON.stringify({reason:result.hits[0].reason,text:result.chunk(result.hits[0].id).text,active:engine.activeSnapshots.size});
+  })()`,
+    context,
+  );
+  const got = JSON.parse(output);
+  assert.match(got.reason, /apples original/);
+  assert.equal(got.reason, got.text);
+  assert.equal(got.active, 2); // retained generations; completed query released its lease
 });

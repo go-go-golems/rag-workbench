@@ -4,18 +4,12 @@ import { slug } from '../core/identity.ts';
 import { fnOf } from '../core/lambda.js';
 import { arr, clip, hash, isBake, isLambda, isObj, now, tokens, uniq } from '../core/util.js';
 import { compile, costsCalls } from '../graph/graph.js';
+import { dataset, memoryDataset, qualify, RecordCatalog, unqualify } from './dataset.ts';
 import { fromWireDecision, makeDecide, wireDecision } from './decision.js';
 import { timed } from './environment.js';
-import {
-  asArray,
-  FULL_DELTA,
-  isView,
-  Lazy,
-  Outputs,
-  persistOf,
-  storeKey,
-  unionChunks,
-} from './records.js';
+import { BuildJobs } from './jobs.ts';
+import { OwnershipScope, ResourceRegistry } from './ownership.ts';
+import { FULL_DELTA, isView, Lazy, Outputs, persistOf, storeKey } from './records.js';
 import { safeEmit, scoped } from './scope.ts';
 import { Session } from './session.js';
 
@@ -23,9 +17,14 @@ class Engine {
   constructor(env = {}) {
     this.env = env;
     this.memo = new Map(); // build digest → { value, stats }
-    this.retired = []; // superseded outputs, closed by the next gc (RAGWB-003 §6.7)
+    this.resources = new ResourceRegistry();
+    this.published = new Map();
+    this.generations = new Map();
+    this.publication = new Map();
+    this.memoOwners = new Map();
+    this.activeSnapshots = new Map();
     this.recent = new Map(); // recently run plans (noteIr)
-    this.building = new Map(); // digest set → in-flight build promise (buildShared)
+    this.building = new BuildJobs();
     this.items = new Map(); // item key → value
     this.bakes = new Map();
     this.fileDigests = new Map();
@@ -70,7 +69,10 @@ class Engine {
       // same params) invalidates the node and, through the input digests, everything downstream.
       // Built-in components have no src, so their digests are unchanged.
       const src = def && def.src ? [def.src] : [];
-      out.set(n.id, hash([n.t, n.p, n.in.map((i) => out.get(i) || i), extra, ...src]));
+      out.set(
+        n.id,
+        hash([n.t, n.p, [...n.in, ...(n.uses || [])].map((i) => out.get(i) || i), extra, ...src]),
+      );
     }
     return out;
   }
@@ -87,7 +89,7 @@ class Engine {
       if (n.t === 'source.files') extra = null;
       else if (def && typeof def.lineage === 'function') extra = String(def.lineage(n.p, this));
       else if (def && typeof def.digest === 'function') extra = null;
-      const ins = n.in.map((i) => out.get(i));
+      const ins = [...n.in, ...(n.uses || [])].map((i) => out.get(i));
       out.set(
         n.id,
         extra === null || ins.some((x) => x === null)
@@ -99,7 +101,10 @@ class Engine {
   }
   dirty(ir) {
     const d = this.digests(ir);
-    return [...d].filter(([, dg]) => !this.memo.has(dg)).map(([id]) => id);
+    const current = this.artifacts(ir)?.byId.digests;
+    return [...d]
+      .filter(([id, digest]) => !this.memo.has(digest) || current?.get(id) !== digest)
+      .map(([id]) => id);
   }
   // build nodes whose items still wait for Claude calls (deferred), with how many
   pending(ir) {
@@ -144,8 +149,36 @@ class Engine {
       return fromWireDecision(JSON.parse(s), +(now() - t0).toFixed(1));
     });
   }
+  slotKey(ir) {
+    return hash([
+      'slot',
+      ir.corpus,
+      ir.nodes.filter((n) => n.phase === 'build').map((n) => [n.id, n.t, n.p, n.in]),
+    ]);
+  }
   async build(ir, opts = {}) {
     ir = compile(ir);
+    const slot = this.slotKey(ir);
+    const previous = this.publication.get(slot) || Promise.resolve();
+    const next = previous
+      .catch(() => {})
+      .then(async () => {
+        if (opts.signal?.aborted) throw new RagError('cancelled', 'build cancelled');
+        const release = this.env.artifacts?.beginBuild?.();
+        try {
+          return await this.buildCandidate(ir, opts);
+        } finally {
+          release?.();
+        }
+      });
+    this.publication.set(slot, next);
+    try {
+      return await next;
+    } finally {
+      if (this.publication.get(slot) === next) this.publication.delete(slot);
+    }
+  }
+  async buildCandidate(ir, opts = {}) {
     const t0 = now();
     const dg = this.digests(ir);
     let lineages = new Map();
@@ -159,6 +192,7 @@ class Engine {
     const report = { ok: true, ms: 0, nodes: {}, errors: [] };
     const bemit = safeEmit(opts);
     const outputs = new Outputs();
+    outputs.digests = dg;
     const deltas = new Map(); // node id → its change since the base the next node continues from (RAGWB-003 §6.5)
     const counter = { calls: 0 };
     for (const n of ir.nodes) {
@@ -186,7 +220,11 @@ class Engine {
           hit = store.has(sk);
         if (hit) {
           const lz = new Lazy(
-            () => codec.load(store.load(sk), n.p),
+            () => {
+              const value = codec.load(store.load(sk), n.p);
+              this.ownMemo(d, value);
+              return value;
+            },
             (ms) => timed('load', n.id, ms, n.t),
           );
           this.memo.set(d, {
@@ -227,7 +265,7 @@ class Engine {
       const c0 = counter.calls;
       try {
         const p = await this.resolveBakes(n, n.p, outputs, ir);
-        const inputArrays = () => n.in.map((i) => asArray(outputs.get(i))); // not before a delta build: it would read every input
+        const inputs = () => n.in.map((id) => this.inputDataset(id, outputs, ir));
         const ctx = this.buildCtx(n, ir, outputs, counter, opts.signal);
         let value,
           lazy = null;
@@ -241,7 +279,14 @@ class Engine {
             : null;
         if (inc) {
           if (inc.lazy) {
-            lazy = new Lazy(inc.lazy, (ms) => timed('load', n.id, ms, n.t));
+            lazy = new Lazy(
+              () => {
+                const value = inc.lazy();
+                this.ownMemo(d, value);
+                return value;
+              },
+              (ms) => timed('load', n.id, ms, n.t),
+            );
             outputs.set(n.id, lazy);
           } else value = inc.value;
           deltas.set(n.id, { ...inc.delta, full: false, from: inc.base.digest });
@@ -251,7 +296,8 @@ class Engine {
             delta: inc.summary || {},
           });
         } else if (def.map) {
-          const items = inputArrays()[0] || [];
+          const source = inputs()[0];
+          const items = source?.materialize ? source.materialize() : source || [];
           const fnKey = hash([n.t, p]);
           const results = new Array(items.length);
           let next = 0,
@@ -309,7 +355,7 @@ class Engine {
           value = results.flat().filter((x) => x != null);
           if (def.post) value = def.post(value);
         } else {
-          value = await def.all(inputArrays(), ctx, p, n);
+          value = await def.all(inputs(), ctx, p, n);
         }
         if (inc) st.count = inc.count ?? (lazy ? 0 : (value.length ?? 0));
         else {
@@ -341,7 +387,10 @@ class Engine {
               count,
               lazy: lz,
             });
-          } else this.memo.set(d, { value, count: st.count });
+          } else {
+            this.memo.set(d, { value, count: st.count });
+            this.ownMemo(d, value);
+          }
           this.partial.delete(d);
           const store = this.env.artifacts,
             codec = store ? persistOf(def) : null;
@@ -350,6 +399,20 @@ class Engine {
               const sk = storeKey(d, def);
               store.save(sk, n.t, codec.save(lazy || value, n.p), st.count);
               st.saved = true;
+              if (store.describe)
+                store.describe(
+                  sk,
+                  lineages.get(n.id) || '',
+                  n.in
+                    .map((id) => {
+                      const source = ir.nodes.find((x) => x.id === id);
+                      return persistOf(REG.get(source.t))
+                        ? storeKey(dg.get(id), REG.get(source.t))
+                        : null;
+                    })
+                    .filter((key) => key && store.has(key)),
+                );
+
               const lin = lineages.get(n.id);
               if (lin && store.lineageRecord)
                 store.lineageRecord(
@@ -394,6 +457,35 @@ class Engine {
             report.errors.push(`${n.id}: ${e.message}`);
           }
         }
+    if (opts.signal?.aborted) {
+      report.ok = false;
+      report.errors.push('build cancelled before publication');
+    }
+    const complete = report.ok && [...dg.values()].every((digest) => this.memo.has(digest));
+    if (complete) {
+      // Validate and retain the candidate before changing either publication pointer.
+      const snapshot = this.makeArtifacts(ir, dg);
+      const release = this.acquire(snapshot);
+      const slot = this.slotKey(ir);
+      try {
+        if (this.env.artifacts?.publish)
+          this.env.artifacts.publish(slot, snapshot.key, snapshot.storeKeys);
+      } catch (error) {
+        release();
+        throw error;
+      }
+      const history = this.published.get(slot) || [];
+      const previous = history.findIndex((entry) => entry.snapshot.key === snapshot.key);
+      if (previous >= 0) history.splice(previous, 1)[0].release();
+      history.unshift({ snapshot, release });
+      this.generations.set(snapshot.key, snapshot);
+      while (history.length > 2) {
+        const old = history.pop();
+        this.generations.delete(old.snapshot.key);
+        old.release();
+      }
+      this.published.set(slot, history);
+    }
     report.ms = +(now() - t0).toFixed(1);
     report.calls = counter.calls;
     report.passes = passesOf(ir, report);
@@ -402,39 +494,63 @@ class Engine {
     this.emit({ type: 'built', report });
     return report;
   }
-  // Release superseded build outputs (RAGWB-003 §6.7) for an engine that serves
-  // ir alone (serve): memo entries whose digest ir no longer has are dropped, and
-  // their Go handles (record views, bleve indexes) closed one gc later, so a
-  // query that started before the rebuild keeps working. Values still reachable
-  // from live entries are never closed.
+  retainValue(value, scope) {
+    if (!value || typeof value !== 'object') return;
+    const handle = isView(value) ? value.__records : value.__ix;
+    if (handle && typeof handle.close === 'function')
+      scope.own(this.resources.retain(handle, () => handle.close()));
+  }
+  ownMemo(digest, value) {
+    const owner = new OwnershipScope();
+    this.retainValue(value, owner);
+    this.memoOwners.get(digest)?.close();
+    this.memoOwners.set(digest, owner);
+  }
+  acquire(art) {
+    const owner = new OwnershipScope();
+    try {
+      for (const [node, value] of art.byId) {
+        // Unforced persisted outputs have no open handles; the store lease retains their bytes.
+        this.retainValue(value instanceof Lazy ? (value.done ? value.v : null) : value, owner);
+      }
+      if (this.env.artifacts?.pin && art.storeKeys.length)
+        owner.own(this.env.artifacts.pin(art.storeKeys));
+    } catch (error) {
+      owner.close();
+      throw error;
+    }
+    this.activeSnapshots.set(art, (this.activeSnapshots.get(art) || 0) + 1);
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      const remaining = this.activeSnapshots.get(art) - 1;
+      if (remaining) this.activeSnapshots.set(art, remaining);
+      else this.activeSnapshots.delete(art);
+      owner.close();
+    };
+  }
   gc(irs) {
     const liveDigests = new Set();
     for (const ir of arr(irs))
       for (const d of this.digests(compile(ir)).values()) liveDigests.add(d);
-    const live = new Set();
-    for (const [d, m] of this.memo)
-      if (liveDigests.has(d) && !(m.lazy && !m.lazy.done)) live.add(m.value);
-    const closing = this.retired.filter((v) => !live.has(v));
-    this.retired = [];
-    for (const [d, m] of [...this.memo]) {
-      if (liveDigests.has(d)) continue;
-      this.memo.delete(d);
-      if (!(m.lazy && !m.lazy.done) && !live.has(m.value)) this.retired.push(m.value);
+    const before = this.lastCollectedClosed || 0;
+    for (const [digest] of this.memo) {
+      if (liveDigests.has(digest)) continue;
+      this.memo.delete(digest);
+      this.memoOwners.get(digest)?.close();
+      this.memoOwners.delete(digest);
     }
-    for (const d of [...this.partial.keys()]) if (!liveDigests.has(d)) this.partial.delete(d);
-    let closed = 0;
-    for (const v of closing) {
-      const h = isView(v) ? v.__records : v && v.__ix;
-      if (h && typeof h.close === 'function') {
-        try {
-          h.close();
-          closed++;
-        } catch (e) {
-          this.env.log && this.env.log(`gc: ${e.message || e}`);
-        }
-      }
-    }
-    return { closed, retired: this.retired.length, memo: this.memo.size };
+    for (const digest of this.partial.keys())
+      if (!liveDigests.has(digest)) this.partial.delete(digest);
+    this._art = null;
+    const closed = this.resources.closed - before;
+    this.lastCollectedClosed = this.resources.closed;
+    return {
+      closed,
+      active: this.activeSnapshots.size,
+      memo: this.memo.size,
+    };
   }
   // Delta build of one node (RAGWB-003 §6.5): continue from the newest stored
   // version of this node's lineage that was computed from exactly the versions
@@ -457,13 +573,14 @@ class Engine {
     if (!base) return null;
     const codec = persistOf(def);
     // the previous version is usually still in memory (serve): use it, don't reopen it
+    const baseScope = new OwnershipScope();
     const loadBase = () => {
       // a computed docs/chunks array is not the record store a delta continues from: open that
       const m = this.memo.get(base.digest);
       if (m && !(m.lazy && !m.lazy.done) && (isView(m.value) || (m.value && m.value.__ix)))
         return m.value;
       const v = codec.load(store.load(base.storeKey), n.p);
-      this.retired.push(v); // opened for this delta only: closed by the next gc
+      this.retainValue(v, baseScope);
       return v;
     };
     const b = {
@@ -485,16 +602,31 @@ class Engine {
     });
     try {
       const r = await def.delta.apply(b, inputs, dctx, p);
+      if (r?.value) this.ownMemo(d, r.value);
       return r ? { ...r, base: b } : null;
     } catch (e) {
       ctx.log(`delta build failed, building fully: ${e.message || e}`);
       return null;
+    } finally {
+      baseScope.close();
     }
   }
+  inputDataset(id, outputs, ir) {
+    const node = ir.nodes.find((n) => n.id === id);
+    const value = outputs.get(id);
+    if (!node || !['docs', 'chunks'].includes(node.out)) return value;
+    const kind = node.out === 'docs' ? 'documents' : 'chunks';
+    return isView(value)
+      ? dataset(outputs.digests.get(id), kind, value)
+      : memoryDataset(outputs.digests.get(id), kind, value);
+  }
   buildCtx(n, ir, outputs, counter, signal) {
-    const firstOf = (t) => {
-      const id = ir.nodes.find((x) => x.phase === 'build' && x.out === t && outputs.has(x.id));
-      return id ? asArray(outputs.get(id.id)) : [];
+    const dataset = (id) => {
+      if (![...n.in, ...(n.uses || [])].includes(id))
+        throw new RagError('dataset', `${n.id}: undeclared dataset dependency '${id}'`);
+      const value = this.inputDataset(id, outputs, ir);
+      if (!value?.materialize) throw new RagError('dataset', `${id} is not a dataset`);
+      return value;
     };
     return {
       node: n,
@@ -506,12 +638,7 @@ class Engine {
       clip,
       log: (...a) => this.env.log && this.env.log(`[${n.id}]`, ...a),
       files: () => this.files(),
-      get docs() {
-        return firstOf('docs');
-      },
-      get chunks() {
-        return firstOf('chunks');
-      },
+      dataset,
     };
   }
   async resolveBakes(n, p, outputs, ir) {
@@ -522,18 +649,32 @@ class Engine {
     };
     scan(p);
     if (!found) return p;
-    const docsNode = ir.nodes.find((x) => x.out === 'docs' && outputs.has(x.id));
-    const chunksNode = ir.nodes.find((x) => x.out === 'chunks' && outputs.has(x.id));
-    const docs = docsNode ? outputs.get(docsNode.id) : [],
-      chunks = chunksNode ? outputs.get(chunksNode.id) : [];
-    const key0 = hash([docs.map((d) => d.id + d.sections.length), chunks.length]);
+    const digests = outputs.digests;
     const walk = async (v) => {
       if (isBake(v)) {
-        const key = key0 + ':' + v.$bake;
+        if (!v.datasets) throw new RagError('bake', 'bake requires explicit dataset bindings');
+        const bindings = {};
+        for (const [name, id] of Object.entries(v.datasets)) {
+          const node = ir.nodes.find((x) => x.id === id);
+          if (!node || !['docs', 'chunks'].includes(node.out) || !outputs.has(id))
+            throw new RagError('bake', `${n.id}: dataset '${id}' is unavailable`);
+          const value = outputs.get(id);
+          const kind = node.out === 'docs' ? 'documents' : 'chunks';
+          bindings[name] = isView(value)
+            ? dataset(digests.get(id), kind, value)
+            : memoryDataset(digests.get(id), kind, value);
+        }
+        const key = hash([
+          v.$bake,
+          Object.entries(bindings).map(([name, value]) => [name, value.id]),
+        ]);
         if (!this.bakes.has(key))
           this.bakes.set(
             key,
-            await fnOf({ $fn: v.$bake }, `${n.id} bake`)({ docs, chunks, tokens, slug }),
+            await fnOf(
+              { $fn: v.$bake },
+              `${n.id} bake`,
+            )({ datasets: Object.freeze(bindings), tokens, slug }),
           );
         return this.bakes.get(key);
       }
@@ -554,75 +695,112 @@ class Engine {
     return this.resolved.get(n.id + ':' + hash(n.p)) || n.p;
   }
   artifacts(ir) {
-    const dg = this.digests(ir);
+    return this.published.get(this.slotKey(ir))?.[0]?.snapshot || null;
+  }
+  generation(id) {
+    const snapshot = this.generations.get(id);
+    if (!snapshot)
+      throw new RagError('stale_generation', 'snapshot is no longer retained; refresh the query');
+    return snapshot;
+  }
+  makeArtifacts(ir, dg) {
     const got = (d) => this.memo.get(d) || this.partial.get(d);
     const missing = [...dg].filter(([, d]) => !got(d)).map(([id]) => id);
     if (missing.length) return null;
-    const key = [...dg.values()].map((d) => d + (this.memo.has(d) ? '' : '~')).join(',');
+    const key = hash([this.slotKey(ir), [...dg]]);
     if (this._art && this._art.key === key) return this._art;
     const tArt = now();
-    const byId = new Outputs(); // stored outputs stay unloaded until read (sources usually never are)
+    const byId = new Outputs();
+    byId.digests = dg;
     for (const [id, d] of dg) {
       const m = got(d);
       byId.set(id, m.lazy && !m.lazy.done ? m.lazy : m.value);
     }
-    let chunks = new Map(),
-      order = new Map();
+    const chunks = new RecordCatalog(),
+      docs = new RecordCatalog();
     const indexes = new Map(),
-      docNodes = [],
-      views = [];
-    let synonyms = null;
+      orders = new Map(),
+      datasets = new Map();
+    const documentsFor = new Map();
+    let synonyms = null,
+      links = null;
     for (const n of ir.nodes) {
       if (n.phase !== 'build') continue;
-      // read only what artifacts expose: a stored source or docs output stays unloaded
-      if (n.out === 'docs')
-        docNodes.push(n.id); // docs load on first use (search rarely needs them)
-      else if (n.out === 'chunks') {
-        const v = byId.get(n.id);
-        if (isView(v)) views.push(v);
-        else for (const c of v) chunks.set(c.id, c);
-      } else if (n.out === 'index')
-        indexes.set(n.p.name || n.id.replace(/^ix-/, ''), byId.get(n.id));
-      if (n.t === 'synonyms') synonyms = byId.get(n.id);
-    }
-    let docs = null,
-      links = null;
-    const docsMap = () => {
-      if (!docs) {
-        docs = new Map();
-        const dup = [];
-        for (const id of docNodes)
-          for (const d of byId.get(id)) {
-            if (docs.has(d.id)) dup.push(d.name || d.id);
-            else docs.set(d.id, d);
-          }
-        // keep the first, say so: a silent overwrite hid notes (RAGWB-003 §4.3)
-        if (dup.length && this.env.log)
-          this.env.log(
-            `[artifacts] ${dup.length} doc(s) share an id with an earlier doc and are not in art.docs: ${dup.slice(0, 5).join(', ')}`,
+      if (!['docs', 'chunks', 'index'].includes(n.out) && n.t !== 'synonyms') continue;
+      const value = byId.get(n.id);
+      if (n.out === 'docs' || n.out === 'chunks') {
+        const kind = n.out === 'docs' ? 'documents' : 'chunks';
+        const data = isView(value)
+          ? dataset(dg.get(n.id), kind, value)
+          : memoryDataset(dg.get(n.id), kind, value);
+        datasets.set(n.id, data);
+        const documents = n.out === 'docs' ? data.id : documentsFor.get(n.in[0]);
+        if (!documents)
+          throw new RagError(
+            'dataset',
+            `${n.id}: chunks require an explicit source-document input`,
           );
+        documentsFor.set(n.id, documents);
+        if (n.out === 'docs') docs.add(data);
+        else {
+          chunks.add(data, documents);
+          const perDocument = new Map();
+          // Reading order stays within the exact chunk dataset.
+          orders.set(data.id, {
+            get(docId) {
+              const local = unqualify(docId);
+              if (local.dataset !== documents)
+                throw new RagError('reference', 'document belongs to a different dataset');
+              if (isView(value)) return value.order(local.id).map((id) => qualify(data.id, id));
+              if (!perDocument.size)
+                for (const c of data.values()) {
+                  if (!perDocument.has(c.docId)) perDocument.set(c.docId, []);
+                  perDocument.get(c.docId).push(qualify(data.id, c.id));
+                }
+              return perDocument.get(local.id) || [];
+            },
+          });
+        }
+      } else if (n.out === 'index') {
+        const data = datasets.get(n.in[0]);
+        if (!data) throw new RagError('dataset', `${n.id}: index requires a chunk dataset`);
+        const bound = Object.create(value);
+        bound.datasetId = data.id;
+        const ranked = (hits) => hits.map((h) => ({ ...h, id: qualify(data.id, h.id) }));
+        for (const method of ['search', 'searchIn'])
+          if (typeof value[method] === 'function')
+            bound[method] = (...args) => {
+              if (method === 'searchIn') {
+                const document = unqualify(args[0]);
+                if (document.dataset !== documentsFor.get(n.in[0]))
+                  throw new RagError('reference', 'document belongs to a different dataset');
+                args[0] = document.id;
+              }
+              const found = value[method](...args);
+              return found && typeof found.then === 'function' ? found.then(ranked) : ranked(found);
+            };
+        indexes.set(n.p.name || n.id.replace(/^ix-/, ''), bound);
       }
-      return docs;
+      if (n.t === 'synonyms') synonyms = value;
+    }
+    const order = {
+      get: (docId) =>
+        [...orders.values()].flatMap((source) => {
+          try {
+            return source.get(docId);
+          } catch {
+            return [];
+          }
+        }),
     };
-    // reading order per doc from the first chunk stream
-    const primary = ir.nodes.find(
-      (n) => n.phase === 'build' && n.out === 'chunks' && n.t !== 'enrich' && n.t !== 'enrich.llm',
-    );
-    const primaryOut = primary ? byId.get(primary.id) : null;
-    if (isView(primaryOut))
-      order = {
-        get: (docId) => primaryOut.order(docId),
-        has: (docId) => primaryOut.order(docId).length > 0,
-      };
-    else if (primary)
-      for (const c of primaryOut) {
-        if (!order.has(c.docId)) order.set(c.docId, []);
-        order.get(c.docId).push(c.id);
-      }
-    // stored chunk streams stay on disk: the single view is art.chunks; with several
-    // streams, later ones win per id (as Map.set did) and the views answer the rest
-    if (views.length)
-      chunks = !chunks.size && views.length === 1 ? views[0] : unionChunks(chunks, views);
+    const neighbors = (id, before = 1, after = 1) => {
+      const record = chunks.get(id);
+      if (!record) return [];
+      const ids = orders.get(unqualify(id).dataset).get(record.docId),
+        at = ids.indexOf(id);
+      return [...ids.slice(Math.max(0, at - before), at), ...ids.slice(at + 1, at + 1 + after)];
+    };
+    const docsMap = () => docs;
     // links: [[wiki]] targets and related notes resolved by title or alias (computed on first use)
     const linksMap = () => {
       if (links) return links;
@@ -651,7 +829,13 @@ class Engine {
     };
     this._art = {
       key,
+      storeKeys: ir.nodes
+        .filter((n) => n.phase === 'build' && persistOf(REG.get(n.t)))
+        .map((n) => storeKey(dg.get(n.id), REG.get(n.t)))
+        .filter((key) => this.env.artifacts?.has(key)),
       byId,
+      datasets,
+      neighbors,
       chunks,
       order,
       indexes,
@@ -691,22 +875,13 @@ class Engine {
   recentIrs() {
     return [...this.recent.values()];
   }
-  // one build per digest set at a time: a second query for a plan being built waits for it
+  // Request identity and event subscriptions do not change build semantics.
   buildShared(ir, opts = {}) {
-    const key = [...this.digests(ir).values()].join(',');
-    const cur = this.building.get(key);
-    if (cur) {
-      if (opts.onEvent)
-        try {
-          opts.onEvent({ type: 'build', waiting: true });
-        } catch (_) {
-          /* listener */
-        }
-      return cur;
-    }
-    const p = this.build(ir, opts).finally(() => this.building.delete(key));
-    this.building.set(key, p);
-    return p;
+    const { signal, onEvent, onProgress, scope, detail, ...semantics } = opts;
+    const key = hash([ir.digest, [...this.digests(ir)], semantics]);
+    return this.building.run(key, { signal, onEvent, onProgress }, (owned) =>
+      this.build(ir, { ...semantics, ...owned }),
+    );
   }
 }
 

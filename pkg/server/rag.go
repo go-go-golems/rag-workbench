@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/pkg/errors"
 	"io"
 	"net/http"
 	"net/url"
@@ -24,8 +25,8 @@ import (
 //	GET  /api/rag/{app}                 → {id, title, ir, app, build, stats}
 //	POST /api/rag/{app}/run             {signals, trigger} → {result, chunks, neighbors, packMs, timing}
 //	                                      Accept: text/event-stream: the run's events (sse.go), then event "result"
-//	GET  /api/rag/{app}/chunk?id=       → {chunks, neighbors}   (a cache miss in the shell)
-//	GET  /api/rag/{app}/doc?id=         → doc metadata | null
+//	GET  /api/rag/{app}/chunk?snapshotId=...&id= → {chunks, neighbors}   (a cache miss in the shell)
+//	GET  /api/rag/{app}/doc?snapshotId=...&id= → doc metadata | null
 //	GET  /api/rag/{app}/timings         → recorder entries since the app was opened
 //	GET  /api/rag/{app}/verbs           → the app's verbs and their parameters (RAGWB-004, verbs.go)
 //	POST /api/rag/{app}/verbs/{verb...} → run a verb: JSON, or SSE events (sse.go)
@@ -40,7 +41,7 @@ type RagServer struct {
 type RagApp struct {
 	*runner.ServedApp
 	Timing *timing.Recorder
-	// MaxInflight caps concurrent verb requests (0 = DefaultMaxInflight); more get 503 busy.
+	// MaxInflight caps concurrent query and verb requests (0 = DefaultMaxInflight); more get 503 busy.
 	MaxInflight int
 	once        sync.Once
 	inflight    chan struct{}
@@ -194,23 +195,27 @@ func (s *RagServer) handleInfo(w http.ResponseWriter, r *http.Request, a *RagApp
 func (s *RagServer) handleLookup(kind string) func(http.ResponseWriter, *http.Request, *RagApp) {
 	return func(w http.ResponseWriter, r *http.Request, a *RagApp) {
 		id := r.URL.Query().Get("id")
-		if id == "" {
-			writeErr(w, http.StatusBadRequest, "bad_request", "id is required")
+		snapshotID := r.URL.Query().Get("snapshotId")
+		if id == "" || snapshotID == "" {
+			writeErr(w, http.StatusBadRequest, "bad_request", "id and snapshotId are required")
 			return
 		}
 		var out string
 		var err error
 		if kind == "chunk" {
-			out, err = a.Chunk(r.Context(), id)
+			out, err = a.Chunk(r.Context(), snapshotID, id)
 		} else {
-			out, err = a.Doc(r.Context(), id)
+			out, err = a.Doc(r.Context(), snapshotID, id)
 		}
 		if err != nil {
+			if errors.Is(err, runner.ErrStaleGeneration) {
+				writeErr(w, http.StatusGone, "stale_generation", err.Error())
+				return
+			}
 			writeErr(w, http.StatusInternalServerError, "lookup_failed", err.Error())
 			return
 		}
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = io.WriteString(w, out)
+		_ = writeOperationJSON(w, []byte(out))
 	}
 }
 
@@ -225,6 +230,11 @@ type runTiming struct {
 }
 
 func (s *RagServer) handleRun(w http.ResponseWriter, r *http.Request, a *RagApp) {
+	if !a.acquire() {
+		writeErr(w, http.StatusServiceUnavailable, "busy", "request capacity exhausted")
+		return
+	}
+	defer a.release()
 	t0 := time.Now()
 	var req struct {
 		Signals json.RawMessage `json:"signals"`
@@ -238,29 +248,24 @@ func (s *RagServer) handleRun(w http.ResponseWriter, r *http.Request, a *RagApp)
 		req.Signals = json.RawMessage("{}")
 	}
 	stream := wantsSSE(r)
-	var sw *sseWriter
-	var sink *streamSink
-	var pumped chan struct{}
+	var response *responseStream
 	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()
 	var sinkArg runner.EventSink
 	if stream {
-		// Server-Sent Events (RAGWB-004): the run's engine events, then "result"
-		sw = newSSEWriter(w, t0, eventFilter(r))
-		sink = newStreamSink(cancel)
-		sinkArg = sink
-		pumped = make(chan struct{})
-		go func() { sw.pump(sink, nil); close(pumped) }()
+		var err error
+		response, err = startResponseStream(w, r, cancel, t0, nil)
+		if err != nil {
+			writeErr(w, http.StatusInternalServerError, "stream_unavailable", err.Error())
+			return
+		}
+		sinkArg = response.sink
 	}
 	res, err := a.Run(ctx, req.Signals, req.Trigger, sinkArg)
-	if stream {
-		sink.close()
-		<-pumped
-	}
 	if err != nil {
 		if stream {
 			b, _ := json.Marshal(map[string]string{"type": "error", "code": "run_failed", "message": err.Error()})
-			_ = sw.write("error", b)
+			_ = response.finish("error", b)
 			return
 		}
 		writeErr(w, http.StatusInternalServerError, "run_failed", err.Error())
@@ -284,10 +289,9 @@ func (s *RagServer) handleRun(w http.ResponseWriter, r *http.Request, a *RagApp)
 	body := strings.TrimSuffix(strings.TrimSpace(res.JSON), "}")
 	out := body + `,"timing":` + string(tb) + "}"
 	if stream {
-		_ = sw.write("result", []byte(`{"type":"result",`+strings.TrimPrefix(out, "{")))
+		_ = response.finish("result", []byte(`{"type":"result",`+strings.TrimPrefix(out, "{")))
 	} else {
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = io.WriteString(w, out)
+		_ = writeOperationJSON(w, []byte(out))
 	}
 	if s.Log != nil {
 		errs := ""

@@ -72,12 +72,14 @@ func TestRagServerRoutes(t *testing.T) {
 	}
 	var run struct {
 		Result struct {
-			Hits []struct {
+			SnapshotID string `json:"snapshotId"`
+			Hits       []struct {
 				ID string `json:"id"`
 			} `json:"hits"`
 		} `json:"result"`
 		Chunks map[string]struct {
-			Meta map[string]any `json:"meta"`
+			DocID string         `json:"docId"`
+			Meta  map[string]any `json:"meta"`
 		} `json:"chunks"`
 		Timing runTiming `json:"timing"`
 	}
@@ -119,13 +121,13 @@ func TestRagServerRoutes(t *testing.T) {
 		Chunks    map[string]any            `json:"chunks"`
 		Neighbors map[string]map[string]any `json:"neighbors"`
 	}
-	getJSON(t, ts.URL+"/api/rag/reports/chunk?id="+url.QueryEscape(id), &hit)
+	getJSON(t, ts.URL+"/api/rag/reports/chunk?snapshotId="+url.QueryEscape(run.Result.SnapshotID)+"&id="+url.QueryEscape(id), &hit)
 	if hit.Chunks[id] == nil || hit.Neighbors[id] == nil {
 		t.Fatalf("chunk lookup: %v", hit)
 	}
 	var doc map[string]any
-	docID := strings.SplitN(id, "#", 2)[0]
-	if getJSON(t, ts.URL+"/api/rag/reports/doc?id="+url.QueryEscape(docID), &doc); doc["id"] != docID || doc["text"] != nil {
+	docID := run.Chunks[id].DocID
+	if getJSON(t, ts.URL+"/api/rag/reports/doc?snapshotId="+url.QueryEscape(run.Result.SnapshotID)+"&id="+url.QueryEscape(docID), &doc); doc["id"] != docID || doc["text"] != nil {
 		t.Fatalf("doc lookup: %v", doc)
 	}
 	var tm map[string][]timing.Entry

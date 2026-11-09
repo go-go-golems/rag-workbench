@@ -46,14 +46,14 @@ func TestEmptyResultsAreArrays(t *testing.T) {
 						if (!rep.ok) throw new Error(rep.errors.join("\n"));
 						return rag.engine().artifacts(ir);
 					};
-					const full = (await build(["*.md"])).indexes.get("text");
+					const built = await build(["*.md"]), full = built.indexes.get("text");
 					const none = await build(["*.no-such-extension"]);
 					const r = {
 						noHits: full.search("xyzzy", 5),
 						emptyQuery: full.search("", 5),
 						stopWordsOnly: full.search("the and of", 5),
 						synonymsNoHits: full.search("xyzzy", 5, { synonyms: { xyzzy: ["plugh"] } }),
-						searchInUnknownDoc: full.searchIn("no-such-doc", "law", 3),
+						searchInUnknownDoc: full.searchIn(JSON.stringify([built.datasets.get("parse").id,"no-such-doc"]), "law", 3),
 						emptyCorpusChunks: [...none.chunks.values()],
 						emptyCorpusSearch: none.indexes.get("text").search("law", 5),
 					};

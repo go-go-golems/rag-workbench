@@ -2,6 +2,7 @@ package natives
 
 import (
 	"fmt"
+	"github.com/go-go-golems/rag-workbench/pkg/rtenv"
 
 	"github.com/dop251/goja"
 )
@@ -45,7 +46,7 @@ const markdownJS = `(function (rag, h) {
   rag.define('chunk.sections', {
     id: () => 'chunk', phase: 'build', in: ['docs'], out: 'chunks',
     describe: p => 'depth ' + (p.depth ?? 3) + ' · ≤' + (p.maxTokens ?? 450) + ' tok (Go)',
-    all: ([docs], ctx, p) => h.chunk(docs || [], p || {}),
+    all: ([docs], ctx, p) => h.chunk(docs.materialize(), p || {}),
     // delta build: chunk only the upserted docs (per-doc ids), copy-on-write the base records
     delta: {
       apply(base, [docsIn], ctx, p) {
@@ -63,6 +64,13 @@ const markdownJS = `(function (rag, h) {
 })`
 
 func (m Markdown) Install(vm *goja.Runtime, rag *goja.Object) error {
+	return m.InstallEnv(vm, rag, rtenv.Env{})
+}
+
+func (m Markdown) InstallEnv(vm *goja.Runtime, rag *goja.Object, env rtenv.Env) error {
+	if env.Resources == nil {
+		return fmt.Errorf("markdown requires a runtime resource registry")
+	}
 	h := vm.NewObject()
 	_ = h.Set("parse", func(call goja.FunctionCall) goja.Value {
 		files := call.Argument(0).ToObject(vm)
@@ -127,7 +135,7 @@ func (m Markdown) Install(vm *goja.Runtime, rag *goja.Object) error {
 			return fullResult(vm, reason)
 		}
 		o := vm.NewObject()
-		_ = o.Set("records", records2Object(vm, r))
+		_ = o.Set("records", ownResource(vm, env, records2Object(vm, r), r))
 		_ = o.Set("count", r.Len())
 		_ = o.Set("upsert", docsArray(vm, docs))
 		_ = o.Set("remove", strArray(vm, remove))
@@ -159,7 +167,7 @@ func (m Markdown) Install(vm *goja.Runtime, rag *goja.Object) error {
 			return fullResult(vm, reason)
 		}
 		o := vm.NewObject()
-		_ = o.Set("records", records2Object(vm, r))
+		_ = o.Set("records", ownResource(vm, env, records2Object(vm, r), r))
 		_ = o.Set("count", r.Len())
 		_ = o.Set("upsert", chunksArray(vm, chunks))
 		_ = o.Set("removeDocs", strArray(vm, removeDocs))

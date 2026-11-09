@@ -2,6 +2,7 @@ package runner
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -106,7 +107,7 @@ func TestRerankModelCancelled(t *testing.T) {
 		return JSON.stringify({ trace: r.trace.map(t => t.node + ':' + t.status + (t.error ? ':' + t.error : '')) });
 	})()`)
 	trace := strings.Join(toStrings(out["trace"]), " ")
-	if !strings.Contains(trace, "rerank:error:the request was cancelled") {
+	if !strings.Contains(trace, "rerank:error:the operation ended: cancelled") {
 		t.Fatalf("trace after abort: %s", trace)
 	}
 	time.Sleep(200 * time.Millisecond)
@@ -121,4 +122,23 @@ func toStrings(v any) []string {
 		out = append(out, x.(string))
 	}
 	return out
+}
+
+type failingRanker struct{ bowEmbedder }
+
+func (*failingRanker) Rerank(context.Context, string, string, []string, int) ([]llm.RerankResult, error) {
+	return nil, errors.New("deliberate provider failure")
+}
+func TestRerankFailureSurvivesWorkerCleanup(t *testing.T) {
+	out := runVectorScript(t, &failingRanker{}, nil, `(async()=>{
+ const rag=require("ragwb");
+ const c=rag.corpus("failure").from(rag.source.dir({root:ROOT,include:["*.md"]})).parse().chunk(rag.sections()).index("text",rag.bm25());
+ const p=rag.plan("failure").over(c).signals({q:"rebalance law"}).retrieve("text").rerank.model();
+ const result=await rag.run(p);
+ return JSON.stringify({errors:result.errors});
+ })()`)
+	failures := strings.Join(toStrings(out["errors"]), " ")
+	if !strings.Contains(failures, "deliberate provider failure") || strings.Contains(failures, "cancelled") {
+		t.Fatalf("terminal outcome: %s", failures)
+	}
 }

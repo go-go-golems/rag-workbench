@@ -91,8 +91,8 @@ func TestServeAppModule(t *testing.T) {
 		}
 	}
 	// a cache miss: one chunk with its neighbors
-	s, err := a.Chunk(ctx, "nope")
-	if err != nil || s != `{"chunks":{},"neighbors":{}}` {
+	s, err := a.Chunk(ctx, "missing-generation", "nope")
+	if err == nil {
 		t.Fatalf("missing chunk: %q %v", s, err)
 	}
 }

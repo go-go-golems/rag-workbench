@@ -1,0 +1,10 @@
+{
+  "installed_path": "/home/manuel/.codex/skills/revise-document-for-understandability",
+  "claude_path": "/home/manuel/.claude/skills/revise-document-for-understandability",
+  "claude_access": "Existing ~/.claude/skills symlink to ~/.codex/skills",
+  "files": {
+    "SKILL.md": "6144d9f6e85798b9cb19255ee7133a8d650dfa228263aeade50fac0e3bac6fcc",
+    "references/writing-style.md": "6bb2604758acf8e106d70f8b5393623b3b0fdcb1d9c55ebd7076eb23b6e05675"
+  },
+  "validation": "quick_validate passed; installed bytes match tracked package; no new model evaluation run"
+}

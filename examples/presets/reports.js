@@ -16,9 +16,9 @@ const reports = rag.corpus('reports')
       text: t.header.map((h, j) => `${h}: ${row[j] ?? ''}`).join('\n'),
     })))))
   // Frontmatter aliases become query synonyms, computed once per build.
-  .synonyms(rag.bake(ctx => {
+  .synonyms(rag.bake({datasets:{docs:'parse'}}, ctx => {
     const table = { lca: ['latent class'], dcr: ['dynamic client registration'], idempotency: ['idempotent', 'operation id'] };
-    for (const d of ctx.docs) for (const a of [].concat(d.meta.aliases ?? [])) (table[String(a).toLowerCase()] ??= []).push(d.title);
+    for (const d of ctx.datasets.docs.values()) for (const a of [].concat(d.meta.aliases ?? [])) (table[String(a).toLowerCase()] ??= []).push(d.title);
     return table;
   }))
   .index('text', rag.bm25({ fields: { title: 2, headingPath: 3, callout: 2, text: 1 } }))
@@ -40,7 +40,7 @@ const ask = rag.plan('ask').over(reports)
   .answer();
 
 // Variants are the plan with ops applied: the same edit language the agent uses.
-const lexical = ask.variant('lexical', [{ op: 'remove', node: 'rewrite' }, { op: 'remove', node: 'rerank' }]);
+const lexical = ask.variant('lexical', [{ op: 'remove', bypass: true, node: 'rewrite' }, { op: 'remove', bypass: true, node: 'rerank' }]);
 const agentic = rag.plan('agentic').over(reports).signals({ q: '', k: 8 }).agentic({ maxReads: 8 });
 
 // ── Goldens · hand-written cases with the section that should come back ────

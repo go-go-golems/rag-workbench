@@ -1,0 +1,23 @@
+{
+  "candidate-skill/SKILL.md": "fb07f089d3dcda0a3de97fc571d04d5a7ec4667e42c7db62d9f28fe14492bdcb",
+  "candidate-skill/agents/openai.yaml": "1c01ccf127f681a33dd6d1e65c963ca7d8bca5bc68669b60154fba7753f76eaa",
+  "candidate-skill/references/deliverable-checklist.md": "f7748abb8c0cd986166e99ba62052034866d2975722a4d66ea19fb396b2b07f1",
+  "candidate-skill/references/phase-checklists.md": "372f3ba5ca61ccf4cae8c5d3a805c12af21071847260fe03fcbafc24ba2c9dfa",
+  "candidate-skill/references/resume-packet.md": "1362a015513a56fe3da01a4fc2f426553ff94b77396e9dfef4036329f6a81093",
+  "candidate-skill/references/workflow-tooling.md": "256088cd2f08ac42d9aada35bd09849a9a4b5e56bca8c58f92dc8146cf42c732",
+  "candidate-skill/references/writing-style.md": "6bb2604758acf8e106d70f8b5393623b3b0fdcb1d9c55ebd7076eb23b6e05675",
+  "candidate-skill/scripts/test_workflow_checks.py": "2c8ef7726f30a5253b483beb2e0bf1b5dc64f9447672b8f3d961669d2c911074",
+  "candidate-skill/scripts/workflow_checks.py": "8753a6785546229aa00e140d5891ddb54080a770980e238a277931a278721622",
+  "codex-a-prompt.md": "769147e80f1c990d5aa8f3ddf51f95c0871733ed2b711d2d684d6f84cc6b1f9d",
+  "codex-b-prompt.md": "79514c2c70e31962e8258b435ecebc9b8dfa8fd8b50a9166b724129766610345",
+  "codex-c-prompt.md": "ddd36d11679766922fd5a94060cae6e528c3de483afbcc0a2473d63d03649135",
+  "context.md": "e7872e5bad0c91b79db1be130dc6a9ef92e02d030424b2312f95872e6c50d4bb",
+  "evaluation-plan.md": "3b877f70e5254de29c2bb1e70d740c53d2f1c4aa23277feaac9ebd0e1e16e0df",
+  "guidance-changes.md": "1b46220fc0c35172eb05fddff60615890067bb202beef99cded16e3053cfae26",
+  "opus-d-prompt.md": "b2938ca58c996cea769c1ee70d1e12a30e25fb92c0b967a372e8a78232e534d4",
+  "opus-d-run.sh": "649cc7fb9b86e22ce27501d25fad81a8213f02732d888a0f5ff140ce601aec39",
+  "opus-d-session-id.txt": "3842f1d304f0238519ccb581ec009345990f683e3c6e9399ce34407b9ac1e8af",
+  "opus-e-prompt.md": "7ada90040953526569f9ebcd135c69251bf7be57f6fb5726b533a35aeaf3bc0b",
+  "opus-e-run.sh": "7ca1d899f221235264af17fadedd9c5462558404533d0daf4e8ca86b1333133c",
+  "opus-e-session-id.txt": "db3cdd7870413e07ed3187ec4009cafa63fd7753b111d4bd58bdf9a3e3ded898"
+}

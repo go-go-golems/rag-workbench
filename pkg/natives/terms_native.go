@@ -31,7 +31,8 @@ const termsJS = `(function (rag, h) {
   rag.define('index.terms', {
     id: () => 'index', phase: 'build', in: ['chunks'], out: 'index',
     describe: p => (p.keys || DEFAULT_KEYS).join(' · ') + ' (Go)',
-    all: ([chunks], ctx, p) => {
+    all: ([dataset], ctx, p) => {
+      let chunks = dataset.materialize();
       chunks = chunks || [];
       const keys = p.keys || DEFAULT_KEYS;
       return wrap(h.build(chunks.map(c => c.id), chunks.map(c => c.docId), keys, valsOf(chunks, keys)));

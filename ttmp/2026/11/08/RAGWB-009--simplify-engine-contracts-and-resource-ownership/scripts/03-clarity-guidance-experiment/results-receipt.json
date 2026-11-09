@@ -1,0 +1,118 @@
+{
+  "baseline": "c267f91",
+  "setup_commit": "6cc526d",
+  "frozen_inputs_verified": 21,
+  "writers": {
+    "codex-a": {
+      "files": {
+        "final.md": "793fcbc484a5ae1d0e32662bad81d0f5553e34930836de26eb8897aa896654ce",
+        "review-notes.md": "6d0d3c683cabe1b029f5b1ea68d402f25f800fbc1008199a61ba6367e9bb2daa",
+        "research.md": "219e0cdd44ef31879ea14375a02b4244954150a7842cbf5030afab3013a2e0cf",
+        "first-draft.md": "8a54745eb6675af80f77a6e97276e6935dd712af80f8a98eb0381c88d74a5bae"
+      },
+      "final_words": 6084,
+      "completion": "WRITING_COMPLETE",
+      "model": "gpt-6.1-sol",
+      "effort": "medium"
+    },
+    "codex-b": {
+      "files": {
+        "final.md": "3f25109573fde029ae91ab99e57fae036a36ce4302ef54ed01eb520bd2a7114e",
+        "review-notes.md": "c4c81d37aad6934c366dfd8180f6b6ec2b8613899df1b263093d61898172612e",
+        "research.md": "bc0e7ddef6cd901a50df7cec10282c319fb1751b38dc0b2157b289c8b7ee14c3",
+        "first-draft.md": "5f08515fa27094d2a8b7d141d6c7b68907f0f4202239d6c429eead070b48a035"
+      },
+      "final_words": 6465,
+      "completion": "WRITING_COMPLETE",
+      "model": "gpt-6.1-sol",
+      "effort": "medium"
+    },
+    "codex-c": {
+      "files": {
+        "final.md": "c9206690668e48cd6a062eaba6a11df83f4e24b5d246081f7eb9d6b576789a7a",
+        "review-notes.md": "e60b932d9b2f0e786c16f87fd55c019102485b39076c74b98fc80b0e7fd6c437",
+        "research.md": "baa560a66dbdf26a0b062c9286ca7dd08d9a3c934a6f97ab2688a995c9f37d97",
+        "first-draft.md": "bc54b99066da993bb9489047aeaab1bc30c84738ae77c2969de5a04983cc07e4"
+      },
+      "final_words": 5464,
+      "completion": "WRITING_COMPLETE",
+      "model": "gpt-6.1-sol",
+      "effort": "medium"
+    },
+    "opus-d": {
+      "files": {
+        "final.md": "74f175a829f78c5ad62723c4ccaa82e4dd1b71b5a7373f10d18d36c6ab6589fb",
+        "review-notes.md": "68236e38ba5afb40e45cb65be4a5bb5917d0ddef59332251b1e4d9a559c94bbf",
+        "research.md": "79fd6c24984461c6c344aaa80cc5a9813b9433393f6a31670eff78e03e53ddf7",
+        "first-draft.md": "facb7a8fa6822b40556c01882eb0c052857728c840ca606fd2e7c58ba185ed4f"
+      },
+      "final_words": 8738,
+      "completion": "WRITING_COMPLETE",
+      "model": "claude-opus-5-5",
+      "effort": "medium",
+      "subtype": "success",
+      "is_error": false,
+      "permission_denials": [],
+      "modelUsage": {
+        "claude-opus-5-5": {
+          "inputTokens": 98,
+          "outputTokens": 68551,
+          "cacheReadInputTokens": 4616377,
+          "cacheCreationInputTokens": 185917,
+          "webSearchRequests": 0,
+          "costUSD": 3.7820234,
+          "contextWindow": 1000000,
+          "maxOutputTokens": 128000,
+          "thinkingTokens": 14219,
+          "cacheCreationEphemeral5mInputTokens": 0,
+          "cacheCreationEphemeral1hInputTokens": 185917,
+          "canonicalModel": "claude-opus-5-5",
+          "provider": "firstParty",
+          "costBasis": "list"
+        }
+      },
+      "exit_code": 0
+    },
+    "opus-e": {
+      "files": {
+        "final.md": "12eda6cb2c3fe07e3c0f93a41a0dc101909401c9721a5542150174f185d192b9",
+        "review-notes.md": "9ce74a36ca9303759218d35b3bd1ab430db3b0f3b2dfae16ecbe48967aad75bb",
+        "research.md": "6cb16ee2988d26facc643a178d96e98ff883319e923bc0148bec4810355265d4",
+        "first-draft.md": "b4b8c6796efc47762da63574eddee9a77ab0e5c3e97ffde59a24090942b8a296"
+      },
+      "final_words": 9393,
+      "completion": "WRITING_COMPLETE",
+      "model": "claude-opus-5-5",
+      "effort": "medium",
+      "subtype": "success",
+      "is_error": false,
+      "permission_denials": [],
+      "modelUsage": {
+        "claude-opus-5-5": {
+          "inputTokens": 98,
+          "outputTokens": 92246,
+          "cacheReadInputTokens": 5856046,
+          "cacheCreationInputTokens": 253817,
+          "webSearchRequests": 0,
+          "costUSD": 5.047057200000001,
+          "contextWindow": 1000000,
+          "maxOutputTokens": 128000,
+          "thinkingTokens": 13635,
+          "cacheCreationEphemeral5mInputTokens": 0,
+          "cacheCreationEphemeral1hInputTokens": 253817,
+          "canonicalModel": "claude-opus-5-5",
+          "provider": "firstParty",
+          "costBasis": "list"
+        }
+      },
+      "exit_code": 0
+    }
+  },
+  "documents": {
+    "design-doc/10-round-three-intern-guide-codex-a.md": "052c61e91a40f0dbe4abfc14538ffba39cbac8e3f5adc7665d552800a7e935b9",
+    "design-doc/11-round-three-intern-guide-codex-b.md": "64f71319324281301ae3035cdb574a849a8b60f4805e4aae2fa314f2363f0aa8",
+    "design-doc/12-round-three-intern-guide-codex-c.md": "fa60a62cb025880c49dda93c3660477dfbd4a667318fd61a85c1d66070a9e320",
+    "design-doc/13-round-three-intern-guide-opus-d.md": "3522b440542dd450502f3dc25753482ea8b41e60bb8c682aa3c62aeff6b73284",
+    "design-doc/14-round-three-intern-guide-opus-e.md": "f19a303d98353588b89a459bf1fe37b236360340a8b254c5df8088027a741f27"
+  }
+}

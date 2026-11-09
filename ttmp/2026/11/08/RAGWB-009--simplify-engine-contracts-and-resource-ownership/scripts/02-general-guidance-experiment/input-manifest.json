@@ -1,0 +1,22 @@
+{
+  "opus-d-prompt.md": "56491d4e31f61569d9ac796c9fe4791aec068635ac8c0dad260ca3fb74a21ab7",
+  "codex-c-prompt.md": "e26ee0ca39bca63e75e815eedac7d8b3df87aed0cbd58c16084a5abcbc3cdb2d",
+  "context.md": "ff6a42ab6c0d6d4494c77336edf8d01a22b6524fd2ae022a78a0b56549f1c490",
+  "opus-e-run.sh": "2fe13e36184eec700b2fece767cc6fb957389e058695b72dc274f0e07e3478d3",
+  "codex-a-prompt.md": "363a5f56bee06abdb6635e69d92655c0e4e0351bc53cd55041749f8dbb9334fc",
+  "evaluation-plan.md": "aa1d075292df05336210a3194a540d49dd1f60a9d6d9b2a1d83f64da7bfdc2f9",
+  "opus-d-run.sh": "c3441c06a06b1c165b015e43afdb7acb7027f20a6c035dce20737af2713129fb",
+  "opus-e-session-id.txt": "614a5a9043e85a1f7baca9913e87abaa95e18f34a5be8263cb599c0beebd41d7",
+  "codex-b-prompt.md": "8a8a42622ec08b2fea58dda62b263b3b60fcd2112604e099445342df335ddde8",
+  "opus-e-prompt.md": "1445cefed3536697cbc00fbf1d626b55d70427c77197632c7a4299f5bf416dbb",
+  "opus-d-session-id.txt": "d0002286a278a451e98863b4e68ecbbb24972457923ae38a0916647aa69ea3c0",
+  "candidate-skill/SKILL.md": "fb07f089d3dcda0a3de97fc571d04d5a7ec4667e42c7db62d9f28fe14492bdcb",
+  "candidate-skill/agents/openai.yaml": "1c01ccf127f681a33dd6d1e65c963ca7d8bca5bc68669b60154fba7753f76eaa",
+  "candidate-skill/references/writing-style.md": "5cc0d26b24e6a137caead8bc68c305a6a40bb8b3e3416ea5a43972b51a452e27",
+  "candidate-skill/references/deliverable-checklist.md": "a772d6162da4825352bad886f6e8077305146949ef8d8d9d8c3c0ec3635d9fe2",
+  "candidate-skill/references/resume-packet.md": "1362a015513a56fe3da01a4fc2f426553ff94b77396e9dfef4036329f6a81093",
+  "candidate-skill/references/phase-checklists.md": "372f3ba5ca61ccf4cae8c5d3a805c12af21071847260fe03fcbafc24ba2c9dfa",
+  "candidate-skill/references/workflow-tooling.md": "256088cd2f08ac42d9aada35bd09849a9a4b5e56bca8c58f92dc8146cf42c732",
+  "candidate-skill/scripts/test_workflow_checks.py": "2c8ef7726f30a5253b483beb2e0bf1b5dc64f9447672b8f3d961669d2c911074",
+  "candidate-skill/scripts/workflow_checks.py": "8753a6785546229aa00e140d5891ddb54080a770980e238a277931a278721622"
+}

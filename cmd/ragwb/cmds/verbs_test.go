@@ -43,7 +43,11 @@ func TestReportsAppVerbs(t *testing.T) {
 			if len(rows) != 2 {
 				t.Fatalf("rows = %v", rows)
 			}
-			if !strings.HasSuffix(rows[0]["id"].(string), "#5-9-the-rebalance-law") {
+			var ref []string
+			if err := json.Unmarshal([]byte(rows[0]["id"].(string)), &ref); err != nil {
+				t.Fatal(err)
+			}
+			if len(ref) != 2 || !strings.HasSuffix(ref[1], "#5-9-the-rebalance-law") {
 				t.Fatalf("top row = %v", rows[0])
 			}
 			if backend == "memory" && rows[0]["score"].(float64) != 12.6758 {

@@ -1,0 +1,26 @@
+{
+  "setup_commit": "1928e49",
+  "model": "gpt-6.1-sol",
+  "reasoning_effort": "medium",
+  "context_mode": "identical curated context packet; fork_turns=none",
+  "drafts": [
+    {
+      "path": "ttmp/2026/11/08/RAGWB-009--simplify-engine-contracts-and-resource-ownership/design-doc/03-v2-intern-guide-candidate-b.md",
+      "sha256": "24fcafa910ab2408586acde350a98156b0053852e10c19a8928a0d0eca930883",
+      "words_including_frontmatter": 7126,
+      "lines": 550
+    },
+    {
+      "path": "ttmp/2026/11/08/RAGWB-009--simplify-engine-contracts-and-resource-ownership/design-doc/04-v2-intern-guide-candidate-c.md",
+      "sha256": "f4b2c120294f60cb80d2140b0edcd386a6edee3750c2f1a04e3d0843dc0eb198",
+      "words_including_frontmatter": 6852,
+      "lines": 557
+    },
+    {
+      "path": "ttmp/2026/11/08/RAGWB-009--simplify-engine-contracts-and-resource-ownership/design-doc/02-v2-intern-guide-candidate-a.md",
+      "sha256": "77ff0e4c8150357f4bbd1288c5cbcedf34fef4021c88499ac15715c80fec9e8e",
+      "words_including_frontmatter": 7561,
+      "lines": 636
+    }
+  ]
+}

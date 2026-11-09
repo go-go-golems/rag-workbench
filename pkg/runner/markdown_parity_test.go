@@ -49,7 +49,8 @@ func buildArtifacts(t *testing.T, jsMarkdown bool, root string, include []string
 			if (!rep.ok) throw new Error(rep.errors.join("\n"));
 			const ms = Date.now() - t0;
 			const art = rag.engine().artifacts(ir);
-			const noRange = (k, v) => (k === "range" ? undefined : v);
+			const noRange = (k, v) => k === "range" ? undefined :
+                ((k === "id" || k === "docId") && typeof v === "string" && v.startsWith('["') ? JSON.parse(v)[1] : v);
 			// Compare values, not object insertion order. Keep array order significant.
 			const clean = x => JSON.parse(JSON.stringify(x, noRange));
 			const dump = xs => o.hashed

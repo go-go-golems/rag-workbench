@@ -97,12 +97,13 @@ func NewStoreCommand() (*cobra.Command, error) {
 		Short: "Delete superseded versions in the current namespace (keep the newest --keep per pipeline node)",
 		Long: "Delta builds (RAGWB-003) store a new version of every changed node and remember the versions per node\n" +
 			"(its lineage). gc keeps the newest --keep of each and deletes the rest; files a kept version shares through\n" +
-			"hard links stay. Run it while no ragwb serve uses an old version, or keep at least 2.",
+			"hard links stay. The namespace lock rejects collection while another process owns the store.",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			s, err := artifacts.Open(storeRoot(), runner.ArtifactNamespace(jsComponents, indexBackend))
 			if err != nil {
 				return err
 			}
+			defer s.Close()
 			r, err := s.GC(keep)
 			if err != nil {
 				return err
@@ -122,6 +123,7 @@ func NewStoreCommand() (*cobra.Command, error) {
 			if err != nil {
 				return err
 			}
+			defer s.Close()
 			n, problems, err := natives.VerifyStore(s)
 			if err != nil {
 				return err

@@ -52,17 +52,17 @@ func TestEnrichDecide(t *testing.T) {
 	deferred := &decide.Fake{}
 	rt = newOptsRuntime(t, Options{Decide: deferred})
 	var got2 struct {
-		Pending []string `json:"pending"`
-		HasKind bool     `json:"hasKind"`
+		Pending  []string `json:"pending"`
+		Rejected bool     `json:"rejected"`
 	}
 	evalJSON(t, rt, nil, `(async () => {
 		const rag = require("ragwb");
 		`+enrichDecideCorpus+`
-		const r = await rag.run(plan, { q: 'widgets' });
-		const c = r.chunk(r.hits[0].id);
-		return JSON.stringify({ pending: rag.engine().pending(rag.compile(plan)).map(x => x.node), hasKind: !!(c.meta && c.meta.kind) });
+		let rejected = false;
+		try { await rag.run(plan, { q: 'widgets' }); } catch (e) { if (e.code !== 'build_pending') throw e; rejected = true; }
+		return JSON.stringify({ pending: rag.engine().pending(rag.compile(plan)).map(x => x.node), rejected });
 	})()`, &got2)
-	if got2.HasKind || len(got2.Pending) != 1 || deferred.Calls() != 0 {
+	if !got2.Rejected || len(got2.Pending) != 1 || deferred.Calls() != 0 {
 		t.Fatalf("without build calls: %+v calls %d", got2, deferred.Calls())
 	}
 }

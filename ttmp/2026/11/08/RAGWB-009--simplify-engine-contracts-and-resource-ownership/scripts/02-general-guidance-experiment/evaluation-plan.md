@@ -1,0 +1,11 @@
+# Evaluation fixed before round-two launch
+
+Read every final document and compare all sections, not merely introductory prose. Assess whether EACH output lets a new developer explain purpose, terminology, object relationships, representative success/failure behavior, current/proposed status and the next implementation step. Different structure/examples are desirable variation; do not select a winner and conceal weak outputs.
+
+Compare research notes, preserved first draft, pre-revision review notes and final document for each writer. Identify actual substantive second-pass changes and remaining gaps. Do not infer review success from an author's claim. Check important source assertions independently and verify new design choices are marked proposals, not invented existing facts. Review original/round-one guides as baselines but do not give them to writers as answers.
+
+Manual 0–3 dimensions: orientation/local terminology; scope/relationships; sequences/responsibility; correctness/evidence; actionable implementation/testing; proportional whole-document clarity. 0 absent/misleading, 1 substantial gaps, 2 mostly clear with specific gaps, 3 clear and faithful. No summed score. Cite passages and source evidence. Record at least two strengths and two limitations per writer and explicitly identify the weakest recurring dimensions across all five.
+
+Technical review retains the original essential gates (late/background shared users, runtime disposal cleanup, failed refresh retains usable state, detached results before release, conservative corrupt-metadata handling, exclusive store ownership, no ordinary caller close, no legacy adapters). Independently inspect scope/identity, handoff error ownership, graph-level references, cancellation acceptance, unfinished-worker lifetime, crash remnants and current versus proposed behavior. These are evaluator checks, withheld from writers.
+
+This is a qualitative, single-project experiment. Guidance, research-before-writing and second-pass procedure all change together; three Sol-medium and two Opus-5.5-medium runs differ in tooling/context limits. No control arm, blind evaluator or real-intern test exists. Observe consistency and remaining weaknesses; do not claim isolated causal effects or broad model rankings. Stop after reporting; do not install the candidate or replace the original automatically.

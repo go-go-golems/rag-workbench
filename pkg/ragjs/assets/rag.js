@@ -449,9 +449,117 @@ var __ragModule = (() => {
   }, "timed");
   var env0 = {};
 
+  // pkg/ragjs/src/graph/references.ts
+  function references(node, def = {}) {
+    const refs = node.in.map((target, i) => ({
+      kind: "data",
+      target,
+      set: /* @__PURE__ */ __name((value) => {
+        node.in[i] = value;
+      }, "set")
+    }));
+    refs.push(...def.references?.(node.p) || []);
+    for (const target of def.uses?.(node.p) || []) {
+      if (!refs.some((r) => r.kind === "artifact" && r.target === target))
+        refs.push({ kind: "artifact", target });
+    }
+    for (const target of def.reads?.(node.p) || []) refs.push({ kind: "signal", target });
+    const visit = /* @__PURE__ */ __name((value) => {
+      if (!value || typeof value !== "object") return;
+      const object = value;
+      if (typeof object.$bake === "string") {
+        const bindings = object.datasets;
+        for (const [name, target] of Object.entries(bindings || {}))
+          refs.push({
+            kind: "artifact",
+            target,
+            set: /* @__PURE__ */ __name((value2) => {
+              if (bindings) bindings[name] = value2;
+            }, "set")
+          });
+      } else for (const child of Object.values(object)) visit(child);
+    }, "visit");
+    visit(node.p);
+    const decisions = node.p.decisions;
+    for (const [name, target] of Object.entries(decisions || {}))
+      refs.push({
+        kind: "decision",
+        target,
+        set(value) {
+          if (decisions) decisions[name] = value;
+        }
+      });
+    const when = node.when;
+    if (when?.decision) {
+      const split = when.decision.indexOf(".");
+      const output = when.decision.slice(split);
+      refs.push({
+        kind: "decision",
+        target: when.decision.slice(0, split),
+        set: /* @__PURE__ */ __name((target) => {
+          when.decision = target + output;
+        }, "set")
+      });
+    }
+    for (const [name, target] of Object.entries(when?.bindings || {})) {
+      refs.push({
+        kind: "decision",
+        target,
+        set: /* @__PURE__ */ __name((value) => {
+          if (when?.bindings) when.bindings[name] = value;
+        }, "set")
+      });
+    }
+    return refs;
+  }
+  __name(references, "references");
+  function rewriteReferences(refs, from, to) {
+    const affected = refs.filter((r) => r.target === from);
+    if (affected.some((r) => !r.set))
+      throw new Error(`reference to '${from}' has no declared rewrite binding`);
+    for (const ref of affected) ref.set?.(to);
+  }
+  __name(rewriteReferences, "rewriteReferences");
+  function outputReferences(outputs) {
+    return Object.entries(outputs).map(([name, target]) => ({
+      kind: "output",
+      target,
+      set: /* @__PURE__ */ __name((value) => {
+        outputs[name] = value;
+      }, "set")
+    }));
+  }
+  __name(outputReferences, "outputReferences");
+  function indexReferences(params) {
+    if (typeof params.index === "string")
+      return [
+        {
+          kind: "artifact",
+          target: "ix-" + params.index,
+          set: /* @__PURE__ */ __name((target) => {
+            if (!target.startsWith("ix-")) throw new Error("index node IDs must start with ix-");
+            params.index = target.slice(3);
+          }, "set")
+        }
+      ];
+    if (Array.isArray(params.indexes))
+      return params.indexes.map((name, i) => ({
+        kind: "artifact",
+        target: "ix-" + String(name),
+        set: /* @__PURE__ */ __name((target) => {
+          if (!target.startsWith("ix-")) throw new Error("index node IDs must start with ix-");
+          params.indexes[i] = target.slice(3);
+        }, "set")
+      }));
+    return [];
+  }
+  __name(indexReferences, "indexReferences");
+
   // pkg/ragjs/src/graph/graph.js
-  function rag_bake(f) {
-    return { $bake: lam(f).$fn };
+  function rag_bake(bindings, f) {
+    if (!isObj(bindings) || !isObj(bindings.datasets) || typeof f !== "function")
+      throw new RagError("compile", "bake requires ({datasets: {name: nodeId}}, callback)");
+    return { $bake: lam(f).$fn, datasets: { ...bindings.datasets } };
   }
   __name(rag_bake, "rag_bake");
   function splitOpts(p) {
@@ -746,7 +854,16 @@ var __ragModule = (() => {
   var Fragment = _Fragment;
   var WHEN_KEYS = ["decision", "in", "not", "min", "max"];
   function normWhen(w, id) {
-    if (typeof w === "function" || isLambda(w) || typeof w === "string") return lam(w);
+    if (typeof w === "function" || typeof w === "string")
+      throw new RagError(
+        "compile",
+        `${id}: callback conditions require {$fn, bindings: {name: decisionNode}}`
+      );
+    if (isLambda(w)) {
+      if (!isObj(w.bindings))
+        throw new RagError("compile", `${id}: callback conditions require named decision bindings`);
+      return { ...w, bindings: { ...w.bindings } };
+    }
     if (!isObj(w) || typeof w.decision !== "string" || !/^[A-Za-z][\w-]*\.[\w.-]+$/.test(w.decision))
       throw new RagError(
         "compile",
@@ -766,15 +883,6 @@ var __ragModule = (() => {
     return out;
   }
   __name(normWhen, "normWhen");
-  function whenRefs(w) {
-    if (!w) return [];
-    if (isLambda(w))
-      return uniq(
-        [...w.$fn.matchAll(/\.decision\(\s*['"`]([A-Za-z][\w-]*)['"`]\s*\)/g)].map((m) => m[1])
-      );
-    return [w.decision.split(".")[0]];
-  }
-  __name(whenRefs, "whenRefs");
   function whenHolds(w, decision) {
     const [nodeId, ...rest] = w.decision.split(".");
     const qid = rest.join(".");
@@ -814,7 +922,12 @@ var __ragModule = (() => {
   var ID_RE = /^[A-Za-z][\w-]*$/;
   function finalize(raw) {
     const problems = [];
-    const nodes = raw.nodes.map((n) => ({ ...n, in: [...n.in || []], p: n.p || {} }));
+    const nodes = raw.nodes.map((n) => ({
+      ...n,
+      in: [...n.in || []],
+      p: n.p || {},
+      ...n.when ? { when: normWhen(n.when, n.id) } : {}
+    }));
     const signals = { ...raw.signals || {} };
     for (const k of Object.keys(signals))
       if (!nodes.find((n) => n.id === k))
@@ -861,13 +974,16 @@ var __ragModule = (() => {
           problems.push(`${n.id}: a build node cannot read live node '${src}'`);
         edges.push([src, n.id, from.t === "signal" ? "signal" : "data"]);
       });
-      n.uses = uniq([...def.uses ? def.uses(n.p) : []]);
+      const refs = references(n, def);
+      n.uses = uniq(refs.filter((r) => r.kind === "artifact").map((r) => r.target));
       if (n.t === "retrieve" && byId.has("synonyms")) n.uses.push("synonyms");
       for (const u of n.uses) {
         if (!byId.has(u))
           problems.push(
             `${n.id}: uses '${u}', which does not exist${u.startsWith("ix-") ? ` (indexes: ${nodes.filter((x) => x.id.startsWith("ix-")).map((x) => x.id.slice(3)).join(", ") || "none"})` : ""}`
           );
+        else if (byId.get(u).phase !== "build")
+          problems.push(`${n.id}: artifact '${u}' must be a build output`);
         else edges.push([u, n.id, "artifact"]);
       }
       if (n.when) {
@@ -876,13 +992,14 @@ var __ragModule = (() => {
           const err = checkLambda(n.when, `${n.id}.when`);
           if (err) problems.push(err);
         }
-        for (const r of whenRefs(n.when)) {
-          const from = byId.get(r);
-          if (!from) problems.push(`${n.id}: when reads decision '${r}', which does not exist`);
-          else if (from.t === "signal" || portsOf(from).out !== "decision")
-            problems.push(`${n.id}: when reads '${r}', which is not a decision node (classify)`);
-          else edges.push([r, n.id, "decision"]);
-        }
+      }
+      for (const r of refs.filter((r2) => r2.kind === "decision").map((r2) => r2.target)) {
+        if (def.phase !== "live") problems.push(`${n.id}: build nodes cannot read decisions`);
+        const from = byId.get(r);
+        if (!from) problems.push(`${n.id}: when reads decision '${r}', which does not exist`);
+        else if (from.t === "signal" || portsOf(from).out !== "decision")
+          problems.push(`${n.id}: when reads '${r}', which is not a decision node (classify)`);
+        else edges.push([r, n.id, "decision"]);
       }
       const reads = new Set(def.reads ? def.reads(n.p) : []);
       const walk = /* @__PURE__ */ __name((v, key) => {
@@ -945,7 +1062,7 @@ var __ragModule = (() => {
       );
     const ir = {
       kind: "rag",
-      version: 1,
+      version: 2,
       id: raw.id,
       corpus: raw.corpus || null,
       signals,
@@ -1059,7 +1176,11 @@ var __ragModule = (() => {
   }
   __name(rawOf, "rawOf");
   function compile(target) {
-    if (target && target.kind === "rag") return withMethods(clone(target));
+    if (target && target.kind === "rag") {
+      if (target.version !== 2)
+        throw new RagError("compile", "unsupported IR version; rebuild the plan");
+      return finalize(clone(target));
+    }
     if (target && target.ir && target.ir.kind === "rag") return target.ir;
     const t0 = now();
     const raw = rawOf(target);
@@ -1124,7 +1245,7 @@ var __ragModule = (() => {
   function applyOp(raw, op) {
     raw = {
       ...raw,
-      nodes: raw.nodes.map((n) => ({ ...n, in: [...n.in], p: clone(n.p) })),
+      nodes: clone(raw.nodes),
       signals: { ...raw.signals },
       outputs: { ...raw.outputs },
       pinned: [...raw.pinned]
@@ -1212,10 +1333,16 @@ var __ragModule = (() => {
       }
       case "remove": {
         const n = nodeOf(raw, op.node);
-        const users = raw.nodes.filter((x) => (REG.get(x.t)?.uses?.(x.p) || []).includes(n.id));
+        const users = raw.nodes.filter(
+          (x) => references(x, REG.get(x.t)).some((r) => r.target === n.id && r.kind !== "data")
+        );
         if (users.length)
           throw new Error(
             `'${n.id}' is used by ${users.map((u) => u.id).join(", ")}; remove those first`
+          );
+        if (!op.bypass && (consumers(n.id).length || Object.values(raw.outputs).includes(n.id)))
+          throw new Error(
+            `'${n.id}' is referenced; rewire consumers first or explicitly request bypass`
           );
         for (const c of consumers(n.id)) {
           const variadic = (portsOf(c).in[0] || "") === "hits*";
@@ -1249,8 +1376,10 @@ var __ragModule = (() => {
       case "rename": {
         const n = nodeOf(raw, op.node);
         if (!ID_RE.test(op.to)) throw new Error("invalid id " + op.to);
-        for (const x of raw.nodes) x.in = x.in.map((y) => y === n.id ? op.to : y);
-        for (const [k, v] of Object.entries(raw.outputs)) if (v === n.id) raw.outputs[k] = op.to;
+        if (raw.nodes.some((x) => x.id === op.to) || Object.prototype.hasOwnProperty.call(raw.signals, op.to))
+          throw new Error(`node '${op.to}' already exists`);
+        for (const x of raw.nodes) rewriteReferences(references(x, REG.get(x.t)), n.id, op.to);
+        rewriteReferences(outputReferences(raw.outputs), n.id, op.to);
         n.id = op.to;
         return raw;
       }
@@ -1261,6 +1390,37 @@ var __ragModule = (() => {
     }
   }
   __name(applyOp, "applyOp");
+  function projectLexical(ir) {
+    const raw = clone(ir);
+    const removed = new Set(
+      raw.nodes.filter(
+        (n) => (REG.get(n.t)?.capabilities || []).includes("model") || n.out === "answer" || n.out === "context"
+      ).map((n) => n.id)
+    );
+    const byId = new Map(raw.nodes.map((n) => [n.id, n]));
+    const bypass = /* @__PURE__ */ __name((id, seen = /* @__PURE__ */ new Set()) => {
+      if (!removed.has(id)) return [id];
+      if (seen.has(id)) throw new RagError("export", "cyclic projection");
+      const n = byId.get(id);
+      const next = /* @__PURE__ */ new Set([...seen, id]);
+      return n.in.flatMap((input) => bypass(input, next));
+    }, "bypass");
+    raw.nodes = raw.nodes.filter((n) => !removed.has(n.id));
+    for (const n of raw.nodes) {
+      n.in = uniq(n.in.flatMap((id) => bypass(id)));
+      if (references(n, REG.get(n.t)).some((r) => r.kind === "decision" && removed.has(r.target)))
+        delete n.when;
+      const dangling = references(n, REG.get(n.t)).find((r) => removed.has(r.target));
+      if (dangling)
+        throw new RagError("export", `${n.id}: unsupported dependency ${dangling.target}`);
+    }
+    raw.outputs = Object.fromEntries(
+      Object.entries(raw.outputs).filter(([, id]) => !removed.has(id))
+    );
+    raw.pinned = raw.pinned.filter((name) => raw.outputs[name]);
+    return finalize(raw);
+  }
+  __name(projectLexical, "projectLexical");
 
   // pkg/ragjs/src/components/markdown.js
   function parseScalar(v) {
@@ -1724,6 +1884,13 @@ var __ragModule = (() => {
 
   // pkg/ragjs/src/components/builtins.js
   function installBuiltins() {
+    build("snapshot.value", {
+      in: [],
+      out: "value",
+      args: optArgs,
+      ports: /* @__PURE__ */ __name((p) => ({ in: p.inputs, out: p.kind }), "ports"),
+      all: /* @__PURE__ */ __name((_inputs, _ctx, p) => p.value, "all")
+    });
     build("source.inline", {
       in: [],
       out: "files",
@@ -1819,14 +1986,14 @@ var __ragModule = (() => {
       out: "index",
       args: optArgs,
       describe: /* @__PURE__ */ __name((p) => Object.entries(p.fields || { title: 2, headingPath: 3, text: 1 }).map(([k, v]) => `${k}×${v}`).join(" "), "describe"),
-      all: /* @__PURE__ */ __name(([chunks], ctx, p) => new Bm25Index(chunks, p), "all")
+      all: /* @__PURE__ */ __name(([chunks], ctx, p) => new Bm25Index(chunks.values(), p), "all")
     });
     build("index.terms", {
       in: ["chunks"],
       out: "index",
       args: optArgs,
       describe: /* @__PURE__ */ __name((p) => (p.keys || ["type", "tags", "status"]).join(" · "), "describe"),
-      all: /* @__PURE__ */ __name(([chunks], ctx, p) => new TermsIndex(chunks, p), "all"),
+      all: /* @__PURE__ */ __name(([chunks], ctx, p) => new TermsIndex(chunks.values(), p), "all"),
       // artifact store: the value → key → ids map (byDoc, which nothing reads, comes back empty)
       persist: {
         save: /* @__PURE__ */ __name((ix) => ({ keys: ix.keys, N: ix.N, map: [...ix.map].map(([v, m]) => [v, [...m]]) }), "save"),
@@ -1849,7 +2016,7 @@ var __ragModule = (() => {
     build("bake", {
       in: ["docs"],
       out: "value",
-      args: /* @__PURE__ */ __name((f) => ({ value: rag_bake(f) }), "args"),
+      args: /* @__PURE__ */ __name((bindings, f) => ({ value: rag_bake(bindings, f) }), "args"),
       describe: /* @__PURE__ */ __name(() => "baked value", "describe"),
       all: /* @__PURE__ */ __name((inputs, ctx, p) => p.value, "all")
     });
@@ -1860,7 +2027,7 @@ var __ragModule = (() => {
       lambdas: ["fn"],
       args: /* @__PURE__ */ __name((a, b) => typeof a === "function" || isLambda(a) ? { fn: lam(a), ...b || {} } : { index: a, ...b || {} }, "args"),
       id: /* @__PURE__ */ __name((p) => p.index ? String(p.index) : "retrieve", "id"),
-      uses: /* @__PURE__ */ __name((p) => p.index ? ["ix-" + p.index] : [], "uses"),
+      references: indexReferences,
       describe: /* @__PURE__ */ __name((p) => p.fn ? "custom λ" : `${p.index} · k ${p.k ?? 20}`, "describe"),
       run: /* @__PURE__ */ __name(async (s, ctx, queries, p) => {
         if (p.fn)
@@ -1892,6 +2059,7 @@ var __ragModule = (() => {
       ), "run")
     });
     live("rewrite.llm", {
+      capabilities: ["model"],
       in: ["queries"],
       out: "queries",
       args: optArgs,
@@ -1998,6 +2166,7 @@ Question: ${s.q}`,
       ).map((h) => ({ id: h.id, score: h.score, via: h.via, reason: h.reason })), "run")
     });
     live("rerank.llm", {
+      capabilities: ["model"],
       in: ["hits"],
       out: "hits",
       args: optArgs,
@@ -2084,6 +2253,7 @@ ${clip((c.text || "").replace(/\s+/g, " "), p.clip ?? 1500)}`,
     }
     __name(gradeHits, "gradeHits");
     live("filter.decide", {
+      capabilities: ["model"],
       in: ["hits"],
       out: "hits",
       args: optArgs,
@@ -2109,6 +2279,7 @@ ${clip((c.text || "").replace(/\s+/g, " "), p.clip ?? 1500)}`,
       }, "run")
     });
     live("rerank.decide", {
+      capabilities: ["model"],
       in: ["hits"],
       out: "hits",
       args: optArgs,
@@ -2165,7 +2336,7 @@ ${clip((c.text || "").replace(/\s+/g, " "), p.clip ?? 1500)}`,
       args: optArgs,
       id: /* @__PURE__ */ __name(() => "links", "id"),
       reads: /* @__PURE__ */ __name(() => ["q"], "reads"),
-      uses: /* @__PURE__ */ __name((p) => p.index ? ["ix-" + p.index] : [], "uses"),
+      references: indexReferences,
       describe: /* @__PURE__ */ __name((p) => `[[links]] · decay ${p.decay ?? 0.5}`, "describe"),
       run: /* @__PURE__ */ __name((s, ctx, hits, p) => {
         const ix = ctx.index(p.index) || ctx.firstIndex("bm25");
@@ -2228,6 +2399,7 @@ ${ctx.chunk(e.id).text}`
       }, "run")
     });
     live("answer", {
+      capabilities: ["model"],
       in: ["context"],
       out: "answer",
       args: optArgs,
@@ -2264,6 +2436,7 @@ Question: ${s.q}`;
       }, "run")
     });
     live("classify", {
+      capabilities: ["model"],
       in: [],
       out: "decision",
       args: optArgs,
@@ -2288,13 +2461,14 @@ Question: ${s.q}`;
       }, "run")
     });
     live("agentic", {
+      capabilities: ["model"],
       in: ["queries"],
       out: "answer",
       args: optArgs,
       skip: "null",
       trigger: "submit",
       reads: /* @__PURE__ */ __name(() => ["q"], "reads"),
-      uses: /* @__PURE__ */ __name((p) => arr(p.indexes).map((i) => "ix-" + i), "uses"),
+      references: indexReferences,
       describe: /* @__PURE__ */ __name((p) => `tools · ≤${p.maxReads ?? 8} reads · ${p.tier || "default"}`, "describe"),
       run: /* @__PURE__ */ __name(async (s, ctx, queries, p) => {
         const names = arr(p.indexes).length ? arr(p.indexes) : ctx.indexNames().filter((n) => (ctx.index(n) || {}).kind === "bm25");
@@ -2411,74 +2585,118 @@ Question: ${s.q}`;
   }
   __name(installBuiltins, "installBuiltins");
 
-  // pkg/ragjs/src/engine/records.js
-  var _Lazy = class _Lazy {
-    constructor(load, onLoad) {
-      this.load = load;
-      this.onLoad = onLoad;
-      this.done = false;
-      this.v = void 0;
-    }
-    force() {
-      if (!this.done) {
-        const t0 = now();
-        this.v = this.load();
-        this.done = true;
-        this.load = null;
-        if (this.onLoad) this.onLoad(now() - t0);
-      }
-      return this.v;
-    }
-  };
-  __name(_Lazy, "Lazy");
-  var Lazy = _Lazy;
-  function unionChunks(map, views) {
-    const get = /* @__PURE__ */ __name((id) => map.get(id) ?? views.reduce((hit, v) => hit ?? v.get(id), void 0), "get");
-    return {
-      get,
-      has: /* @__PURE__ */ __name((id) => map.has(id) || views.some((v) => v.has(id)), "has"),
+  // pkg/ragjs/src/engine/dataset.ts
+  function immutable(value) {
+    if (value === null || typeof value !== "object") return value;
+    if (Array.isArray(value)) return Object.freeze(value.map(immutable));
+    const out = {};
+    for (const [key, item] of Object.entries(value)) out[key] = immutable(item);
+    return Object.freeze(out);
+  }
+  __name(immutable, "immutable");
+  function dataset(id, kind, reader) {
+    const result = {
+      id,
+      kind,
       get size() {
-        return (/* @__PURE__ */ new Set([...map.keys(), ...views.flatMap((v) => [...v.keys()])])).size;
+        return reader.size;
+      },
+      get(key) {
+        const value = reader.get(key);
+        return value == null ? null : immutable(value);
       },
       *values() {
-        const seen = new Set(map.keys());
-        for (const v of views)
-          for (const c of v.values())
-            if (!seen.has(c.id)) {
-              seen.add(c.id);
-              yield get(c.id);
-            }
-        yield* map.values();
+        for (const value of reader.values()) yield immutable(value);
       },
-      *keys() {
-        for (const c of this.values()) yield c.id;
-      },
-      *entries() {
-        for (const c of this.values()) yield [c.id, c];
-      },
-      forEach(f) {
-        for (const c of this.values()) f(c, c.id, this);
-      },
-      [Symbol.iterator]() {
-        return this.entries();
+      materialize() {
+        return Object.freeze([...result.values()]);
       }
     };
+    return Object.freeze(result);
   }
-  __name(unionChunks, "unionChunks");
-  var _Outputs = class _Outputs extends Map {
-    get(k) {
-      const v = super.get(k);
-      return v instanceof Lazy ? v.force() : v;
+  __name(dataset, "dataset");
+  function memoryDataset(id, kind, records) {
+    const entries = /* @__PURE__ */ new Map();
+    for (const record of records) {
+      if (entries.has(record.id))
+        throw new RagError("dataset", `duplicate record '${record.id}' in ${id}`);
+      entries.set(record.id, immutable(record));
+    }
+    return dataset(id, kind, entries);
+  }
+  __name(memoryDataset, "memoryDataset");
+  function referenceKey(ref) {
+    if (!ref || typeof ref.dataset !== "string" || typeof ref.id !== "string")
+      throw new RagError("reference", "expected {dataset, id}");
+    return JSON.stringify([ref.dataset, ref.id]);
+  }
+  __name(referenceKey, "referenceKey");
+  function qualify(datasetId, localId) {
+    return referenceKey({ dataset: datasetId, id: localId });
+  }
+  __name(qualify, "qualify");
+  function unqualify(id) {
+    let pair;
+    try {
+      pair = JSON.parse(id);
+    } catch {
+      throw new RagError("reference", "record ID must include its dataset identity");
+    }
+    if (!Array.isArray(pair) || pair.length !== 2 || pair.some((v) => typeof v !== "string") || JSON.stringify(pair) !== id)
+      throw new RagError("reference", "invalid qualified record ID");
+    return { dataset: pair[0], id: pair[1] };
+  }
+  __name(unqualify, "unqualify");
+  var _RecordCatalog = class _RecordCatalog {
+    constructor() {
+      this.sources = /* @__PURE__ */ new Map();
+    }
+    add(data, documents) {
+      if (this.sources.has(data.id)) return;
+      this.sources.set(data.id, { data, documents });
+    }
+    get size() {
+      let size = 0;
+      for (const { data } of this.sources.values()) size += data.size;
+      return size;
+    }
+    get(id) {
+      const ref = unqualify(id);
+      const source = this.sources.get(ref.dataset);
+      if (!source)
+        throw new RagError("reference", `dataset '${ref.dataset}' is not in this snapshot`);
+      const record = source.data.get(ref.id);
+      return record ? this.project(record, source.data.id, source.documents) : null;
+    }
+    has(id) {
+      return this.get(id) !== null;
+    }
+    project(record, datasetId, documents) {
+      return immutable({
+        ...record,
+        id: qualify(datasetId, record.id),
+        ...typeof record.docId === "string" && documents ? { docId: qualify(documents, record.docId) } : {}
+      });
+    }
+    *values() {
+      for (const { data, documents } of this.sources.values())
+        for (const record of data.values()) yield this.project(record, data.id, documents);
+    }
+    *keys() {
+      for (const record of this.values()) yield record.id;
+    }
+    *entries() {
+      for (const record of this.values()) yield [record.id, record];
+    }
+    [Symbol.iterator]() {
+      return this.entries();
+    }
+    forEach(callback) {
+      for (const record of this.values()) callback(record, record.id);
     }
   };
-  __name(_Outputs, "Outputs");
-  var Outputs = _Outputs;
-  var isView = /* @__PURE__ */ __name((v) => v != null && typeof v === "object" && v.__records !== void 0, "isView");
-  var asArray = /* @__PURE__ */ __name((v) => isView(v) ? v.toArray() : v, "asArray");
-  var JSON_PERSIST = { save: /* @__PURE__ */ __name((v) => v, "save"), load: /* @__PURE__ */ __name((x) => x, "load") };
-  var FULL_DELTA = Object.freeze({ full: true });
-  var persistOf = /* @__PURE__ */ __name((def) => !def || def.persist === false ? null : def.persist || (["docs", "chunks"].includes(def.out) ? JSON_PERSIST : null), "persistOf");
-  var storeKey = /* @__PURE__ */ __name((d, def) => hash([d, def.src || ""]), "storeKey");
+  __name(_RecordCatalog, "RecordCatalog");
+  var RecordCatalog = _RecordCatalog;
 
   // pkg/ragjs/src/engine/scope.ts
   var currentScope = null;
@@ -2569,6 +2787,237 @@ Question: ${s.q}`;
   }
   __name(safeEmit, "safeEmit");
 
+  // pkg/ragjs/src/engine/jobs.ts
+  var _BuildJobs = class _BuildJobs {
+    constructor() {
+      this.jobs = /* @__PURE__ */ new Map();
+      this.closed = false;
+    }
+    async run(key, options, start) {
+      if (this.closed) throw new RagError("shutdown", "engine is closed");
+      if (options.signal?.aborted) throw new RagError("cancelled", "build waiter cancelled");
+      let job = this.jobs.get(key);
+      if (job?.cancelling) {
+        await this.wait(job, options, false).catch((error) => {
+          if (options.signal?.aborted) throw error;
+        });
+        return this.run(key, options, start);
+      }
+      if (!job) {
+        const scope = newScope(() => {
+        });
+        const waiters = /* @__PURE__ */ new Set();
+        const created = {
+          scope,
+          waiters,
+          cancelling: false,
+          promise: Promise.resolve(void 0)
+        };
+        this.jobs.set(key, created);
+        const notify = /* @__PURE__ */ __name((kind, value) => {
+          for (const waiter of [...waiters]) {
+            try {
+              if (kind === "event") waiter.event?.(value);
+              else waiter.progress?.(value);
+            } catch {
+            }
+          }
+        }, "notify");
+        created.promise = Promise.resolve().then(
+          () => start({
+            signal: scope.signal,
+            onEvent: /* @__PURE__ */ __name((event) => notify("event", event), "onEvent"),
+            onProgress: /* @__PURE__ */ __name((progress) => notify("progress", progress), "onProgress")
+          })
+        ).finally(() => {
+          scope.close();
+          if (this.jobs.get(key) === created) this.jobs.delete(key);
+        });
+        void created.promise.catch(() => {
+        });
+        job = created;
+      }
+      return this.wait(job, options, true);
+    }
+    wait(job, options, interested) {
+      return new Promise((resolve, reject) => {
+        const waiter = { event: options.onEvent, progress: options.onProgress };
+        let done = false;
+        const finish = /* @__PURE__ */ __name((error, value) => {
+          if (done) return;
+          done = true;
+          options.signal?.removeEventListener("abort", abort);
+          if (interested) job.waiters.delete(waiter);
+          if (error !== null) reject(error);
+          else resolve(value);
+        }, "finish");
+        const abort = /* @__PURE__ */ __name(() => {
+          finish(new RagError("cancelled", "build waiter cancelled"));
+          if (interested && job.waiters.size === 0) {
+            job.cancelling = true;
+            job.scope.abort("no build waiters");
+          }
+        }, "abort");
+        if (interested) job.waiters.add(waiter);
+        options.signal?.addEventListener("abort", abort);
+        if (options.signal?.aborted) abort();
+        job.promise.then(
+          (value) => finish(null, value),
+          (error) => finish(error)
+        );
+      });
+    }
+    async close() {
+      this.closed = true;
+      const active = [...this.jobs.values()];
+      for (const job of active) {
+        job.cancelling = true;
+        job.scope.abort("engine shutdown");
+      }
+      await Promise.allSettled(active.map((job) => job.promise));
+    }
+  };
+  __name(_BuildJobs, "BuildJobs");
+  var BuildJobs = _BuildJobs;
+
+  // pkg/ragjs/src/engine/ownership.ts
+  var _ResourceRegistry = class _ResourceRegistry {
+    constructor() {
+      this.closed = 0;
+      this.entries = /* @__PURE__ */ new Map();
+    }
+    retain(resource, close) {
+      let entry = this.entries.get(resource);
+      if (!entry) {
+        entry = { owners: 0, close };
+        this.entries.set(resource, entry);
+      }
+      entry.owners++;
+      let released = false;
+      return () => {
+        if (released) return;
+        released = true;
+        if (--entry.owners === 0) {
+          this.entries.delete(resource);
+          entry.close();
+          this.closed++;
+        }
+      };
+    }
+    get size() {
+      return this.entries.size;
+    }
+  };
+  __name(_ResourceRegistry, "ResourceRegistry");
+  var ResourceRegistry = _ResourceRegistry;
+  var _OwnershipScope = class _OwnershipScope {
+    constructor() {
+      this.releases = [];
+      this.closed = false;
+    }
+    own(release) {
+      if (this.closed) {
+        release();
+        throw new Error("ownership scope is closed");
+      }
+      this.releases.push(release);
+    }
+    close() {
+      if (this.closed) return;
+      this.closed = true;
+      let failure;
+      for (const release of this.releases.reverse()) {
+        try {
+          release();
+        } catch (error) {
+          failure ?? (failure = error);
+        }
+      }
+      this.releases = [];
+      if (failure) throw failure;
+    }
+  };
+  __name(_OwnershipScope, "OwnershipScope");
+  var OwnershipScope = _OwnershipScope;
+
+  // pkg/ragjs/src/engine/records.js
+  var _Lazy = class _Lazy {
+    constructor(load, onLoad) {
+      this.load = load;
+      this.onLoad = onLoad;
+      this.done = false;
+      this.v = void 0;
+    }
+    force() {
+      if (!this.done) {
+        const t0 = now();
+        this.v = this.load();
+        this.done = true;
+        this.load = null;
+        if (this.onLoad) this.onLoad(now() - t0);
+      }
+      return this.v;
+    }
+  };
+  __name(_Lazy, "Lazy");
+  var Lazy = _Lazy;
+  var _Outputs = class _Outputs extends Map {
+    get(k) {
+      const v = super.get(k);
+      return v instanceof Lazy ? v.force() : v;
+    }
+  };
+  __name(_Outputs, "Outputs");
+  var Outputs = _Outputs;
+  var isView = /* @__PURE__ */ __name((v) => v != null && typeof v === "object" && v.__records !== void 0, "isView");
+  var JSON_PERSIST = { save: /* @__PURE__ */ __name((v) => v, "save"), load: /* @__PURE__ */ __name((x) => x, "load") };
+  var FULL_DELTA = Object.freeze({ full: true });
+  var persistOf = /* @__PURE__ */ __name((def) => !def || def.persist === false ? null : def.persist || (["docs", "chunks"].includes(def.out) ? JSON_PERSIST : null), "persistOf");
+  var storeKey = /* @__PURE__ */ __name((d, def) => hash([d, def.src || ""]), "storeKey");
+
+  // pkg/ragjs/src/engine/result.ts
+  function detach(value, maxBytes = 16 * 1024 * 1024) {
+    const ancestors = /* @__PURE__ */ new Set();
+    let bytes = 0;
+    const copy = /* @__PURE__ */ __name((item, depth) => {
+      bytes += 8;
+      if (bytes > maxBytes) throw new RagError("result_limit", "result exceeds byte budget");
+      if (depth > 100) throw new RagError("result_limit", "result nesting exceeds 100 levels");
+      if (item === null || item === void 0 || typeof item === "boolean") return item;
+      if (typeof item === "string") {
+        bytes += item.length * 2;
+        if (bytes > maxBytes) throw new RagError("result_limit", "result exceeds byte budget");
+        return item;
+      }
+      if (typeof item === "number") {
+        if (!Number.isFinite(item))
+          throw new RagError("result", "result contains a non-finite number");
+        bytes += 8;
+        return item;
+      }
+      if (typeof item !== "object")
+        throw new RagError("result", "result must contain only plain data");
+      if (ancestors.has(item)) throw new RagError("result", "result contains a cycle");
+      if (!Array.isArray(item) && Object.getPrototypeOf(item) !== Object.prototype && Object.getPrototypeOf(item) !== null)
+        throw new RagError("result", "result contains an instance or resource");
+      ancestors.add(item);
+      let out;
+      if (Array.isArray(item)) out = item.map((value2) => copy(value2, depth + 1));
+      else {
+        const result = {};
+        for (const [key, child] of Object.entries(item)) {
+          copy(key, depth + 1);
+          result[key] = copy(child, depth + 1);
+        }
+        out = result;
+      }
+      ancestors.delete(item);
+      return out;
+    }, "copy");
+    return copy(value, 0);
+  }
+  __name(detach, "detach");
+
   // pkg/ragjs/src/engine/session.js
   var countOf = /* @__PURE__ */ __name((v) => v == null ? 0 : Array.isArray(v) ? v.length : v.evidence ? v.evidence.length : 1, "countOf");
   var _Session = class _Session {
@@ -2597,7 +3046,7 @@ Question: ${s.q}`;
       const emit = safeEmit(opts) || (() => {
       });
       let art = engine.artifacts(ir);
-      if (!art) {
+      if (!art || engine.dirty(ir).length) {
         const rep = await engine.buildShared(ir, {
           signal: opts.signal,
           onProgress: opts.onProgress,
@@ -2606,216 +3055,243 @@ Question: ${s.q}`;
         });
         if (!rep.ok) throw new RagError("build", rep.errors.join("\n"));
         art = engine.artifacts(ir);
-      }
-      if (this.artKey !== art.key) {
-        this.memo.clear();
-        this.artKey = art.key;
-      }
-      const t0 = now();
-      const trigger = opts.trigger || "submit";
-      const s = { ...ir.signals, ...signals };
-      const outputs = {}, trace = [], errors = [];
-      const counter = { calls: 0 };
-      const sample = engine.sampler(counter, opts.signal);
-      const decider = engine.decider(counter, opts.signal);
-      const runId = ++this.runs;
-      const detail = opts.detail || {};
-      emit({ type: "run", plan: ir.id, trigger, signals: s });
-      const describe = /* @__PURE__ */ __name((n, out, entry) => {
-        if (n.out === "hits" && Array.isArray(out)) {
-          entry.top = out.slice(0, 50).map((h) => ({ id: h.id, score: h.score, why: h.why, parts: h.parts, reason: h.reason }));
-          if (opts.onEvent) emit(hitsEvent(n.id, out, art, detail));
-        }
-        if (n.out === "decision" && out)
-          entry.decision = Object.fromEntries(
-            Object.entries(out).map(([id, a]) => [id, answerLine(a)])
+        if (!art)
+          throw new RagError(
+            "build_pending",
+            "required build work is deferred; enable its provider calls"
           );
-        if (n.out === "context" && out && opts.onEvent)
-          emit({
-            type: "context",
-            node: n.id,
-            evidence: arr(out.evidence).map((e) => ({ label: e.label, id: e.id })),
-            bytes: out.bytes
-          });
-      }, "describe");
-      for (const n of ir.nodes) {
-        if (n.phase === "build") continue;
-        if (n.phase === "signal") {
-          outputs[n.id] = s[n.id];
-          continue;
+      }
+      const release = engine.acquire(art);
+      try {
+        if (this.artKey !== art.key) {
+          this.memo.clear();
+          this.artKey = art.key;
         }
-        const def = REG.get(n.t);
-        const inputs = n.in.map((id) => {
-          const v = outputs[id];
-          const src = ir.node(id);
-          return src.t === "signal" && (portsOf(n).in[0] || "").startsWith("queries") ? this.queries(v) : v;
-        });
-        const input = (portsOf(n).in[0] || "") === "hits*" ? inputs : inputs[0];
-        if (n.when) {
-          const decision = /* @__PURE__ */ __name((id) => {
-            const v = outputs[id];
-            return v && v.$decision ? v : null;
-          }, "decision");
-          let w;
-          try {
-            w = isLambda(n.when) ? {
-              on: !!await fnOf(n.when, `${n.id}.when`)(s, { decision, signals: s }),
-              why: "when λ"
-            } : whenHolds(n.when, decision);
-          } catch (e) {
-            w = { on: true, why: `when failed (${e.message || e}) → run` };
+        const t0 = now();
+        const trigger = opts.trigger || "submit";
+        const s = { ...ir.signals, ...signals };
+        const outputs = {}, trace = [], errors = [];
+        const counter = { calls: 0 };
+        const sample = engine.sampler(counter, opts.signal);
+        const decider = engine.decider(counter, opts.signal);
+        const runId = ++this.runs;
+        const detail = opts.detail || {};
+        emit({ type: "run", plan: ir.id, trigger, signals: s });
+        const describe = /* @__PURE__ */ __name((n, out, entry) => {
+          if (n.out === "hits" && Array.isArray(out)) {
+            entry.top = out.slice(0, 50).map((h) => ({
+              id: h.id,
+              score: h.score,
+              why: h.why,
+              parts: h.parts,
+              reason: h.reason
+            }));
+            if (opts.onEvent) emit(hitsEvent(n.id, out, art, detail));
           }
-          if (!w.on) {
-            outputs[n.id] = whenSkipOutput(n, input);
-            const entry2 = {
+          if (n.out === "decision" && out)
+            entry.decision = Object.fromEntries(
+              Object.entries(out).map(([id, a]) => [id, answerLine(a)])
+            );
+          if (n.out === "context" && out && opts.onEvent)
+            emit({
+              type: "context",
               node: n.id,
-              t: n.t,
+              evidence: arr(out.evidence).map((e) => ({ label: e.label, id: e.id })),
+              bytes: out.bytes
+            });
+        }, "describe");
+        for (const n of ir.nodes) {
+          if (n.phase === "build") continue;
+          if (n.phase === "signal") {
+            outputs[n.id] = s[n.id];
+            continue;
+          }
+          const def = REG.get(n.t);
+          const inputs = n.in.map((id) => {
+            const v = outputs[id];
+            const src = ir.node(id);
+            return src.t === "signal" && (portsOf(n).in[0] || "").startsWith("queries") ? this.queries(v) : v;
+          });
+          const input = (portsOf(n).in[0] || "") === "hits*" ? inputs : inputs[0];
+          if (n.when) {
+            const decision = /* @__PURE__ */ __name((id) => {
+              const v = outputs[id];
+              return v && v.$decision ? v : null;
+            }, "decision");
+            let w;
+            try {
+              w = isLambda(n.when) ? {
+                on: !!await fnOf(n.when, `${n.id}.when`)(s, {
+                  decisions: Object.fromEntries(
+                    Object.entries(n.when.bindings).map(([name, id]) => [name, decision(id)])
+                  ),
+                  signals: s
+                }),
+                why: "when λ"
+              } : whenHolds(n.when, decision);
+            } catch (e) {
+              w = { on: true, why: `when failed (${e.message || e}) → run` };
+            }
+            if (!w.on) {
+              outputs[n.id] = whenSkipOutput(n, input);
+              const entry2 = {
+                node: n.id,
+                t: n.t,
+                ms: 0,
+                in: countOf(input),
+                out: countOf(outputs[n.id]),
+                status: "skipped",
+                skippedBy: "when",
+                notes: [`when: ${w.why}`]
+              };
+              trace.push(entry2);
+              emit({
+                type: "node",
+                node: n.id,
+                component: n.t,
+                phase: "end",
+                status: "skipped",
+                skippedBy: "when",
+                ms: 0,
+                in: entry2.in,
+                out: entry2.out,
+                notes: entry2.notes
+              });
+              continue;
+            }
+          }
+          const nd = hash([
+            n.t,
+            n.p,
+            n.trigger,
+            def.src || "",
+            Object.values(n.p.decisions || {}).map((id) => outputs[id])
+          ]);
+          const wants = trigger === "submit" || triggerOf(n) === "change";
+          const m = this.memo.get(n.id);
+          const sameInputs = m && m.inputs.length === inputs.length && m.inputs.every((v, i) => v === inputs[i]);
+          const sameReads = m && Object.entries(m.reads).every(([k, v]) => stable(s[k]) === v);
+          const entry = { node: n.id, t: n.t, ms: 0, in: countOf(input), out: 0, status: "ran" };
+          if (m && m.digest === nd && sameInputs && sameReads && (m.full || !wants)) {
+            outputs[n.id] = m.out;
+            entry.status = m.full ? "cached" : "skipped";
+            entry.out = countOf(m.out);
+            if (m.notes) entry.notes = m.notes;
+            if (m.full) describe(n, m.out, entry);
+            trace.push(entry);
+            emit({
+              type: "node",
+              node: n.id,
+              component: n.t,
+              phase: "end",
+              status: entry.status,
               ms: 0,
-              in: countOf(input),
-              out: countOf(outputs[n.id]),
-              status: "skipped",
-              skippedBy: "when",
-              notes: [`when: ${w.why}`]
-            };
-            trace.push(entry2);
+              in: entry.in,
+              out: entry.out
+            });
+            continue;
+          }
+          if (!wants) {
+            outputs[n.id] = def.skip === "null" ? null : input;
+            entry.status = "skipped";
+            entry.out = countOf(outputs[n.id]);
+            trace.push(entry);
             emit({
               type: "node",
               node: n.id,
               component: n.t,
               phase: "end",
               status: "skipped",
-              skippedBy: "when",
               ms: 0,
-              in: entry2.in,
-              out: entry2.out,
-              notes: entry2.notes
+              in: entry.in,
+              out: entry.out
             });
+            this.memo.set(n.id, { digest: nd, inputs, reads: {}, out: outputs[n.id], full: false });
             continue;
           }
-        }
-        const nd = hash([n.t, n.p, n.trigger, def.src || ""]);
-        const wants = trigger === "submit" || triggerOf(n) === "change";
-        const m = this.memo.get(n.id);
-        const sameInputs = m && m.inputs.length === inputs.length && m.inputs.every((v, i) => v === inputs[i]);
-        const sameReads = m && Object.entries(m.reads).every(([k, v]) => stable(s[k]) === v);
-        const entry = { node: n.id, t: n.t, ms: 0, in: countOf(input), out: 0, status: "ran" };
-        if (m && m.digest === nd && sameInputs && sameReads && (m.full || !wants)) {
-          outputs[n.id] = m.out;
-          entry.status = m.full ? "cached" : "skipped";
-          entry.out = countOf(m.out);
-          if (m.notes) entry.notes = m.notes;
-          if (m.full) describe(n, m.out, entry);
+          const reads = {};
+          const sp = new Proxy(s, {
+            get: /* @__PURE__ */ __name((t, k) => {
+              if (typeof k === "string") reads[k] = stable(t[k]);
+              return t[k];
+            }, "get")
+          });
+          const notes = [];
+          const c0 = counter.calls;
+          const ctx = this.ctx(
+            n,
+            ir,
+            art,
+            sample,
+            s,
+            notes,
+            opts,
+            opts.onEvent ? emit : null,
+            decider,
+            outputs
+          );
+          const t1 = now();
+          emit({ type: "node", node: n.id, component: n.t, phase: "start" });
+          try {
+            const p = await this.params(n, sp, ctx, art, ir);
+            let out = await def.run(sp, ctx, input, p);
+            if (n.out === "hits") out = normHits(out, n.id);
+            outputs[n.id] = out;
+            entry.out = countOf(out);
+            describe(n, out, entry);
+            this.memo.set(n.id, { digest: nd, inputs, reads, out, full: true, notes });
+          } catch (e) {
+            const msg = e && (e.message || e.code) ? `${e.code && !e.message ? e.code : e.message}` : String(e);
+            entry.status = "error";
+            entry.error = msg;
+            errors.push(`${n.id}: ${msg}`);
+            outputs[n.id] = def.skip === "null" || n.out === "answer" ? null : n.out === "hits" || n.out === "queries" ? input || [] : null;
+            if (e && e.code === "cancelled") {
+              trace.push(entry);
+              break;
+            }
+          }
+          entry.ms = +(now() - t1).toFixed(1);
+          timed("run", n.id, entry.ms, `${n.t} · ${entry.status} · ${entry.in}→${entry.out}`);
+          entry.calls = counter.calls - c0;
+          if (notes.length) entry.notes = notes;
           trace.push(entry);
+          if (opts.onNode) opts.onNode(entry);
           emit({
             type: "node",
             node: n.id,
             component: n.t,
             phase: "end",
             status: entry.status,
-            ms: 0,
+            ms: entry.ms,
             in: entry.in,
-            out: entry.out
+            out: entry.out,
+            calls: entry.calls,
+            ...entry.notes ? { notes: entry.notes } : {},
+            ...entry.error ? { error: entry.error } : {}
           });
-          continue;
         }
-        if (!wants) {
-          outputs[n.id] = def.skip === "null" ? null : input;
-          entry.status = "skipped";
-          entry.out = countOf(outputs[n.id]);
-          trace.push(entry);
-          emit({
-            type: "node",
-            node: n.id,
-            component: n.t,
-            phase: "end",
-            status: "skipped",
-            ms: 0,
-            in: entry.in,
-            out: entry.out
-          });
-          this.memo.set(n.id, { digest: nd, inputs, reads: {}, out: outputs[n.id], full: false });
-          continue;
-        }
-        const reads = {};
-        const sp = new Proxy(s, {
-          get: /* @__PURE__ */ __name((t, k) => {
-            if (typeof k === "string") reads[k] = stable(t[k]);
-            return t[k];
-          }, "get")
+        const o = ir.outputs;
+        const result = detach({
+          runId,
+          trigger,
+          signals: s,
+          hits: o.hits ? outputs[o.hits] || [] : [],
+          context: o.context ? outputs[o.context] : null,
+          answer: o.answer ? outputs[o.answer] : null,
+          outputs,
+          trace,
+          errors,
+          ms: +(now() - t0).toFixed(1),
+          calls: counter.calls
         });
-        const notes = [];
-        const c0 = counter.calls;
-        const ctx = this.ctx(
-          n,
-          ir,
-          art,
-          sample,
-          s,
-          notes,
-          opts,
-          opts.onEvent ? emit : null,
-          decider,
-          outputs
-        );
-        const t1 = now();
-        emit({ type: "node", node: n.id, component: n.t, phase: "start" });
-        try {
-          const p = await this.params(n, sp, ctx, art, ir);
-          let out = await def.run(sp, ctx, input, p);
-          if (n.out === "hits") out = normHits(out, n.id);
-          outputs[n.id] = out;
-          entry.out = countOf(out);
-          describe(n, out, entry);
-          this.memo.set(n.id, { digest: nd, inputs, reads, out, full: true, notes });
-        } catch (e) {
-          const msg = e && (e.message || e.code) ? `${e.code && !e.message ? e.code : e.message}` : String(e);
-          entry.status = "error";
-          entry.error = msg;
-          errors.push(`${n.id}: ${msg}`);
-          outputs[n.id] = def.skip === "null" || n.out === "answer" ? null : n.out === "hits" || n.out === "queries" ? input || [] : null;
-          if (e && e.code === "cancelled") {
-            trace.push(entry);
-            break;
-          }
-        }
-        entry.ms = +(now() - t1).toFixed(1);
-        timed("run", n.id, entry.ms, `${n.t} · ${entry.status} · ${entry.in}→${entry.out}`);
-        entry.calls = counter.calls - c0;
-        if (notes.length) entry.notes = notes;
-        trace.push(entry);
-        if (opts.onNode) opts.onNode(entry);
-        emit({
-          type: "node",
-          node: n.id,
-          component: n.t,
-          phase: "end",
-          status: entry.status,
-          ms: entry.ms,
-          in: entry.in,
-          out: entry.out,
-          calls: entry.calls,
-          ...entry.notes ? { notes: entry.notes } : {},
-          ...entry.error ? { error: entry.error } : {}
-        });
+        decorateResult(result, art);
+        emit({ type: "runEnd", ms: result.ms, calls: result.calls, errors });
+        this.last = result;
+        return result;
+      } finally {
+        release();
       }
-      const o = ir.outputs;
-      const result = {
-        runId,
-        trigger,
-        signals: s,
-        hits: o.hits ? outputs[o.hits] || [] : [],
-        context: o.context ? outputs[o.context] : null,
-        answer: o.answer ? outputs[o.answer] : null,
-        outputs,
-        trace,
-        errors,
-        ms: +(now() - t0).toFixed(1),
-        calls: counter.calls
-      };
-      decorateResult(result, art);
-      emit({ type: "runEnd", ms: result.ms, calls: result.calls, errors });
-      this.last = result;
-      return result;
     }
     async params(n, sp, ctx, art, ir) {
       const p = await this.engine.resolveBakes(n, n.p, art.byId, ir);
@@ -2837,11 +3313,11 @@ Question: ${s.q}`;
         node: n,
         sample: emit ? eventSample(sample, n.id, emit) : sample,
         decide: decider ? emit ? eventDecide(decider, n.id, emit) : decider : makeDecide(null),
-        // a classify node's answers in this run (null if it did not run): RAGWB-007 §3.3
-        decision: /* @__PURE__ */ __name((id) => {
-          const v = outputs ? outputs[String(id)] : null;
-          return v && v.$decision ? v : null;
-        }, "decision"),
+        decisions: Object.freeze(
+          Object.fromEntries(
+            Object.entries(n.p.decisions || {}).map(([name, id]) => [name, outputs?.[id] || null])
+          )
+        ),
         signal: opts.signal,
         signals: Object.freeze({ ...s }),
         synonyms: art.synonyms,
@@ -2856,16 +3332,7 @@ Question: ${s.q}`;
         doc: /* @__PURE__ */ __name((id) => art.docs.get(id) || null, "doc"),
         docs: /* @__PURE__ */ __name(() => [...art.docs.values()], "docs"),
         links: /* @__PURE__ */ __name((docId) => art.links.get(docId) || [], "links"),
-        neighbors: /* @__PURE__ */ __name((id, o = {}) => {
-          const c = art.chunks.get(id);
-          if (!c) return [];
-          const list = art.order.get(c.docId) || [], i = list.indexOf(id);
-          if (i < 0) return [];
-          return [
-            ...list.slice(Math.max(0, i - (o.before ?? 1)), i),
-            ...list.slice(i + 1, i + 1 + (o.after ?? 1))
-          ].map((x) => art.chunks.get(x));
-        }, "neighbors"),
+        neighbors: /* @__PURE__ */ __name((id, o = {}) => art.neighbors(id, o.before ?? 1, o.after ?? 1).map((id2) => art.chunks.get(id2)), "neighbors"),
         log: /* @__PURE__ */ __name((...a) => this.engine.env.log && this.engine.env.log(`[${n.id}]`, ...a), "log"),
         note: /* @__PURE__ */ __name((t) => {
           notes.push(String(t));
@@ -2900,11 +3367,50 @@ Question: ${s.q}`;
   var Session = _Session;
   function decorateResult(result, art) {
     const def = /* @__PURE__ */ __name((k, v) => Object.defineProperty(result, k, { value: v, enumerable: false }), "def");
-    def("chunk", (id) => art.chunks.get(id) || null);
+    const records = /* @__PURE__ */ new Map();
+    let bytes = 0;
+    const remember = /* @__PURE__ */ __name((id) => {
+      if (records.has(id)) return;
+      const chunk = art.chunks.get(id);
+      if (!chunk) return;
+      const wire = JSON.stringify(chunk);
+      bytes += wire.length * 2;
+      if (bytes > 16 * 1024 * 1024)
+        throw new RagError("result_limit", "detached records exceed 16 MiB");
+      records.set(id, JSON.parse(wire));
+    }, "remember");
+    const scan = /* @__PURE__ */ __name((value) => {
+      if (!value || typeof value !== "object") return;
+      if (typeof value.id === "string" && value.id.startsWith("[")) {
+        try {
+          remember(value.id);
+        } catch (error) {
+          if (error.code !== "reference") throw error;
+        }
+      }
+      if (Array.isArray(value)) value.forEach(scan);
+      else Object.values(value).forEach(scan);
+    }, "scan");
+    scan(result);
+    for (const record of [...records.values()]) {
+      for (const id of art.neighbors(record.id)) remember(id);
+    }
+    result.snapshotId = art.key;
+    result.records = Object.fromEntries(records);
+    result.neighborRefs = {};
+    for (const hit of result.hits) {
+      const record = records.get(hit.id);
+      if (!record) continue;
+      result.neighborRefs[hit.id] = {
+        prev: art.neighbors(hit.id, 1, 0)[0] || null,
+        next: art.neighbors(hit.id, 0, 1)[0] || null
+      };
+    }
+    def("chunk", (id) => records.get(id) || null);
     def("top", (n = 5, from) => {
       const list = from ? result.outputs[from] || [] : result.hits;
       return arr(list).slice(0, n).map((h) => {
-        const c = art.chunks.get(h.id) || {};
+        const c = records.get(h.id) || {};
         return {
           id: h.id,
           score: h.score,
@@ -2959,9 +3465,14 @@ Question: ${s.q}`;
     constructor(env = {}) {
       this.env = env;
       this.memo = /* @__PURE__ */ new Map();
-      this.retired = [];
+      this.resources = new ResourceRegistry();
+      this.published = /* @__PURE__ */ new Map();
+      this.generations = /* @__PURE__ */ new Map();
+      this.publication = /* @__PURE__ */ new Map();
+      this.memoOwners = /* @__PURE__ */ new Map();
+      this.activeSnapshots = /* @__PURE__ */ new Map();
       this.recent = /* @__PURE__ */ new Map();
-      this.building = /* @__PURE__ */ new Map();
+      this.building = new BuildJobs();
       this.items = /* @__PURE__ */ new Map();
       this.bakes = /* @__PURE__ */ new Map();
       this.fileDigests = /* @__PURE__ */ new Map();
@@ -3000,7 +3511,10 @@ Question: ${s.q}`;
           extra = this.files().map((f) => this.fileDigest(f)).join(",");
         else if (def && typeof def.digest === "function") extra = String(def.digest(n.p, this) || "");
         const src = def && def.src ? [def.src] : [];
-        out.set(n.id, hash([n.t, n.p, n.in.map((i) => out.get(i) || i), extra, ...src]));
+        out.set(
+          n.id,
+          hash([n.t, n.p, [...n.in, ...n.uses || []].map((i) => out.get(i) || i), extra, ...src])
+        );
       }
       return out;
     }
@@ -3017,7 +3531,7 @@ Question: ${s.q}`;
         if (n.t === "source.files") extra = null;
         else if (def && typeof def.lineage === "function") extra = String(def.lineage(n.p, this));
         else if (def && typeof def.digest === "function") extra = null;
-        const ins = n.in.map((i) => out.get(i));
+        const ins = [...n.in, ...n.uses || []].map((i) => out.get(i));
         out.set(
           n.id,
           extra === null || ins.some((x) => x === null) ? null : hash(["lineage", n.t, n.p, ins, extra, ...def && def.src ? [def.src] : []])
@@ -3027,7 +3541,8 @@ Question: ${s.q}`;
     }
     dirty(ir) {
       const d = this.digests(ir);
-      return [...d].filter(([, dg]) => !this.memo.has(dg)).map(([id]) => id);
+      const current = this.artifacts(ir)?.byId.digests;
+      return [...d].filter(([id, digest]) => !this.memo.has(digest) || current?.get(id) !== digest).map(([id]) => id);
     }
     // build nodes whose items still wait for Claude calls (deferred), with how many
     pending(ir) {
@@ -3070,8 +3585,35 @@ Question: ${s.q}`;
         return fromWireDecision(JSON.parse(s), +(now() - t0).toFixed(1));
       });
     }
+    slotKey(ir) {
+      return hash([
+        "slot",
+        ir.corpus,
+        ir.nodes.filter((n) => n.phase === "build").map((n) => [n.id, n.t, n.p, n.in])
+      ]);
+    }
     async build(ir, opts = {}) {
       ir = compile(ir);
+      const slot = this.slotKey(ir);
+      const previous = this.publication.get(slot) || Promise.resolve();
+      const next = previous.catch(() => {
+      }).then(async () => {
+        if (opts.signal?.aborted) throw new RagError("cancelled", "build cancelled");
+        const release = this.env.artifacts?.beginBuild?.();
+        try {
+          return await this.buildCandidate(ir, opts);
+        } finally {
+          release?.();
+        }
+      });
+      this.publication.set(slot, next);
+      try {
+        return await next;
+      } finally {
+        if (this.publication.get(slot) === next) this.publication.delete(slot);
+      }
+    }
+    async buildCandidate(ir, opts = {}) {
       const t0 = now();
       const dg = this.digests(ir);
       let lineages = /* @__PURE__ */ new Map();
@@ -3085,6 +3627,7 @@ Question: ${s.q}`;
       const report = { ok: true, ms: 0, nodes: {}, errors: [] };
       const bemit = safeEmit(opts);
       const outputs = new Outputs();
+      outputs.digests = dg;
       const deltas = /* @__PURE__ */ new Map();
       const counter = { calls: 0 };
       for (const n of ir.nodes) {
@@ -3110,7 +3653,11 @@ Question: ${s.q}`;
           const sk = storeKey(d, REG.get(n.t)), hit = store.has(sk);
           if (hit) {
             const lz = new Lazy(
-              () => codec.load(store.load(sk), n.p),
+              () => {
+                const value = codec.load(store.load(sk), n.p);
+                this.ownMemo(d, value);
+                return value;
+              },
               (ms) => timed("load", n.id, ms, n.t)
             );
             this.memo.set(d, {
@@ -3151,13 +3698,20 @@ Question: ${s.q}`;
         const c0 = counter.calls;
         try {
           const p = await this.resolveBakes(n, n.p, outputs, ir);
-          const inputArrays = /* @__PURE__ */ __name(() => n.in.map((i) => asArray(outputs.get(i))), "inputArrays");
+          const inputs = /* @__PURE__ */ __name(() => n.in.map((id) => this.inputDataset(id, outputs, ir)), "inputs");
           const ctx = this.buildCtx(n, ir, outputs, counter, opts.signal);
           let value, lazy = null;
           const inc = def.delta && !def.map && !(opts.full ?? this.env.fullBuild) && !opts.force && opts.persist !== false ? await this.tryDelta(n, def, d, lineages.get(n.id), deltas, outputs, ctx, p, opts) : null;
           if (inc) {
             if (inc.lazy) {
-              lazy = new Lazy(inc.lazy, (ms) => timed("load", n.id, ms, n.t));
+              lazy = new Lazy(
+                () => {
+                  const value2 = inc.lazy();
+                  this.ownMemo(d, value2);
+                  return value2;
+                },
+                (ms) => timed("load", n.id, ms, n.t)
+              );
               outputs.set(n.id, lazy);
             } else value = inc.value;
             deltas.set(n.id, { ...inc.delta, full: false, from: inc.base.digest });
@@ -3167,7 +3721,8 @@ Question: ${s.q}`;
               delta: inc.summary || {}
             });
           } else if (def.map) {
-            const items = inputArrays()[0] || [];
+            const source = inputs()[0];
+            const items = source?.materialize ? source.materialize() : source || [];
             const fnKey = hash([n.t, p]);
             const results = new Array(items.length);
             let next = 0, budget = (p.budget && p.budget.calls) ?? Infinity;
@@ -3225,7 +3780,7 @@ Question: ${s.q}`;
             value = results.flat().filter((x) => x != null);
             if (def.post) value = def.post(value);
           } else {
-            value = await def.all(inputArrays(), ctx, p, n);
+            value = await def.all(inputs(), ctx, p, n);
           }
           if (inc) st.count = inc.count ?? (lazy ? 0 : value.length ?? 0);
           else {
@@ -3250,7 +3805,10 @@ Question: ${s.q}`;
                 count,
                 lazy: lz
               });
-            } else this.memo.set(d, { value, count: st.count });
+            } else {
+              this.memo.set(d, { value, count: st.count });
+              this.ownMemo(d, value);
+            }
             this.partial.delete(d);
             const store2 = this.env.artifacts, codec2 = store2 ? persistOf(def) : null;
             if (codec2 && opts.persist !== false) {
@@ -3258,6 +3816,15 @@ Question: ${s.q}`;
                 const sk = storeKey(d, def);
                 store2.save(sk, n.t, codec2.save(lazy || value, n.p), st.count);
                 st.saved = true;
+                if (store2.describe)
+                  store2.describe(
+                    sk,
+                    lineages.get(n.id) || "",
+                    n.in.map((id) => {
+                      const source = ir.nodes.find((x) => x.id === id);
+                      return persistOf(REG.get(source.t)) ? storeKey(dg.get(id), REG.get(source.t)) : null;
+                    }).filter((key) => key && store2.has(key))
+                  );
                 const lin = lineages.get(n.id);
                 if (lin && store2.lineageRecord)
                   store2.lineageRecord(
@@ -3302,6 +3869,34 @@ Question: ${s.q}`;
             }
           }
       }
+      if (opts.signal?.aborted) {
+        report.ok = false;
+        report.errors.push("build cancelled before publication");
+      }
+      const complete = report.ok && [...dg.values()].every((digest) => this.memo.has(digest));
+      if (complete) {
+        const snapshot = this.makeArtifacts(ir, dg);
+        const release = this.acquire(snapshot);
+        const slot = this.slotKey(ir);
+        try {
+          if (this.env.artifacts?.publish)
+            this.env.artifacts.publish(slot, snapshot.key, snapshot.storeKeys);
+        } catch (error) {
+          release();
+          throw error;
+        }
+        const history = this.published.get(slot) || [];
+        const previous = history.findIndex((entry) => entry.snapshot.key === snapshot.key);
+        if (previous >= 0) history.splice(previous, 1)[0].release();
+        history.unshift({ snapshot, release });
+        this.generations.set(snapshot.key, snapshot);
+        while (history.length > 2) {
+          const old = history.pop();
+          this.generations.delete(old.snapshot.key);
+          old.release();
+        }
+        this.published.set(slot, history);
+      }
       report.ms = +(now() - t0).toFixed(1);
       report.calls = counter.calls;
       report.passes = passesOf(ir, report);
@@ -3310,39 +3905,62 @@ Question: ${s.q}`;
       this.emit({ type: "built", report });
       return report;
     }
-    // Release superseded build outputs (RAGWB-003 §6.7) for an engine that serves
-    // ir alone (serve): memo entries whose digest ir no longer has are dropped, and
-    // their Go handles (record views, bleve indexes) closed one gc later, so a
-    // query that started before the rebuild keeps working. Values still reachable
-    // from live entries are never closed.
+    retainValue(value, scope) {
+      if (!value || typeof value !== "object") return;
+      const handle = isView(value) ? value.__records : value.__ix;
+      if (handle && typeof handle.close === "function")
+        scope.own(this.resources.retain(handle, () => handle.close()));
+    }
+    ownMemo(digest, value) {
+      const owner = new OwnershipScope();
+      this.retainValue(value, owner);
+      this.memoOwners.get(digest)?.close();
+      this.memoOwners.set(digest, owner);
+    }
+    acquire(art) {
+      const owner = new OwnershipScope();
+      try {
+        for (const [node, value] of art.byId) {
+          this.retainValue(value instanceof Lazy ? value.done ? value.v : null : value, owner);
+        }
+        if (this.env.artifacts?.pin && art.storeKeys.length)
+          owner.own(this.env.artifacts.pin(art.storeKeys));
+      } catch (error) {
+        owner.close();
+        throw error;
+      }
+      this.activeSnapshots.set(art, (this.activeSnapshots.get(art) || 0) + 1);
+      let released = false;
+      return () => {
+        if (released) return;
+        released = true;
+        const remaining = this.activeSnapshots.get(art) - 1;
+        if (remaining) this.activeSnapshots.set(art, remaining);
+        else this.activeSnapshots.delete(art);
+        owner.close();
+      };
+    }
     gc(irs) {
       const liveDigests = /* @__PURE__ */ new Set();
       for (const ir of arr(irs))
         for (const d of this.digests(compile(ir)).values()) liveDigests.add(d);
-      const live2 = /* @__PURE__ */ new Set();
-      for (const [d, m] of this.memo)
-        if (liveDigests.has(d) && !(m.lazy && !m.lazy.done)) live2.add(m.value);
-      const closing = this.retired.filter((v) => !live2.has(v));
-      this.retired = [];
-      for (const [d, m] of [...this.memo]) {
-        if (liveDigests.has(d)) continue;
-        this.memo.delete(d);
-        if (!(m.lazy && !m.lazy.done) && !live2.has(m.value)) this.retired.push(m.value);
+      const before = this.lastCollectedClosed || 0;
+      for (const [digest] of this.memo) {
+        if (liveDigests.has(digest)) continue;
+        this.memo.delete(digest);
+        this.memoOwners.get(digest)?.close();
+        this.memoOwners.delete(digest);
       }
-      for (const d of [...this.partial.keys()]) if (!liveDigests.has(d)) this.partial.delete(d);
-      let closed = 0;
-      for (const v of closing) {
-        const h = isView(v) ? v.__records : v && v.__ix;
-        if (h && typeof h.close === "function") {
-          try {
-            h.close();
-            closed++;
-          } catch (e) {
-            this.env.log && this.env.log(`gc: ${e.message || e}`);
-          }
-        }
-      }
-      return { closed, retired: this.retired.length, memo: this.memo.size };
+      for (const digest of this.partial.keys())
+        if (!liveDigests.has(digest)) this.partial.delete(digest);
+      this._art = null;
+      const closed = this.resources.closed - before;
+      this.lastCollectedClosed = this.resources.closed;
+      return {
+        closed,
+        active: this.activeSnapshots.size,
+        memo: this.memo.size
+      };
     }
     // Delta build of one node (RAGWB-003 §6.5): continue from the newest stored
     // version of this node's lineage that was computed from exactly the versions
@@ -3359,12 +3977,13 @@ Question: ${s.q}`;
       );
       if (!base) return null;
       const codec = persistOf(def);
+      const baseScope = new OwnershipScope();
       const loadBase = /* @__PURE__ */ __name(() => {
         const m = this.memo.get(base.digest);
         if (m && !(m.lazy && !m.lazy.done) && (isView(m.value) || m.value && m.value.__ix))
           return m.value;
         const v = codec.load(store.load(base.storeKey), n.p);
-        this.retired.push(v);
+        this.retainValue(v, baseScope);
         return v;
       }, "loadBase");
       const b = {
@@ -3385,17 +4004,30 @@ Question: ${s.q}`;
       });
       try {
         const r = await def.delta.apply(b, inputs, dctx, p);
+        if (r?.value) this.ownMemo(d, r.value);
         return r ? { ...r, base: b } : null;
       } catch (e) {
         ctx.log(`delta build failed, building fully: ${e.message || e}`);
         return null;
+      } finally {
+        baseScope.close();
       }
     }
+    inputDataset(id, outputs, ir) {
+      const node = ir.nodes.find((n) => n.id === id);
+      const value = outputs.get(id);
+      if (!node || !["docs", "chunks"].includes(node.out)) return value;
+      const kind = node.out === "docs" ? "documents" : "chunks";
+      return isView(value) ? dataset(outputs.digests.get(id), kind, value) : memoryDataset(outputs.digests.get(id), kind, value);
+    }
     buildCtx(n, ir, outputs, counter, signal) {
-      const firstOf = /* @__PURE__ */ __name((t) => {
-        const id = ir.nodes.find((x) => x.phase === "build" && x.out === t && outputs.has(x.id));
-        return id ? asArray(outputs.get(id.id)) : [];
-      }, "firstOf");
+      const dataset2 = /* @__PURE__ */ __name((id) => {
+        if (![...n.in, ...n.uses || []].includes(id))
+          throw new RagError("dataset", `${n.id}: undeclared dataset dependency '${id}'`);
+        const value = this.inputDataset(id, outputs, ir);
+        if (!value?.materialize) throw new RagError("dataset", `${id} is not a dataset`);
+        return value;
+      }, "dataset");
       return {
         node: n,
         sample: this.sampler(counter, signal),
@@ -3406,12 +4038,7 @@ Question: ${s.q}`;
         clip,
         log: /* @__PURE__ */ __name((...a) => this.env.log && this.env.log(`[${n.id}]`, ...a), "log"),
         files: /* @__PURE__ */ __name(() => this.files(), "files"),
-        get docs() {
-          return firstOf("docs");
-        },
-        get chunks() {
-          return firstOf("chunks");
-        }
+        dataset: dataset2
       };
     }
     async resolveBakes(n, p, outputs, ir) {
@@ -3422,17 +4049,30 @@ Question: ${s.q}`;
       }, "scan");
       scan(p);
       if (!found) return p;
-      const docsNode = ir.nodes.find((x) => x.out === "docs" && outputs.has(x.id));
-      const chunksNode = ir.nodes.find((x) => x.out === "chunks" && outputs.has(x.id));
-      const docs = docsNode ? outputs.get(docsNode.id) : [], chunks = chunksNode ? outputs.get(chunksNode.id) : [];
-      const key0 = hash([docs.map((d) => d.id + d.sections.length), chunks.length]);
+      const digests = outputs.digests;
       const walk = /* @__PURE__ */ __name(async (v) => {
         if (isBake(v)) {
-          const key = key0 + ":" + v.$bake;
+          if (!v.datasets) throw new RagError("bake", "bake requires explicit dataset bindings");
+          const bindings = {};
+          for (const [name, id] of Object.entries(v.datasets)) {
+            const node = ir.nodes.find((x) => x.id === id);
+            if (!node || !["docs", "chunks"].includes(node.out) || !outputs.has(id))
+              throw new RagError("bake", `${n.id}: dataset '${id}' is unavailable`);
+            const value = outputs.get(id);
+            const kind = node.out === "docs" ? "documents" : "chunks";
+            bindings[name] = isView(value) ? dataset(digests.get(id), kind, value) : memoryDataset(digests.get(id), kind, value);
+          }
+          const key = hash([
+            v.$bake,
+            Object.entries(bindings).map(([name, value]) => [name, value.id])
+          ]);
           if (!this.bakes.has(key))
             this.bakes.set(
               key,
-              await fnOf({ $fn: v.$bake }, `${n.id} bake`)({ docs, chunks, tokens, slug })
+              await fnOf(
+                { $fn: v.$bake },
+                `${n.id} bake`
+              )({ datasets: Object.freeze(bindings), tokens, slug })
             );
           return this.bakes.get(key);
         }
@@ -3453,66 +4093,103 @@ Question: ${s.q}`;
       return this.resolved.get(n.id + ":" + hash(n.p)) || n.p;
     }
     artifacts(ir) {
-      const dg = this.digests(ir);
+      return this.published.get(this.slotKey(ir))?.[0]?.snapshot || null;
+    }
+    generation(id) {
+      const snapshot = this.generations.get(id);
+      if (!snapshot)
+        throw new RagError("stale_generation", "snapshot is no longer retained; refresh the query");
+      return snapshot;
+    }
+    makeArtifacts(ir, dg) {
       const got = /* @__PURE__ */ __name((d) => this.memo.get(d) || this.partial.get(d), "got");
       const missing = [...dg].filter(([, d]) => !got(d)).map(([id]) => id);
       if (missing.length) return null;
-      const key = [...dg.values()].map((d) => d + (this.memo.has(d) ? "" : "~")).join(",");
+      const key = hash([this.slotKey(ir), [...dg]]);
       if (this._art && this._art.key === key) return this._art;
       const tArt = now();
       const byId = new Outputs();
+      byId.digests = dg;
       for (const [id, d] of dg) {
         const m = got(d);
         byId.set(id, m.lazy && !m.lazy.done ? m.lazy : m.value);
       }
-      let chunks = /* @__PURE__ */ new Map(), order = /* @__PURE__ */ new Map();
-      const indexes = /* @__PURE__ */ new Map(), docNodes = [], views = [];
-      let synonyms = null;
+      const chunks = new RecordCatalog(), docs = new RecordCatalog();
+      const indexes = /* @__PURE__ */ new Map(), orders = /* @__PURE__ */ new Map(), datasets = /* @__PURE__ */ new Map();
+      const documentsFor = /* @__PURE__ */ new Map();
+      let synonyms = null, links = null;
       for (const n of ir.nodes) {
         if (n.phase !== "build") continue;
-        if (n.out === "docs")
-          docNodes.push(n.id);
-        else if (n.out === "chunks") {
-          const v = byId.get(n.id);
-          if (isView(v)) views.push(v);
-          else for (const c of v) chunks.set(c.id, c);
-        } else if (n.out === "index")
-          indexes.set(n.p.name || n.id.replace(/^ix-/, ""), byId.get(n.id));
-        if (n.t === "synonyms") synonyms = byId.get(n.id);
-      }
-      let docs = null, links = null;
-      const docsMap = /* @__PURE__ */ __name(() => {
-        if (!docs) {
-          docs = /* @__PURE__ */ new Map();
-          const dup = [];
-          for (const id of docNodes)
-            for (const d of byId.get(id)) {
-              if (docs.has(d.id)) dup.push(d.name || d.id);
-              else docs.set(d.id, d);
-            }
-          if (dup.length && this.env.log)
-            this.env.log(
-              `[artifacts] ${dup.length} doc(s) share an id with an earlier doc and are not in art.docs: ${dup.slice(0, 5).join(", ")}`
+        if (!["docs", "chunks", "index"].includes(n.out) && n.t !== "synonyms") continue;
+        const value = byId.get(n.id);
+        if (n.out === "docs" || n.out === "chunks") {
+          const kind = n.out === "docs" ? "documents" : "chunks";
+          const data = isView(value) ? dataset(dg.get(n.id), kind, value) : memoryDataset(dg.get(n.id), kind, value);
+          datasets.set(n.id, data);
+          const documents = n.out === "docs" ? data.id : documentsFor.get(n.in[0]);
+          if (!documents)
+            throw new RagError(
+              "dataset",
+              `${n.id}: chunks require an explicit source-document input`
             );
+          documentsFor.set(n.id, documents);
+          if (n.out === "docs") docs.add(data);
+          else {
+            chunks.add(data, documents);
+            const perDocument = /* @__PURE__ */ new Map();
+            orders.set(data.id, {
+              get(docId) {
+                const local = unqualify(docId);
+                if (local.dataset !== documents)
+                  throw new RagError("reference", "document belongs to a different dataset");
+                if (isView(value)) return value.order(local.id).map((id) => qualify(data.id, id));
+                if (!perDocument.size)
+                  for (const c of data.values()) {
+                    if (!perDocument.has(c.docId)) perDocument.set(c.docId, []);
+                    perDocument.get(c.docId).push(qualify(data.id, c.id));
+                  }
+                return perDocument.get(local.id) || [];
+              }
+            });
+          }
+        } else if (n.out === "index") {
+          const data = datasets.get(n.in[0]);
+          if (!data) throw new RagError("dataset", `${n.id}: index requires a chunk dataset`);
+          const bound = Object.create(value);
+          bound.datasetId = data.id;
+          const ranked = /* @__PURE__ */ __name((hits) => hits.map((h) => ({ ...h, id: qualify(data.id, h.id) })), "ranked");
+          for (const method of ["search", "searchIn"])
+            if (typeof value[method] === "function")
+              bound[method] = (...args) => {
+                if (method === "searchIn") {
+                  const document = unqualify(args[0]);
+                  if (document.dataset !== documentsFor.get(n.in[0]))
+                    throw new RagError("reference", "document belongs to a different dataset");
+                  args[0] = document.id;
+                }
+                const found = value[method](...args);
+                return found && typeof found.then === "function" ? found.then(ranked) : ranked(found);
+              };
+          indexes.set(n.p.name || n.id.replace(/^ix-/, ""), bound);
         }
-        return docs;
-      }, "docsMap");
-      const primary = ir.nodes.find(
-        (n) => n.phase === "build" && n.out === "chunks" && n.t !== "enrich" && n.t !== "enrich.llm"
-      );
-      const primaryOut = primary ? byId.get(primary.id) : null;
-      if (isView(primaryOut))
-        order = {
-          get: /* @__PURE__ */ __name((docId) => primaryOut.order(docId), "get"),
-          has: /* @__PURE__ */ __name((docId) => primaryOut.order(docId).length > 0, "has")
-        };
-      else if (primary)
-        for (const c of primaryOut) {
-          if (!order.has(c.docId)) order.set(c.docId, []);
-          order.get(c.docId).push(c.id);
-        }
-      if (views.length)
-        chunks = !chunks.size && views.length === 1 ? views[0] : unionChunks(chunks, views);
+        if (n.t === "synonyms") synonyms = value;
+      }
+      const order = {
+        get: /* @__PURE__ */ __name((docId) => [...orders.values()].flatMap((source) => {
+          try {
+            return source.get(docId);
+          } catch {
+            return [];
+          }
+        }), "get")
+      };
+      const neighbors = /* @__PURE__ */ __name((id, before = 1, after = 1) => {
+        const record = chunks.get(id);
+        if (!record) return [];
+        const ids = orders.get(unqualify(id).dataset).get(record.docId), at = ids.indexOf(id);
+        return [...ids.slice(Math.max(0, at - before), at), ...ids.slice(at + 1, at + 1 + after)];
+      }, "neighbors");
+      const docsMap = /* @__PURE__ */ __name(() => docs, "docsMap");
       const linksMap = /* @__PURE__ */ __name(() => {
         if (links) return links;
         const norm = /* @__PURE__ */ __name((s) => String(s).toLowerCase().replace(/^(proj|project report|project)\s*-\s*/i, "").replace(/[^a-z0-9]+/g, " ").trim(), "norm");
@@ -3535,7 +4212,10 @@ Question: ${s.q}`;
       }, "linksMap");
       this._art = {
         key,
+        storeKeys: ir.nodes.filter((n) => n.phase === "build" && persistOf(REG.get(n.t))).map((n) => storeKey(dg.get(n.id), REG.get(n.t))).filter((key2) => this.env.artifacts?.has(key2)),
         byId,
+        datasets,
+        neighbors,
         chunks,
         order,
         indexes,
@@ -3574,21 +4254,15 @@ Question: ${s.q}`;
     recentIrs() {
       return [...this.recent.values()];
     }
-    // one build per digest set at a time: a second query for a plan being built waits for it
+    // Request identity and event subscriptions do not change build semantics.
     buildShared(ir, opts = {}) {
-      const key = [...this.digests(ir).values()].join(",");
-      const cur = this.building.get(key);
-      if (cur) {
-        if (opts.onEvent)
-          try {
-            opts.onEvent({ type: "build", waiting: true });
-          } catch (_) {
-          }
-        return cur;
-      }
-      const p = this.build(ir, opts).finally(() => this.building.delete(key));
-      this.building.set(key, p);
-      return p;
+      const { signal, onEvent, onProgress, scope, detail, ...semantics } = opts;
+      const key = hash([ir.digest, [...this.digests(ir)], semantics]);
+      return this.building.run(
+        key,
+        { signal, onEvent, onProgress },
+        (owned) => this.build(ir, { ...semantics, ...owned })
+      );
     }
   };
   __name(_Engine, "Engine");
@@ -4195,16 +4869,31 @@ ${clip(c.text, 1500)}`
   // pkg/ragjs/src/export/html.js
   async function exportHtml(target, opts = {}) {
     const { ir, engine } = resolveTarget(target);
-    const lexical = applyOps(
-      ir,
-      ir.nodes.filter((n) => n.phase === "live" && triggerOf(n) === "submit" && n.out !== "answer").map((n) => ({ op: "remove", node: n.id }))
-    );
-    const pruned = applyOps(
-      lexical,
-      lexical.nodes.filter((n) => n.out === "answer" || n.out === "context").reverse().map((n) => ({ op: "remove", node: n.id }))
-    );
+    if (!engine.artifacts(ir) || engine.dirty(ir).length) {
+      const report = await engine.buildShared(ir);
+      if (!report.ok) throw new RagError("export", report.errors.join("; "));
+    }
+    const snapshot = engine.artifacts(ir);
+    if (!snapshot) throw new RagError("export", "a complete build is required");
+    const release = engine.acquire(snapshot);
+    let pruned;
+    try {
+      const lexical = projectLexical(ir);
+      const changes = [];
+      for (const node of lexical.nodes) {
+        if (node.phase !== "build" || node.out === "index") continue;
+        const value = node.out === "files" ? [] : node.out === "docs" || node.out === "chunks" ? engine.inputDataset(node.id, snapshot.byId, ir).materialize() : snapshot.byId.get(node.id);
+        changes.push({
+          op: "replace",
+          node: node.id,
+          with: { t: "snapshot.value", p: { kind: node.out, inputs: portsOf(node).in, value } }
+        });
+      }
+      pruned = applyOps(lexical, changes);
+    } finally {
+      release();
+    }
     const src = engine.env.librarySource ? await engine.env.librarySource() : "";
-    const files = engine.files().map((f) => ({ name: f.name, text: f.text }));
     const title = opts.title || ir.id;
     const esc = /* @__PURE__ */ __name((s) => String(s).replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" })[c]), "esc");
     const json = /* @__PURE__ */ __name((s) => JSON.stringify(s).replace(/</g, "\\u003c"), "json");
@@ -4216,8 +4905,7 @@ h1{font-size:20px;margin:0 0 12px}input{width:100%;box-sizing:border-box;font:15
 <body><main><h1>${esc(title)}</h1><input id="q" placeholder="Search…" autofocus><div id="out"></div></main>
 <script>${src.replace(/<\/script/gi, "<\\/script")}</script>
 <script>
-const files=${json(files)}, ir=rag.ir(${json(pruned)});
-rag.configure({ files: () => files });
+const ir=rag.ir(${json(pruned)});
 const ws = rag.workspace(ir), out = document.getElementById('out'), q = document.getElementById('q');
 const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'})[c]);
 let t; q.addEventListener('input', () => { clearTimeout(t); t = setTimeout(go, 150); });

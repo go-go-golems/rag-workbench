@@ -1,0 +1,26 @@
+{
+  "authorization": "User requested promotion to installed baseline",
+  "backup_directory": "/tmp/ragwb009-skill-baseline-backup",
+  "files": [
+    {
+      "path": "/home/manuel/.codex/skills/ticket-research-docmgr-remarkable/references/writing-style.md",
+      "before_sha256": "22a35ef095709ba2d75c47e6cf6b70a4e8c6837d96e4674fab2c2063f1de8e41",
+      "after_sha256": "6bb2604758acf8e106d70f8b5393623b3b0fdcb1d9c55ebd7076eb23b6e05675"
+    },
+    {
+      "path": "/home/manuel/.codex/skills/ticket-research-docmgr-remarkable/references/deliverable-checklist.md",
+      "before_sha256": "ad8824b38801415162c4c962789e7e228d484ab4a402f33f7a163ffce33b60b0",
+      "after_sha256": "f7748abb8c0cd986166e99ba62052034866d2975722a4d66ea19fb396b2b07f1"
+    },
+    {
+      "path": "/home/manuel/.codex/skills/textbook-authoring/SKILL.md",
+      "before_sha256": "9b1d3df93a904c5bcf56ecc8e8ef0c239c4ffa50b55eade83f122413c3ce923c",
+      "after_sha256": "d7ce371a1a4c5cabf99250cfa1d6e33a3cb48f00a1feb463f366b7a2949cfc89"
+    },
+    {
+      "path": "/home/manuel/.codex/skills/synced/32471162-701a-4ba7-abe3-e02d8270e79e_83f9e8ae-f233-49c2-ad3a-df00f00c69ec/textbook-authoring/SKILL.md",
+      "before_sha256": "9b1d3df93a904c5bcf56ecc8e8ef0c239c4ffa50b55eade83f122413c3ce923c",
+      "after_sha256": "2e11f0ba7138a2c3c1f7eef80819b5f9a2e504b153f92d2d11a714ed8aa2c1a4"
+    }
+  ]
+}

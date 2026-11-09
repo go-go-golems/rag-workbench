@@ -32,6 +32,9 @@ WhenToUse: ""
 
 # A simpler and more robust rag-workbench engine
 
+Implementation note (2026-11-09): the direct API cutover is recorded in [Implementation contracts and migration examples](../reference/08-implementation-contracts-and-migration-examples.md). That reference documents qualified string IDs, IR v2, named callback bindings, build leases, runtime ownership, and the validation limits. This guide preserves the original design reasoning.
+
+
 ## 1. Purpose, status, and reading order
 
 This is an analysis, target design, and implementation guide for RAGWB-009. It is written for an engineer joining the project without the conversation history. The baseline inspected is commit `0854c6a` on `task/ragwb-008-vault-ui`. The proposed APIs below are sketches for the refactor, not APIs already implemented. This ticket does not claim that the review findings have been fixed.

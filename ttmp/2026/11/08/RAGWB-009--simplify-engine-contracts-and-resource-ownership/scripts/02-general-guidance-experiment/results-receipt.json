@@ -1,0 +1,117 @@
+{
+  "setup_commit": "3dcc6e0852463f3dfc1113588233e6d293d112c2",
+  "input_hashes_unchanged": true,
+  "runtime_tests_run": false,
+  "writers": {
+    "codex-a": {
+      "model": "gpt-6.1-sol",
+      "effort": "medium",
+      "first_draft_words": 4272,
+      "final_words": 5646,
+      "added_lines": 77,
+      "removed_lines": 27,
+      "artifact_sha256": {
+        "final.md": "cd0df44ab19dd8ab44059bb5b52fbea2bca33fe128d7a56e038c05953d10d5ca",
+        "first-draft.md": "4a73847a6879eb4c997baedea6d38bcb07c0970b6cb98b7380ccdb0380f680eb",
+        "research.md": "22d0611a1493b80979a4e2fe54b5d13777a095c46acaf8bb4f36d015f8be775a",
+        "review-notes.md": "05e4184515c064cfefbe495abda716bcf019b7a0e6b592ce3bdbd68847e7d516"
+      },
+      "published_document": "design-doc/05-round-two-intern-guide-codex-a.md",
+      "published_document_sha256": "5996be66c2dcf73be1e27c8e764cc3d43b923ef50773f7ac336c350eb711ed20"
+    },
+    "codex-b": {
+      "model": "gpt-6.1-sol",
+      "effort": "medium",
+      "first_draft_words": 5359,
+      "final_words": 6277,
+      "added_lines": 74,
+      "removed_lines": 23,
+      "artifact_sha256": {
+        "final.md": "20380124c16ac049fccc2fd3d53cf64cad5c2066b494ab6e9df8c4b9548b5450",
+        "first-draft.md": "78e7e400ebbc262b4fffb2ab9c04aa64e11cff56a536729ae88f329c1506ca30",
+        "research.md": "90f09d43e5d0e6b4c4c2a068aa8b0d4a4a7a821f1b678f7c6e35d1eb027e552c",
+        "review-notes.md": "0d96db21dd13c1aa295554dbaa5b93a017f64fa8e50f1a62a83802cdb5382b58"
+      },
+      "published_document": "design-doc/06-round-two-intern-guide-codex-b.md",
+      "published_document_sha256": "369d7430552a780b20d015510c5e427ed58a6e1f03ded5a04072b0548a5b191e"
+    },
+    "codex-c": {
+      "model": "gpt-6.1-sol",
+      "effort": "medium",
+      "first_draft_words": 4081,
+      "final_words": 5401,
+      "added_lines": 91,
+      "removed_lines": 29,
+      "artifact_sha256": {
+        "final.md": "bedb73bdd7959073b24cd4fc883a776588e1f8ea09f1aeb66f18787b762bf8c9",
+        "first-draft.md": "52e051a8570a032f93781c21993666ee2b5e00fd16419fef2e690a21e2de9b0e",
+        "research.md": "2a0f1b81fa84e1c191c328da4e29b798fc5bd468163fd48b629efebf33d5043e",
+        "review-notes.md": "4442da5d149a6b7f83c9609b0b2dbe1db261680e07b6a25c51b54292d1b81553"
+      },
+      "published_document": "design-doc/07-round-two-intern-guide-codex-c.md",
+      "published_document_sha256": "653351f4db7b968c02a65fdd72f0504b365ac5cc2460df15ee3c3fe97d2c0aa2"
+    },
+    "opus-d": {
+      "model": "claude-opus-5-5",
+      "effort": "medium",
+      "first_draft_words": 7737,
+      "final_words": 8953,
+      "added_lines": 376,
+      "removed_lines": 303,
+      "artifact_sha256": {
+        "final.md": "c3411a4607e1fcc9242e42808a69242f30ab9d0f1536a18b90cd3c1775d53a43",
+        "first-draft.md": "98130719fd921d67db16a4507ea8c875e9eced05c55d3c40fb93f807d6475793",
+        "research.md": "446c892ad34ff632f5f63ec83efceb7f0c02e7926a2c9c69d2639f5fbb8ce034",
+        "review-notes.md": "b21b3d293bc44e08beee61bc1dbc5c8bcb904224fa3c7a21a27fc10a22dda3f2"
+      },
+      "published_document": "design-doc/08-round-two-intern-guide-opus-d.md",
+      "published_document_sha256": "442eaae56a9fdb5f8f712965e1997271634188cac4d56f8d26ad31132d282fa4",
+      "exit_code": 0,
+      "result_subtype": "success",
+      "is_error": false,
+      "completion_marker": true,
+      "reported_models": [
+        "claude-opus-5-5"
+      ],
+      "permission_denials": [],
+      "stderr_bytes": 0,
+      "write_order": [
+        "research.md",
+        "first-draft.md",
+        "review-notes.md",
+        "final.md"
+      ]
+    },
+    "opus-e": {
+      "model": "claude-opus-5-5",
+      "effort": "medium",
+      "first_draft_words": 7816,
+      "final_words": 9178,
+      "added_lines": 337,
+      "removed_lines": 287,
+      "artifact_sha256": {
+        "final.md": "43e636f0de31e1672df2b95dad3879419a914affc67ed7501114a8fed8b6832c",
+        "first-draft.md": "04608893928bf33cff1ad555fe6bc84c6a749de7260f8772c7b4d1411493a049",
+        "research.md": "159c60ca69a91cff411405b4df2d253e001cf338c3c3d57839cac2821ac37032",
+        "review-notes.md": "b1ad8e3f66ba7cef47cd2bfda7e3957f0a07cf57ad0745d246b814db53cf7ebe"
+      },
+      "published_document": "design-doc/09-round-two-intern-guide-opus-e.md",
+      "published_document_sha256": "db6c19a954955bcd6966435447823a1eb13ab681bd4e7971c94605e798fdd07a",
+      "exit_code": 0,
+      "result_subtype": "success",
+      "is_error": false,
+      "completion_marker": true,
+      "reported_models": [
+        "claude-opus-5-5"
+      ],
+      "permission_denials": [],
+      "stderr_bytes": 0,
+      "write_order": [
+        "research.md",
+        "first-draft.md",
+        "review-notes.md",
+        "final.md"
+      ]
+    }
+  }
+}

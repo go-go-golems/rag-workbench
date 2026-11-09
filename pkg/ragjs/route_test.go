@@ -202,7 +202,7 @@ func TestWhenInPlanEdits(t *testing.T) {
    ['component insert', [{op:'insert',id:'extra',in:['q'],node:rag.retrieve('text',{k:5,when:{decision:'route.strategy',in:['widgets']}})}], 'extra', 'when'],
    ['replace condition', [{op:'replace',node:'widgetix',with:{t:'retrieve',p:{index:'text',k:5},when:{decision:'route.strategy',in:['law']}}}], 'widgetix', 'ran'],
    ['preserve on replace', [{op:'replace',node:'widgetix',with:{t:'retrieve',p:{index:'text',k:5}}}], 'widgetix', 'when'],
-   ['lambda insert', [{op:'insert',id:'extra',in:['q'],node:{t:'retrieve',p:{index:'text',k:5},when:(s,ctx)=>ctx.decision('route').strategy.value==='widgets'}}], 'extra', 'when'],
+   ['lambda insert', [{op:'insert',id:'extra',in:['q'],node:{t:'retrieve',p:{index:'text',k:5},when:{$fn:"(s,ctx)=>ctx.decisions.routing.strategy.value==='widgets'",bindings:{routing:'route'}}}}], 'extra', 'when'],
   ];
   const rows=[];
   for(const [name,ops,id,want] of cases){

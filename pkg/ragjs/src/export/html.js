@@ -1,23 +1,40 @@
 import { resolveTarget } from '../api/target.js';
-import { applyOps, triggerOf } from '../graph/graph.js';
+import { portsOf } from '../components/registry.js';
+import { RagError } from '../core/errors.ts';
+import { applyOps, projectLexical } from '../graph/graph.js';
 
 async function exportHtml(target, opts = {}) {
   const { ir, engine } = resolveTarget(target);
-  const lexical = applyOps(
-    ir,
-    ir.nodes
-      .filter((n) => n.phase === 'live' && triggerOf(n) === 'submit' && n.out !== 'answer')
-      .map((n) => ({ op: 'remove', node: n.id })),
-  );
-  const pruned = applyOps(
-    lexical,
-    lexical.nodes
-      .filter((n) => n.out === 'answer' || n.out === 'context')
-      .reverse()
-      .map((n) => ({ op: 'remove', node: n.id })),
-  );
+  if (!engine.artifacts(ir) || engine.dirty(ir).length) {
+    const report = await engine.buildShared(ir);
+    if (!report.ok) throw new RagError('export', report.errors.join('; '));
+  }
+  const snapshot = engine.artifacts(ir);
+  if (!snapshot) throw new RagError('export', 'a complete build is required');
+  const release = engine.acquire(snapshot);
+  let pruned;
+  try {
+    const lexical = projectLexical(ir);
+    const changes = [];
+    for (const node of lexical.nodes) {
+      if (node.phase !== 'build' || node.out === 'index') continue;
+      const value =
+        node.out === 'files'
+          ? []
+          : node.out === 'docs' || node.out === 'chunks'
+            ? engine.inputDataset(node.id, snapshot.byId, ir).materialize()
+            : snapshot.byId.get(node.id);
+      changes.push({
+        op: 'replace',
+        node: node.id,
+        with: { t: 'snapshot.value', p: { kind: node.out, inputs: portsOf(node).in, value } },
+      });
+    }
+    pruned = applyOps(lexical, changes);
+  } finally {
+    release();
+  }
   const src = engine.env.librarySource ? await engine.env.librarySource() : '';
-  const files = engine.files().map((f) => ({ name: f.name, text: f.text }));
   const title = opts.title || ir.id;
   const esc = (s) =>
     String(s).replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' })[c]);
@@ -30,8 +47,7 @@ h1{font-size:20px;margin:0 0 12px}input{width:100%;box-sizing:border-box;font:15
 <body><main><h1>${esc(title)}</h1><input id="q" placeholder="Search…" autofocus><div id="out"></div></main>
 <script>${src.replace(/<\/script/gi, '<\\/script')}<\/script>
 <script>
-const files=${json(files)}, ir=rag.ir(${json(pruned)});
-rag.configure({ files: () => files });
+const ir=rag.ir(${json(pruned)});
 const ws = rag.workspace(ir), out = document.getElementById('out'), q = document.getElementById('q');
 const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'})[c]);
 let t; q.addEventListener('input', () => { clearTimeout(t); t = setTimeout(go, 150); });

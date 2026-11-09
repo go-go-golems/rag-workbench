@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/go-go-golems/rag-workbench/pkg/rtenv"
 
 	"github.com/dop251/goja"
 	"github.com/go-go-golems/go-go-goja/pkg/runtimebridge"
@@ -90,15 +91,8 @@ func newSample(vm *goja.Runtime, backend llm.Backend) (goja.Value, error) {
 		}
 		// the call's own context: cancelled when the JS abort signal fires (a request
 		// scope's signal, RAGWB-004 §6.7), so an abandoned request stops its model call
-		callCtx, cancelCall := context.WithCancel(services.Lifetime())
-		if sig, ok := call.Argument(3).(*goja.Object); ok {
-			if add, ok := goja.AssertFunction(sig.Get("addEventListener")); ok {
-				_, _ = add(sig, vm.ToValue("abort"), vm.ToValue(func() { cancelCall() }))
-			}
-			if a := sig.Get("aborted"); a != nil && a.ToBoolean() {
-				cancelCall()
-			}
-		}
+		op := rtenv.NewOperation(vm, services, "ragwb.sample", call.Argument(3), func(kind string) { rejectWith(&llm.Failure{Code: kind, Message: "the operation ended: " + kind}) })
+		callCtx := op.Context()
 		lreq := llm.Request{Turns: req.Turns, Tier: req.Tier, Model: req.Model, JSON: req.JSON}
 		for _, t := range req.Tools {
 			lreq.Tools = append(lreq.Tools, llm.Tool{Name: t.Name, Description: t.Description, InputSchema: nullToEmpty(t.InputSchema)})
@@ -143,8 +137,7 @@ func newSample(vm *goja.Runtime, backend llm.Backend) (goja.Value, error) {
 				return llm.ToolResult{}, ctx.Err()
 			}
 		}
-		go func() {
-			defer cancelCall()
+		op.Start(func(context.Context) {
 			res, err := backend.Sample(callCtx, lreq, onText, exec)
 			var payload string
 			var failure *llm.Failure
@@ -169,14 +162,14 @@ func newSample(vm *goja.Runtime, backend llm.Backend) (goja.Value, error) {
 			} else {
 				failure = &llm.Failure{Code: "upstream_error", Message: err.Error()}
 			}
-			_ = services.PostWithLifetimeContext("ragwb.sample.settle", func(_ context.Context, vm *goja.Runtime) {
+			op.Complete(func(vm *goja.Runtime) {
 				if failure != nil {
 					rejectWith(failure)
 					return
 				}
 				_ = resolve(payload)
 			})
-		}()
+		})
 		return vm.ToValue(promise)
 	}
 	v, err := vm.RunString(sampleJS)

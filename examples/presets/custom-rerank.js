@@ -19,7 +19,7 @@ const plan = rag.plan('rerank').over(kit.reports())
   }, { heading: 1.5, code: 0, minTokens: 60, shortPenalty: 0.6 })
   .limit(s => s.k);
 
-const none = plan.variant('no-rerank', [{ op: 'remove', node: 'rerank' }]);
+const none = plan.variant('no-rerank', [{ op: 'remove', bypass: true, node: 'rerank' }]);
 const strong = plan.variant('heading-x3', [{ op: 'set', node: 'rerank', path: 'heading', value: 3 }]);
 
 const ops = []; // end ops

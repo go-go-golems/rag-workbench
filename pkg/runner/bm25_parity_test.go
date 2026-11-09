@@ -54,7 +54,7 @@ func searchDump(t *testing.T, jsComponents bool, root string, bm25 map[string]an
 			}
 			const docIds = [...new Set(chunks.map(c => c.docId))];
 			for (const d of docIds) out.res.push([d, ix.searchIn(d, "workbench engine law", 3)]);
-			return JSON.stringify({ ms, dump: JSON.stringify(out) });
+			return JSON.stringify({ ms, dump: JSON.stringify(out, (k,v) => typeof v === 'string' && v.startsWith('["') ? JSON.parse(v)[1] : v) });
 		})(%s)`, opts))
 	})
 	if err != nil {

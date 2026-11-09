@@ -18,7 +18,7 @@ func TestComponentSourceChangeInvalidatesDownstream(t *testing.T) {
 		const rag = require("ragwb");
 		rag.configure({ files: () => [{ name: "a.md", text: "# A\n\nalpha text" }] });
 		const chunker = word => ({ phase: "build", in: ["docs"], out: "chunks",
-			all: new Function("[docs]", "return docs.map((d, i) => ({ id: d.id + '#' + i, docId: d.id, title: d.title, headingPath: [], text: '" + word + "', blocks: [], meta: {} }));") });
+			all: new Function("[docs]", "return docs.materialize().map((d, i) => ({ id: d.id + '#' + i, docId: d.id, title: d.title, headingPath: [], text: '" + word + "', blocks: [], meta: {} }));") });
 		const plan = () => rag.plan("p").over(rag.corpus("c").from(rag.files("*.md")).parse(rag.markdown()).chunk(rag.chunk.tagged()).index("text", rag.bm25()))
 			.signals({ q: "", k: 5 }).retrieve("text", { k: 5 }).limit();
 		const eng = rag.engine();

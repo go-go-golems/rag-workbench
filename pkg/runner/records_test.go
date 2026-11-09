@@ -61,7 +61,7 @@ func TestChunkRecordsReplaceTheChunksMap(t *testing.T) {
 				if (r.errors.length) throw new Error(r.errors.join("\n"));
 				const first = r.hits[0].id, probe = art.chunks.get(first);
 				return JSON.stringify({
-					view: art.chunks.__records !== undefined, size: art.chunks.size,
+					view: art.byId.get("chunks").__records !== undefined, size: art.chunks.size,
 					probe: JSON.stringify(probe), order: art.order.get(probe.docId),
 					neighbors: r.trace.find(x => x.node === "expand") ? r.hits.map(h => h.id) : [],
 					filtered: r.hits.map(h => h.id),

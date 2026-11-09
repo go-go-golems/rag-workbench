@@ -27,39 +27,6 @@ class Lazy {
   }
 }
 
-function unionChunks(map, views) {
-  const get = (id) => map.get(id) ?? views.reduce((hit, v) => hit ?? v.get(id), undefined);
-  return {
-    get,
-    has: (id) => map.has(id) || views.some((v) => v.has(id)),
-    get size() {
-      return new Set([...map.keys(), ...views.flatMap((v) => [...v.keys()])]).size;
-    },
-    *values() {
-      const seen = new Set(map.keys());
-      for (const v of views)
-        for (const c of v.values())
-          if (!seen.has(c.id)) {
-            seen.add(c.id);
-            yield get(c.id);
-          }
-      yield* map.values();
-    },
-    *keys() {
-      for (const c of this.values()) yield c.id;
-    },
-    *entries() {
-      for (const c of this.values()) yield [c.id, c];
-    },
-    forEach(f) {
-      for (const c of this.values()) f(c, c.id, this);
-    },
-    [Symbol.iterator]() {
-      return this.entries();
-    },
-  };
-}
-
 class Outputs extends Map {
   get(k) {
     const v = super.get(k);
@@ -72,8 +39,6 @@ class Outputs extends Map {
 // order(docId) like art.order. Components that need the array get toArray().
 const isView = (v) => v != null && typeof v === 'object' && v.__records !== undefined;
 
-const asArray = (v) => (isView(v) ? v.toArray() : v);
-
 const JSON_PERSIST = { save: (v) => v, load: (x) => x };
 
 const FULL_DELTA = Object.freeze({ full: true });
@@ -85,14 +50,4 @@ const persistOf = (def) =>
 
 const storeKey = (d, def) => hash([d, def.src || '']);
 
-export {
-  asArray,
-  FULL_DELTA,
-  isView,
-  JSON_PERSIST,
-  Lazy,
-  Outputs,
-  persistOf,
-  storeKey,
-  unionChunks,
-};
+export { FULL_DELTA, isView, JSON_PERSIST, Lazy, Outputs, persistOf, storeKey };

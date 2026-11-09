@@ -268,31 +268,30 @@ func (s *RagServer) handleVerb(w http.ResponseWriter, r *http.Request, a *RagApp
 			writeErr(w, http.StatusInternalServerError, "verb_failed", "result is not JSON-serializable: "+err.Error())
 			return
 		}
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write(b)
+		_ = writeOperationJSON(w, b)
 		return
 	}
 
-	sw := newSSEWriter(w, t0, eventFilter(r))
+	response, err := startResponseStream(w, r, cancel, t0, sum.observe)
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "stream_unavailable", err.Error())
+		return
+	}
 	start, _ := json.Marshal(map[string]any{"type": "start", "verb": verb.FullPath(), "params": paramsOf(vals)})
-	_ = sw.write("start", start)
-	sink := newStreamSink(cancel)
-	done := make(chan struct{})
-	go func() { sw.pump(sink, sum.observe); close(done) }()
-	res, _, err := a.Invoke(ctx, verb, vals, sink, detail)
-	sink.close()
-	<-done
+	response.sink.Emit(runner.Event{Type: "start", Data: start})
+	res, _, err := a.Invoke(ctx, verb, vals, response.sink, detail)
 	switch {
-	case sink.slow:
+	case response.sink.isSlow():
 		status = "slow client"
 		b, _ := json.Marshal(map[string]any{"type": "error", "code": "slow_client", "message": "the client did not read the stream; the request was cancelled"})
-		_ = sw.write("error", b)
+		_ = response.finish("error", b)
 	case err != nil && r.Context().Err() != nil:
 		status = "cancelled by the client"
+		_ = response.finish("", nil)
 	case err != nil:
 		status = "error: " + err.Error()
 		b, _ := json.Marshal(map[string]any{"type": "error", "code": "verb_failed", "message": err.Error()})
-		_ = sw.write("error", b)
+		_ = response.finish("error", b)
 	default:
 		env := envelope(res)
 		env["type"] = "result"
@@ -300,10 +299,10 @@ func (s *RagServer) handleVerb(w http.ResponseWriter, r *http.Request, a *RagApp
 		if err != nil {
 			status = "error: " + err.Error()
 			b, _ = json.Marshal(map[string]any{"type": "error", "code": "verb_failed", "message": "result is not JSON-serializable: " + err.Error()})
-			_ = sw.write("error", b)
+			_ = response.finish("error", b)
 			return
 		}
-		_ = sw.write("result", b)
+		_ = response.finish("result", b)
 	}
 }
 

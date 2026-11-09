@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/pkg/errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -81,8 +82,7 @@ const serveHarness = `(async (__mode, __path, __src, __opts) => {
   const neighbors = (a, id) => {
     const c = a.chunks.get(id);
     if (!c) return null;
-    const list = a.order.get(c.docId) || [], i = list.indexOf(id);
-    return { prev: i > 0 ? list[i - 1] : null, next: i >= 0 && i < list.length - 1 ? list[i + 1] : null };
+    return { prev: a.neighbors(id,1,0)[0] || null, next: a.neighbors(id,0,1)[0] || null };
   };
   // chunk bodies for ids, plus neighbor links for nbIds (whose prev/next bodies come along,
   // so the chunk view's ← → work without a round trip)
@@ -98,7 +98,7 @@ const serveHarness = `(async (__mode, __path, __src, __opts) => {
     for (const id of ids) { const c = a.chunks.get(id); if (c) chunks[id] = c; }
     return { chunks, neighbors: nb };
   };
-  const NB_HITS = 40;
+
   // after a rebuild (a query found the sources changed, or refresh): release the old version
   let artKey = art0.key;
   // gc keeps the outputs of every plan run recently: the app's and those its verbs ran
@@ -122,8 +122,8 @@ const serveHarness = `(async (__mode, __path, __src, __opts) => {
   globalThis.__serve = {
     // refresh: rebuild now if the sources changed (serve --watch), so the next query doesn't wait
     refresh: async () => {
-      if (eng.artifacts(ir)) return 'null';
-      const rep = await eng.build(ir);
+      if (!eng.dirty(ir).length) return 'null';
+      const rep = await eng.buildShared(ir);
       if (!rep.ok) return JSON.stringify({ ok: false, errors: rep.errors });
       const gc = collect();
       const nodes = Object.values(rep.nodes).filter(n => !n.reused).map(n => ({ id: n.id, ms: n.ms, incremental: !!n.incremental, delta: n.delta || null }));
@@ -134,35 +134,35 @@ const serveHarness = `(async (__mode, __path, __src, __opts) => {
     run: async (signalsJson, trigger, emit, holder) => {
       const sc = rag.newScope(emit ? ev => emit(String(ev.type), JSON.stringify(ev)) : () => {});
       if (holder) holder.scope = sc;
-      const r = await session.run(JSON.parse(signalsJson || '{}'), {
+      let r;
+      try { r = await session.run(JSON.parse(signalsJson || '{}'), {
         trigger: trigger || 'change', signal: sc.signal, detail: sc.detail,
         ...(emit ? { onEvent: sc.emit } : {}),
-      });
-      sc.close();
+      }); } finally { sc.close(); }
       collect();
       const t1 = now();
-      const a = art();
-      const ids = new Set();
-      const add = x => { if (x && typeof x.id === 'string' && a.chunks.has(x.id)) ids.add(x.id); };
-      for (const v of Object.values(r.outputs)) {
-        if (Array.isArray(v)) v.forEach(add);
-        else if (v && Array.isArray(v.evidence)) v.evidence.forEach(add);
-      }
-      if (r.answer && Array.isArray(r.answer.evidence)) r.answer.evidence.forEach(add);
-      const p = pack(a, ids, r.hits.slice(0, NB_HITS).map(h => h.id));
+      const p = {chunks:r.records, neighbors:r.neighborRefs};
       // the plain fields only: result.toJSON is the compact log form
-      const result = { runId: r.runId, trigger: r.trigger, signals: r.signals, hits: r.hits, context: r.context, answer: r.answer,
+      const result = { snapshotId:r.snapshotId, runId: r.runId, trigger: r.trigger, signals: r.signals, hits: r.hits, context: r.context, answer: r.answer,
         outputs: r.outputs, trace: r.trace, errors: r.errors, ms: r.ms, calls: r.calls };
       return JSON.stringify({ result, chunks: p.chunks, neighbors: p.neighbors, packMs: +(now() - t1).toFixed(2) });
     },
-    chunk: id => JSON.stringify(pack(art(), new Set([id]), [id])),
-    doc: id => {
-      const d = art().docs.get(id);
-      return JSON.stringify(d ? { id: d.id, name: d.name, title: d.title, meta: d.meta, links: d.links, path: d.path } : null);
+    chunk: request => {
+      const {snapshotId,id}=JSON.parse(request), snapshot=eng.generation(snapshotId);
+      const release=eng.acquire(snapshot);
+      try{return JSON.stringify(pack(snapshot,new Set([id]),[id]));}finally{release();}
+    },
+    doc: request => {
+      const {snapshotId,id}=JSON.parse(request), snapshot=eng.generation(snapshotId);
+      const release=eng.acquire(snapshot);
+      try{
+        const d=snapshot.docs.get(id);
+        return JSON.stringify(d ? {id:d.id,name:d.name,title:d.title,meta:d.meta,links:d.links,path:d.path} : null);
+      }finally{release();}
     },
   };
   return JSON.stringify({
-    id: ir.id, title: appIr.title || ir.id, ir: JSON.parse(JSON.stringify(ir)), app: appIr,
+    snapshotId:art0.key, id: ir.id, title: appIr.title || ir.id, ir: JSON.parse(JSON.stringify(ir)), app: appIr,
     build: { ok: build.ok, ms: build.ms, nodes: Object.values(build.nodes).map(n => ({ id: n.id, type: n.t, count: n.count, ms: n.ms, reused: !!n.reused, stored: !!n.stored })) },
     stats: { chunks: art0.chunks.size, indexes: [...art0.indexes.keys()], warmMs: +warm.toFixed(1) },
   });
@@ -317,13 +317,17 @@ func (a *ServedApp) Refresh(ctx context.Context) (string, error) {
 	return a.call(ctx, "refresh", "")
 }
 
-func (a *ServedApp) Chunk(ctx context.Context, id string) (string, error) {
-	return a.call(ctx, "chunk", id)
+var ErrStaleGeneration = errors.New("snapshot is no longer retained")
+
+func (a *ServedApp) Chunk(ctx context.Context, snapshotID, id string) (string, error) {
+	b, _ := json.Marshal(map[string]string{"snapshotId": snapshotID, "id": id})
+	return a.call(ctx, "chunk", string(b))
 }
 
 // Doc returns a document's metadata (no text) or null.
-func (a *ServedApp) Doc(ctx context.Context, id string) (string, error) {
-	return a.call(ctx, "doc", id)
+func (a *ServedApp) Doc(ctx context.Context, snapshotID, id string) (string, error) {
+	b, _ := json.Marshal(map[string]string{"snapshotId": snapshotID, "id": id})
+	return a.call(ctx, "doc", string(b))
 }
 
 func (a *ServedApp) call(ctx context.Context, name, arg string) (string, error) {
@@ -332,7 +336,15 @@ func (a *ServedApp) call(ctx context.Context, name, arg string) (string, error) 
 		if err != nil {
 			return nil, err
 		}
-		return fn(goja.Undefined(), vm.ToValue(arg))
+		value, err := fn(goja.Undefined(), vm.ToValue(arg))
+		var exception *goja.Exception
+		if errors.As(err, &exception) {
+			object := exception.Value().ToObject(vm)
+			if code := object.Get("code"); code != nil && code.String() == "stale_generation" {
+				return nil, ErrStaleGeneration
+			}
+		}
+		return value, err
 	})
 	if err != nil {
 		return "", err

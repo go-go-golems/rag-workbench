@@ -3,6 +3,7 @@ import { fnOf, lam } from '../core/lambda.js';
 import { arr, clip, getPath, isBake, isLambda, isObj, uniq } from '../core/util.js';
 import { answerLine } from '../engine/decision.js';
 import { rag_bake } from '../graph/graph.js';
+import { indexReferences } from '../graph/references.ts';
 import { assignIds, chunkSections, makeChunk } from './chunking.js';
 import { normHits, viewHit } from './hits.js';
 import { Bm25Index, TermsIndex } from './indexes.js';
@@ -10,6 +11,13 @@ import { parseMarkdown } from './markdown.js';
 import { build, fnArgs, live, optArgs } from './registry.js';
 
 export function installBuiltins() {
+  build('snapshot.value', {
+    in: [],
+    out: 'value',
+    args: optArgs,
+    ports: (p) => ({ in: p.inputs, out: p.kind }),
+    all: (_inputs, _ctx, p) => p.value,
+  });
   build('source.inline', {
     in: [],
     out: 'files',
@@ -128,7 +136,7 @@ export function installBuiltins() {
       Object.entries(p.fields || { title: 2, headingPath: 3, text: 1 })
         .map(([k, v]) => `${k}×${v}`)
         .join(' '),
-    all: ([chunks], ctx, p) => new Bm25Index(chunks, p),
+    all: ([chunks], ctx, p) => new Bm25Index(chunks.values(), p),
   });
 
   build('index.terms', {
@@ -136,7 +144,7 @@ export function installBuiltins() {
     out: 'index',
     args: optArgs,
     describe: (p) => (p.keys || ['type', 'tags', 'status']).join(' · '),
-    all: ([chunks], ctx, p) => new TermsIndex(chunks, p),
+    all: ([chunks], ctx, p) => new TermsIndex(chunks.values(), p),
     // artifact store: the value → key → ids map (byDoc, which nothing reads, comes back empty)
     persist: {
       save: (ix) => ({ keys: ix.keys, N: ix.N, map: [...ix.map].map(([v, m]) => [v, [...m]]) }),
@@ -162,7 +170,7 @@ export function installBuiltins() {
   build('bake', {
     in: ['docs'],
     out: 'value',
-    args: (f) => ({ value: rag_bake(f) }),
+    args: (bindings, f) => ({ value: rag_bake(bindings, f) }),
     describe: () => 'baked value',
     all: (inputs, ctx, p) => p.value,
   });
@@ -177,7 +185,7 @@ export function installBuiltins() {
         ? { fn: lam(a), ...(b || {}) }
         : { index: a, ...(b || {}) },
     id: (p) => (p.index ? String(p.index) : 'retrieve'),
-    uses: (p) => (p.index ? ['ix-' + p.index] : []),
+    references: indexReferences,
     describe: (p) => (p.fn ? 'custom λ' : `${p.index} · k ${p.k ?? 20}`),
     run: async (s, ctx, queries, p) => {
       if (p.fn)
@@ -217,6 +225,7 @@ export function installBuiltins() {
   });
 
   live('rewrite.llm', {
+    capabilities: ['model'],
     in: ['queries'],
     out: 'queries',
     args: optArgs,
@@ -336,6 +345,7 @@ export function installBuiltins() {
   });
 
   live('rerank.llm', {
+    capabilities: ['model'],
     in: ['hits'],
     out: 'hits',
     args: optArgs,
@@ -424,6 +434,7 @@ export function installBuiltins() {
   }
 
   live('filter.decide', {
+    capabilities: ['model'],
     in: ['hits'],
     out: 'hits',
     args: optArgs,
@@ -454,6 +465,7 @@ export function installBuiltins() {
   });
 
   live('rerank.decide', {
+    capabilities: ['model'],
     in: ['hits'],
     out: 'hits',
     args: optArgs,
@@ -522,7 +534,7 @@ export function installBuiltins() {
     args: optArgs,
     id: () => 'links',
     reads: () => ['q'],
-    uses: (p) => (p.index ? ['ix-' + p.index] : []),
+    references: indexReferences,
     describe: (p) => `[[links]] · decay ${p.decay ?? 0.5}`,
     run: (s, ctx, hits, p) => {
       const ix = ctx.index(p.index) || ctx.firstIndex('bm25');
@@ -594,6 +606,7 @@ export function installBuiltins() {
   });
 
   live('answer', {
+    capabilities: ['model'],
     in: ['context'],
     out: 'answer',
     args: optArgs,
@@ -629,8 +642,9 @@ export function installBuiltins() {
   });
 
   // RAGWB-007 §3.3: ask a question set about the query; the answers are this
-  // node's 'decision' output, read by when-conditions and ctx.decision(id).
+  // node's 'decision' output, read by when-conditions and ctx.decisions through named bindings.
   live('classify', {
+    capabilities: ['model'],
     in: [],
     out: 'decision',
     args: optArgs,
@@ -656,13 +670,14 @@ export function installBuiltins() {
   });
 
   live('agentic', {
+    capabilities: ['model'],
     in: ['queries'],
     out: 'answer',
     args: optArgs,
     skip: 'null',
     trigger: 'submit',
     reads: () => ['q'],
-    uses: (p) => arr(p.indexes).map((i) => 'ix-' + i),
+    references: indexReferences,
     describe: (p) => `tools · ≤${p.maxReads ?? 8} reads · ${p.tier || 'default'}`,
     run: async (s, ctx, queries, p) => {
       const names = arr(p.indexes).length
