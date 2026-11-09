@@ -22,7 +22,7 @@ test('bundle publishes only rag in a browser and uses CommonJS when supplied', (
   const common = runtime({ module: { exports: {} } });
   assert.equal(common.rag, undefined);
   assert.deepEqual(Object.keys(common.module.exports).sort(), Object.keys(browser.rag).sort());
-  assert.equal(browser.rag.components().length, 31);
+  assert.equal(browser.rag.components().length, 32);
 });
 
 test('separate evaluations isolate registration, default engine and request scopes', () => {
@@ -212,4 +212,49 @@ test('lexical export removes model gates in one transaction and retains local su
   assert.match(elements.out.innerHTML, /ownership/);
   assert.equal(vm.runInContext("ir.nodes.some(n=>n.t==='classify')", browser), false);
   assert.equal(vm.runInContext("ir.nodes.some(n=>n.t==='limit')", browser), true);
+});
+
+test('dataset identities preserve duplicate local records through fusion and result detachment', async () => {
+  const context = runtime();
+  const output = await vm.runInContext(
+    `(async()=>{
+    ${fixture}
+    const enriched=corpus.enrich('summary',c=>'enriched '+c.text)
+      .index('enriched',rag.bm25());
+    const fused=rag.plan('both').over(enriched).signals({q:'snapshot'})
+      .retrieve('text').retrieve('enriched').fuse.rrf();
+    const result=await rag.run(fused);
+    const records=result.hits.map(h=>result.chunk(h.id));
+    let bareError='';try{rag.engine().artifacts(rag.compile(fused)).chunks.get(JSON.parse(result.hits[0].id)[1]);}catch(e){bareError=e.code;}
+    return JSON.stringify({ids:result.hits.map(h=>JSON.parse(h.id)),records,bareError});
+  })()`,
+    context,
+  );
+  const got = JSON.parse(output);
+  assert.equal(got.ids.length, 2);
+  assert.notEqual(got.ids[0][0], got.ids[1][0]);
+  assert.equal(got.ids[0][1], got.ids[1][1]);
+  assert.equal(got.records.filter((r) => r.summary).length, 1);
+  assert.equal(got.bareError, 'reference');
+});
+
+test('named bake datasets are immutable and changed equal-sized content invalidates the value', async () => {
+  const context = runtime();
+  const result = await vm.runInContext(
+    `(async()=>{
+    let text='# Note\\n\\nAAAA';
+    rag.configure({files:()=>[{name:'note.md',text}]});
+    const corpus=rag.corpus('bake').from(rag.files()).parse().chunk(rag.sections())
+      .synonyms(rag.bake({datasets:{source:'chunks'}},({datasets})=>({value:datasets.source.materialize()[0].text})))
+      .index('text',rag.bm25());
+    const ir=rag.compile(corpus),engine=rag.engine();
+    await engine.build(ir);const first=engine.artifacts(ir).synonyms.value;
+    text='# Note\\n\\nBBBB';await engine.build(ir);const second=engine.artifacts(ir).synonyms.value;
+    return JSON.stringify({first,second});
+  })()`,
+    context,
+  );
+  const got = JSON.parse(result);
+  assert.notEqual(got.first, got.second);
+  assert.match(got.second, /BBBB/);
 });

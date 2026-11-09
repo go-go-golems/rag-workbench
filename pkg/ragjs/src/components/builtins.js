@@ -1,9 +1,9 @@
-import { indexReferences } from '../graph/references.ts';
 import { RagError } from '../core/errors.ts';
 import { fnOf, lam } from '../core/lambda.js';
 import { arr, clip, getPath, isBake, isLambda, isObj, uniq } from '../core/util.js';
 import { answerLine } from '../engine/decision.js';
 import { rag_bake } from '../graph/graph.js';
+import { indexReferences } from '../graph/references.ts';
 import { assignIds, chunkSections, makeChunk } from './chunking.js';
 import { normHits, viewHit } from './hits.js';
 import { Bm25Index, TermsIndex } from './indexes.js';
@@ -11,6 +11,13 @@ import { parseMarkdown } from './markdown.js';
 import { build, fnArgs, live, optArgs } from './registry.js';
 
 export function installBuiltins() {
+  build('snapshot.value', {
+    in: [],
+    out: 'value',
+    args: optArgs,
+    ports: (p) => ({ in: p.inputs, out: p.kind }),
+    all: (_inputs, _ctx, p) => p.value,
+  });
   build('source.inline', {
     in: [],
     out: 'files',
@@ -129,7 +136,7 @@ export function installBuiltins() {
       Object.entries(p.fields || { title: 2, headingPath: 3, text: 1 })
         .map(([k, v]) => `${k}×${v}`)
         .join(' '),
-    all: ([chunks], ctx, p) => new Bm25Index(chunks, p),
+    all: ([chunks], ctx, p) => new Bm25Index(chunks.values(), p),
   });
 
   build('index.terms', {
@@ -137,7 +144,7 @@ export function installBuiltins() {
     out: 'index',
     args: optArgs,
     describe: (p) => (p.keys || ['type', 'tags', 'status']).join(' · '),
-    all: ([chunks], ctx, p) => new TermsIndex(chunks, p),
+    all: ([chunks], ctx, p) => new TermsIndex(chunks.values(), p),
     // artifact store: the value → key → ids map (byDoc, which nothing reads, comes back empty)
     persist: {
       save: (ix) => ({ keys: ix.keys, N: ix.N, map: [...ix.map].map(([v, m]) => [v, [...m]]) }),

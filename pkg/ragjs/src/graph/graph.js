@@ -1,4 +1,3 @@
-import { references, rewriteReferences, outputReferences } from './references.ts';
 import { accepts, optArgs, portsOf, REG } from '../components/registry.js';
 import { RagError } from '../core/errors.ts';
 import { slug } from '../core/identity.ts';
@@ -6,6 +5,7 @@ import { checkLambda, lam, signalReads } from '../core/lambda.js';
 import { arr, clone, hash, isBake, isLambda, isObj, now, setPath, uniq } from '../core/util.js';
 import { answerLine } from '../engine/decision.js';
 import { timed } from '../engine/environment.js';
+import { outputReferences, references, rewriteReferences } from './references.ts';
 
 function rag_bake(bindings, f) {
   if (!isObj(bindings) || !isObj(bindings.datasets) || typeof f !== 'function')
@@ -947,7 +947,6 @@ function projectLexical(ir) {
 }
 
 export {
-  projectLexical,
   applyOps,
   CorpusSpec,
   compile,
@@ -958,6 +957,7 @@ export {
   installFamilies,
   makePlan,
   normalize,
+  projectLexical,
   rag_bake,
   triggerOf,
   whenHolds,

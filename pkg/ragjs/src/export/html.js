@@ -1,9 +1,39 @@
 import { resolveTarget } from '../api/target.js';
-import { projectLexical } from '../graph/graph.js';
+import { portsOf } from '../components/registry.js';
+import { RagError } from '../core/errors.ts';
+import { applyOps, projectLexical } from '../graph/graph.js';
 
 async function exportHtml(target, opts = {}) {
   const { ir, engine } = resolveTarget(target);
-  const pruned = projectLexical(ir);
+  if (!engine.artifacts(ir)) {
+    const report = await engine.buildShared(ir);
+    if (!report.ok) throw new RagError('export', report.errors.join('; '));
+  }
+  const snapshot = engine.artifacts(ir);
+  if (!snapshot) throw new RagError('export', 'a complete build is required');
+  const release = engine.acquire(snapshot);
+  let pruned;
+  try {
+    const lexical = projectLexical(ir);
+    const changes = [];
+    for (const node of lexical.nodes) {
+      if (node.phase !== 'build' || node.out === 'index') continue;
+      const value =
+        node.out === 'files'
+          ? []
+          : node.out === 'docs' || node.out === 'chunks'
+            ? engine.inputDataset(node.id, snapshot.byId, ir).materialize()
+            : snapshot.byId.get(node.id);
+      changes.push({
+        op: 'replace',
+        node: node.id,
+        with: { t: 'snapshot.value', p: { kind: node.out, inputs: portsOf(node).in, value } },
+      });
+    }
+    pruned = applyOps(lexical, changes);
+  } finally {
+    release();
+  }
   const src = engine.env.librarySource ? await engine.env.librarySource() : '';
   const files = engine.files().map((f) => ({ name: f.name, text: f.text }));
   const title = opts.title || ir.id;

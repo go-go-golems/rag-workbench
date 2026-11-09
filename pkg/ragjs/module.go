@@ -8,7 +8,6 @@
 package ragjs
 
 import (
-	"context"
 	"embed"
 	"fmt"
 	"sync"
@@ -140,17 +139,21 @@ func (r ragRegistrar) RegisterRuntimeModule(ctx *engine.RuntimeModuleRegistratio
 	if reg == nil {
 		return fmt.Errorf("require registry is nil")
 	}
-	env := Env{AddCloser: func(func() error) {}}
-	if ctx != nil && ctx.AddCloser != nil {
-		add := ctx.AddCloser
-		env.AddCloser = func(f func() error) { _ = add(func(context.Context) error { return f() }) }
+	if ctx == nil || ctx.AddCloser == nil {
+		return fmt.Errorf("ragwb requires a runtime resource owner")
 	}
+	resources := rtenv.NewResources()
+	if err := ctx.AddCloser(resources.Close); err != nil {
+		return err
+	}
+	env := Env{Resources: resources, AddCloser: resources.Defer}
 	reg.RegisterNativeModule(ModuleRag, ragLoader(r.opts, env))
 	return nil
 }
 
 func ragLoader(opts Options, env Env) func(*goja.Runtime, *goja.Object) {
 	return func(vm *goja.Runtime, moduleObj *goja.Object) {
+		rtenv.Bind(vm, env.Resources)
 		p, err := load()
 		if err != nil {
 			panic(vm.NewGoError(err))

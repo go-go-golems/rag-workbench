@@ -54,7 +54,8 @@ const bm25JS = `(function (rag, h) {
   rag.define('index.bm25', {
     id: () => 'index', phase: 'build', in: ['chunks'], out: 'index',
     describe: p => Object.entries(p.fields || DEFAULT_FIELDS).map(([k, v]) => k + '×' + v).join(' ') + ' (' + (backendOf(p) === 'bleve' ? 'bleve' : 'Go') + ')',
-    all: ([chunks], ctx, p) => {
+    all: ([dataset], ctx, p) => {
+      let chunks = dataset.materialize();
       chunks = chunks || [];
       const fields = p.fields || DEFAULT_FIELDS;
       const names = Object.keys(fields);
@@ -121,9 +122,8 @@ func (n Bm25Native) InstallEnv(vm *goja.Runtime, rag *goja.Object, env rtenv.Env
 	if backend == "" {
 		backend = "bleve"
 	}
-	addCloser := env.AddCloser
-	if addCloser == nil {
-		addCloser = func(func() error) {}
+	if env.Resources == nil {
+		return fmt.Errorf("index.bm25 requires a runtime resource registry")
 	}
 	h := vm.NewObject()
 	_ = h.Set("defaultBackend", backend)
@@ -158,8 +158,7 @@ func (n Bm25Native) InstallEnv(vm *goja.Runtime, rag *goja.Object, env rtenv.Env
 			return nil, err
 		}
 		ix.SetCleanup(root)
-		addCloser(ix.Close)
-		return bleveObject(vm, ix), nil
+		return ownResource(vm, env, bleveObject(vm, ix), ix), nil
 	})
 	_ = h.Set("deltaBleve", func(base goja.Value, tmp string, removeIDs []string, removedTexts [][]any, ids, docIDs []string, texts [][]any) (*goja.Object, error) {
 		bo, ok := base.(*goja.Object)
@@ -183,8 +182,7 @@ func (n Bm25Native) InstallEnv(vm *goja.Runtime, rag *goja.Object, env rtenv.Env
 			return nil, err
 		}
 		ix.SetCleanup(tmp)
-		addCloser(ix.Close)
-		return bleveObject(vm, ix), nil
+		return ownResource(vm, env, bleveObject(vm, ix), ix), nil
 	})
 	v, err := vm.RunString(bm25JS)
 	if err != nil {

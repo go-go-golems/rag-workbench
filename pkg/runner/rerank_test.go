@@ -106,7 +106,7 @@ func TestRerankModelCancelled(t *testing.T) {
 		return JSON.stringify({ trace: r.trace.map(t => t.node + ':' + t.status + (t.error ? ':' + t.error : '')) });
 	})()`)
 	trace := strings.Join(toStrings(out["trace"]), " ")
-	if !strings.Contains(trace, "rerank:error:the request was cancelled") {
+	if !strings.Contains(trace, "rerank:error:the operation ended: cancelled") {
 		t.Fatalf("trace after abort: %s", trace)
 	}
 	time.Sleep(200 * time.Millisecond)

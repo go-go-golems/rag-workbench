@@ -4,7 +4,6 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-	"time"
 )
 
 func TestSaveHasLoad(t *testing.T) {
@@ -78,6 +77,7 @@ func TestListAndPrune(t *testing.T) {
 	if ns["k1"] != "old" || ns["k2"] != "cur" {
 		t.Fatalf("namespaces = %v", ns)
 	}
+	_ = a.Close()
 	n, err := Prune(dir, "cur")
 	if err != nil || n != 1 {
 		t.Fatalf("Prune = %d, %v", n, err)
@@ -88,6 +88,7 @@ func TestListAndPrune(t *testing.T) {
 	if m, _ := b.Has("k2"); m == nil {
 		t.Fatal("Prune removed the kept namespace")
 	}
+	_ = b.Close()
 	if n, _ := Prune(dir, ""); n != 1 {
 		t.Fatalf("Prune all = %d", n)
 	}
@@ -213,23 +214,11 @@ func TestLineage(t *testing.T) {
 	if len(ms) != 4 {
 		t.Fatalf("List = %+v", ms)
 	}
-	// gc keeps the newest 2 stored versions (k3, k2), deletes k1, forgets k4 (no payload)
-	_ = os.MkdirAll(filepath.Join(s.Dir, s.NS, ".tmp-old"), 0o755)
-	old := time.Now().Add(-2 * time.Hour)
-	_ = os.Chtimes(filepath.Join(s.Dir, s.NS, ".tmp-old"), old, old)
-	r, err := s.GC(2)
-	if err != nil || r.Removed != 1 || r.Temps != 1 || r.Freed == 0 {
-		t.Fatalf("gc = %+v, %v", r, err)
+	// Lineage is only a search hint. Damaged authoritative inventory refuses GC.
+	if _, err := s.GC(2); err == nil {
+		t.Fatal("collection accepted missing payload metadata")
 	}
-	if m, _ := s.Has("k1"); m != nil {
-		t.Fatal("k1 survived gc")
-	}
-	for _, k := range []string{"k2", "k3"} {
-		if m, _ := s.Has(k); m == nil {
-			t.Fatalf("%s was deleted", k)
-		}
-	}
-	if es, _ := s.lineageRead("lin1"); len(es) != 2 || es[0].StoreKey != "k3" || es[1].StoreKey != "k2" {
-		t.Fatalf("lineage after gc %+v", es)
+	if m, _ := s.Has("k1"); m == nil {
+		t.Fatal("failed collection deleted a valid artifact")
 	}
 }

@@ -47,7 +47,7 @@ func TestTermsIndexParity(t *testing.T) {
 			if (!rep.ok) throw new Error(rep.errors.join("\n"));
 			const art = eng.artifacts(ir);
 			const goIx = art.indexes.get("meta");
-			const jsIx = new rag.util.TermsIndex([...art.chunks.values()], { keys });
+			const jsIx = new rag.util.TermsIndex(art.datasets.get("chunks").materialize(), { keys });
 			const all = Object.keys(Object.assign({}, ...keys.map(k => jsIx.values(k))));
 			// every value is a query on small corpora; on big ones a deterministic sample (TermsIndex
 			// search scans all values per query, so all-vs-all is quadratic in goja)
@@ -57,7 +57,7 @@ func TestTermsIndexParity(t *testing.T) {
 				...vals.slice(0, 20).map(v => v.toUpperCase() + "?"), "", "x", "nothing matches this", "PROJECT-report, typescript; go!"];
 			const diffs = [];
 			for (const q of queries) {
-				const a = JSON.stringify(jsIx.search(q, 50)), b = JSON.stringify(goIx.search(q, 50));
+				const a = JSON.stringify(jsIx.search(q, 50)), b = JSON.stringify(goIx.search(q, 50).map(h => ({...h,id:JSON.parse(h.id)[1]})));
 				if (a !== b) diffs.push({ q, js: a.slice(0, 300), go: b.slice(0, 300) });
 			}
 			for (const k of keys) {

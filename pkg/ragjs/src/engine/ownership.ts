@@ -1,5 +1,6 @@
 /** A resource closes only after its last owning scope releases it. */
 export class ResourceRegistry<T extends object> {
+  closed = 0;
   private entries = new Map<T, { owners: number; close: () => void }>();
   retain(resource: T, close: () => void): () => void {
     let entry = this.entries.get(resource);
@@ -15,6 +16,7 @@ export class ResourceRegistry<T extends object> {
       if (--entry.owners === 0) {
         this.entries.delete(resource);
         entry.close();
+        this.closed++;
       }
     };
   }

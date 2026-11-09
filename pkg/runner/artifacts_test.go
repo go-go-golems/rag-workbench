@@ -149,7 +149,7 @@ func TestArtifactsKeyIncludesComponentSource(t *testing.T) {
 				const rag = require("ragwb");
 				// same type and params every run; only the component's body changes
 				rag.define("chunk.tagged", { phase: "build", in: ["docs"], out: "chunks",
-					all: new Function("[docs]", "return docs.slice(0, 2).map((d, i) => ({ id: d.id + '#' + i, docId: d.id, title: d.title, headingPath: [], text: '" + marker + "', blocks: [] }));") });
+					all: new Function("[docs]", "return docs.materialize().slice(0, 2).map((d, i) => ({ id: d.id + '#' + i, docId: d.id, title: d.title, headingPath: [], text: '" + marker + "', blocks: [] }));") });
 				const c = rag.corpus("t").from(rag.source.dir({ root, include: ["*.md"] })).parse(rag.markdown()).chunk(rag.chunk.tagged()).index("text", rag.bm25());
 				const plan = rag.plan("t").over(c).signals({ q: "", k: 5 }).retrieve("text", { k: 5 }).limit();
 				const ir = rag.compile(plan);

@@ -12,15 +12,16 @@ import (
 // Operation distinguishes accepting a terminal outcome, delivering it to the
 // VM owner, and actual worker exit. Cleanup can never reclassify an outcome.
 type Operation struct {
-	ctx      context.Context
-	cancel   context.CancelFunc
-	services runtimebridge.RuntimeServices
-	name     string
-	once     sync.Once
-	detach   func()
-	stop     func() bool
-	tasks    errgroup.Group
-	done     chan struct{}
+	resources *Resources
+	ctx       context.Context
+	cancel    context.CancelFunc
+	services  runtimebridge.RuntimeServices
+	name      string
+	once      sync.Once
+	detach    func()
+	stop      func() bool
+	tasks     errgroup.Group
+	done      chan struct{}
 }
 
 // NewOperation must run on the VM owner, as must the supplied settlement callback.
@@ -50,6 +51,7 @@ func NewOperation(vm *goja.Runtime, services runtimebridge.RuntimeServices, name
 		}
 	}
 	op.stop = context.AfterFunc(services.Lifetime(), func() { acceptCancel("shutdown") })
+	op.resources = resourcesFor(vm)
 	return op
 }
 func (o *Operation) Context() context.Context { return o.ctx }
@@ -61,7 +63,17 @@ func (o *Operation) Complete(deliver func(*goja.Runtime)) {
 
 // Start takes immutable Go input captured by work; all VM access stays in posted callbacks.
 func (o *Operation) Start(work func(context.Context)) {
+	if o.resources != nil && !o.resources.track(o) {
+		o.cancel()
+		close(o.done)
+		return
+	}
 	o.tasks.Go(func() error {
+		defer func() {
+			if o.resources != nil {
+				o.resources.finished(o)
+			}
+		}()
 		defer close(o.done)
 		defer o.cancel()
 		defer o.stop()

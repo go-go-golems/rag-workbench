@@ -230,7 +230,7 @@ func treeHash(t *testing.T, dir string) map[string]string {
 			return nil
 		}
 		rel, _ := filepath.Rel(dir, p)
-		if strings.HasPrefix(rel, "lineage") || strings.HasPrefix(filepath.Base(filepath.Dir(p)), ".tmp-") {
+		if strings.HasPrefix(rel, "current") || strings.HasPrefix(rel, "lineage") || strings.HasPrefix(filepath.Base(filepath.Dir(p)), ".tmp-") {
 			return nil // the lineage index is the one mutable part
 		}
 		b, _ := os.ReadFile(p)

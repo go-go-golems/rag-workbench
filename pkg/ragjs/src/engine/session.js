@@ -1,4 +1,3 @@
-import { detach } from './result.ts';
 import { normHits } from '../components/hits.js';
 import { portsOf, REG } from '../components/registry.js';
 import { RagError } from '../core/errors.ts';
@@ -8,6 +7,7 @@ import { triggerOf, whenHolds, whenSkipOutput } from '../graph/graph.js';
 import { answerLine, eventDecide, eventSample, makeDecide } from './decision.js';
 import { timed } from './environment.js';
 import { hitsEvent } from './events.js';
+import { detach } from './result.ts';
 import { safeEmit } from './scope.ts';
 
 // ────────────────────────────────────────────────────────────── live run
@@ -40,7 +40,7 @@ class Session {
     const engine = this.engine;
     const emit = safeEmit(opts) || (() => {});
     let art = engine.artifacts(ir);
-    if (!art) {
+    if (!art || engine.dirty(ir).length) {
       const rep = await engine.buildShared(ir, {
         signal: opts.signal,
         onProgress: opts.onProgress,
@@ -49,6 +49,11 @@ class Session {
       });
       if (!rep.ok) throw new RagError('build', rep.errors.join('\n'));
       art = engine.artifacts(ir);
+      if (!art)
+        throw new RagError(
+          'build_pending',
+          'required build work is deferred; enable its provider calls',
+        );
     }
     const release = engine.acquire(art);
     try {
@@ -331,17 +336,8 @@ class Session {
       doc: (id) => art.docs.get(id) || null,
       docs: () => [...art.docs.values()],
       links: (docId) => art.links.get(docId) || [],
-      neighbors: (id, o = {}) => {
-        const c = art.chunks.get(id);
-        if (!c) return [];
-        const list = art.order.get(c.docId) || [],
-          i = list.indexOf(id);
-        if (i < 0) return [];
-        return [
-          ...list.slice(Math.max(0, i - (o.before ?? 1)), i),
-          ...list.slice(i + 1, i + 1 + (o.after ?? 1)),
-        ].map((x) => art.chunks.get(x));
-      },
+      neighbors: (id, o = {}) =>
+        art.neighbors(id, o.before ?? 1, o.after ?? 1).map((id) => art.chunks.get(id)),
       log: (...a) => this.engine.env.log && this.engine.env.log(`[${n.id}]`, ...a),
       note: (t) => {
         notes.push(String(t));
@@ -389,15 +385,19 @@ function decorateResult(result, art) {
   };
   const scan = (value) => {
     if (!value || typeof value !== 'object') return;
-    if (typeof value.id === 'string') remember(value.id);
+    if (typeof value.id === 'string' && value.id.startsWith('[')) {
+      try {
+        remember(value.id);
+      } catch (error) {
+        if (error.code !== 'reference') throw error;
+      }
+    }
     if (Array.isArray(value)) value.forEach(scan);
     else Object.values(value).forEach(scan);
   };
   scan(result);
   for (const record of [...records.values()]) {
-    const order = art.order.get(record.docId) || [];
-    const i = order.indexOf(record.id);
-    for (const id of order.slice(Math.max(0, i - 1), i + 2)) remember(id);
+    for (const id of art.neighbors(record.id)) remember(id);
   }
   result.snapshotId = art.key;
   result.records = Object.fromEntries(records);
@@ -405,11 +405,9 @@ function decorateResult(result, art) {
   for (const hit of result.hits) {
     const record = records.get(hit.id);
     if (!record) continue;
-    const order = art.order.get(record.docId) || [];
-    const i = order.indexOf(record.id);
     result.neighborRefs[hit.id] = {
-      prev: i > 0 ? order[i - 1] : null,
-      next: i >= 0 && i + 1 < order.length ? order[i + 1] : null,
+      prev: art.neighbors(hit.id, 1, 0)[0] || null,
+      next: art.neighbors(hit.id, 0, 1)[0] || null,
     };
   }
   def('chunk', (id) => records.get(id) || null);

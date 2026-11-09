@@ -5,6 +5,8 @@ export function detach<T>(value: T, maxBytes = 16 * 1024 * 1024): T {
   const ancestors = new Set<object>();
   let bytes = 0;
   const copy = (item: unknown, depth: number): unknown => {
+    bytes += 8;
+    if (bytes > maxBytes) throw new RagError('result_limit', 'result exceeds byte budget');
     if (depth > 100) throw new RagError('result_limit', 'result nesting exceeds 100 levels');
     if (item === null || item === undefined || typeof item === 'boolean') return item;
     if (typeof item === 'string') {

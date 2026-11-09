@@ -49,9 +49,11 @@ const vectorsJS = `(function (rag, h) {
     return o;
   };
   rag.define('index.vector', {
+    capabilities: ['model'],
     id: () => 'index', phase: 'build', in: ['chunks'], out: 'index',
     describe: p => (p.model || 'emb-granite') + ' · cosine · over ' + [].concat(p.over || ['title', 'headingPath', 'text']).join('+'),
-    all: ([chunks], ctx, p) => {
+    all: ([dataset], ctx, p) => {
+      let chunks = dataset.materialize();
       chunks = chunks || [];
       const over = [].concat(p.over || ['title', 'headingPath', 'text']);
       const ix = h.build(chunks.map(c => c.id), chunks.map(c => c.docId), chunks.map(c => embedText(c, over)),
@@ -64,6 +66,7 @@ const vectorsJS = `(function (rag, h) {
     persist: { save: v => v.__ix, load: raw => wrapVec(h.restore(raw)) },
   });
   rag.define('rerank.model', {
+    capabilities: ['model'],
     id: () => 'rerank', phase: 'live', in: ['hits'], out: 'hits', trigger: 'submit',
     describe: p => (p.model || 'bge-rr-v2-m3') + ' · top ' + (p.k ?? 30),
     // asynchronous and batched (RAGWB-005): the model requests run off the

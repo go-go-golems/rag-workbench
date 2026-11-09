@@ -771,3 +771,50 @@ See Step 13. Previous checkpoint: `dca97c5`.
 ### Technical details
 - Locks are stored in root/.locks/<namespace>.lock; manifests under namespace/snapshots; pointers under namespace/current.
 - A failed or unsupported lock rejects writable ownership. No legacy store reader was added.
+
+## Step 16: Integrate qualified datasets, retained generations and runtime ownership
+
+This checkpoint connects the earlier ownership components to record identity, native handles, HTTP lookups and browser caches. The first consolidated test run exposed publication defects as well as consumers of the replaced API. Integration is still in progress; this checkpoint is not a completion claim.
+
+### Prompt Context
+See Step 13 for the implementation request and the instruction to consolidate validation. Previous checkpoint: `e818832`.
+
+### What I did
+- Replaced the global chunk union with snapshot-local catalogs keyed by an opaque canonical encoding of dataset digest and local record ID. Build callbacks receive the Dataset interface; native algorithms consume local records internally.
+- Made successful complete builds publish retained snapshots, serialized per graph slot. Query results copy their records, and later HTTP lookups require a snapshot ID.
+- Added runtime adoption of native handles, including fresh, loaded and delta readers, with operation tracking that retains resources until workers exit.
+- Lowered filesystem-backed build outputs into embedded snapshot values for standalone export.
+- Ran `go test ./...`, `pnpm check` and browser checks at the integration boundary; preserved failure logs in sources/implementation.
+- Fixed newly discovered stale-session selection, returning-to-an-earlier-generation publication, failed-pin cleanup and browser result/cache lifetime issues.
+- Migrated custom build callbacks and parity fixtures. Parity comparisons ignore implementation-specific dataset identity while still comparing local IDs, contents, scores and ordering.
+
+### Why
+A local record ID alone cannot distinguish two versions of the same passage. A result and its later lookups must identify the same snapshot, and a retained snapshot must keep native handles alive until all owners release them.
+
+### What worked
+TypeScript checking and targeted package compilation passed before the consolidated run. The initial browser checks passed; adding provenance and named-bake regressions caught a syntax error in the new test fixture, now corrected. The full Go run completed, including the large vault parity fixtures; its duration was workload, not a confirmed shutdown deadlock.
+
+### What didn't work
+- `go test ./...` reported stale apples after changing source content in `TestSessionMemoFollowsArtifacts`: a published snapshot was selected without checking source dirtiness.
+- `TestServeRefreshAppliesVaultIgnore` reported `excluded content remains searchable`: republishing an already-retained generation did not move it to the current position.
+- Warm persistence eagerly loaded files because snapshot construction forced every output; irrelevant build outputs now remain lazy.
+- Old tests supplied bare IDs, expected raw record-view implementation details, or compared different implementations' dataset digests. They are being migrated to the explicit new contracts.
+- `node scripts/runtime.test.mjs` exposed `SyntaxError: missing ) after argument list` in the added named-bake test. This was a fixture error, not an engine failure.
+
+### What I learned
+Retaining a generation and selecting it as current are different operations. A source tree can return to an earlier version, so publication must reorder an existing retained generation as well as insert new ones.
+
+### What was tricky to build
+Snapshot construction and resource acquisition must precede persistent publication. Pin acquisition belongs inside the same cleanup scope as native handle retention. Browser result methods must close over response-owned records rather than a cache cleared by the next query.
+
+### What warrants a second pair of eyes
+Candidate-build cleanup, artifact collection during builds, callback dependency declarations, and bounded shutdown/stream behavior remain under integration review. The qualified string encoding is an intentional change from the guide's object-shaped reference sketch and requires documentation.
+
+### What should be done in the future
+Finish remaining integration failures and lifecycle regressions, run the final consolidated gate, and document the direct API cutover. No compatibility path is being introduced.
+
+### Code review instructions
+Start with engine/dataset.ts, engine/engine.js and session.js; follow native ownership through rtenv/resources.go and natives/resources.go, then runner/serve.go and web/app-shell/shell.js. Read sources/implementation/go-test.txt for the original failure inventory.
+
+### Technical details
+Public record IDs encode `[datasetDigest, localID]` as canonical JSON. Bare IDs are rejected. Two generations per graph slot are retained for subsequent HTTP lookup; active query leases extend resource lifetime independently. Runtime shutdown reports a timeout after five seconds if workers remain and retains their resources until actual exit.

@@ -1,5 +1,5 @@
 import { RagError } from '../core/errors.ts';
-import { newScope, type CancellationSignal, type RuntimeEvent } from './scope.ts';
+import { type CancellationSignal, newScope, type RuntimeEvent } from './scope.ts';
 
 interface Waiter {
   event?: (event: RuntimeEvent) => void;

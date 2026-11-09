@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/pkg/errors"
 	"io"
 	"net/http"
 	"net/url"
@@ -194,18 +195,23 @@ func (s *RagServer) handleInfo(w http.ResponseWriter, r *http.Request, a *RagApp
 func (s *RagServer) handleLookup(kind string) func(http.ResponseWriter, *http.Request, *RagApp) {
 	return func(w http.ResponseWriter, r *http.Request, a *RagApp) {
 		id := r.URL.Query().Get("id")
-		if id == "" {
-			writeErr(w, http.StatusBadRequest, "bad_request", "id is required")
+		snapshotID := r.URL.Query().Get("snapshotId")
+		if id == "" || snapshotID == "" {
+			writeErr(w, http.StatusBadRequest, "bad_request", "id and snapshotId are required")
 			return
 		}
 		var out string
 		var err error
 		if kind == "chunk" {
-			out, err = a.Chunk(r.Context(), id)
+			out, err = a.Chunk(r.Context(), snapshotID, id)
 		} else {
-			out, err = a.Doc(r.Context(), id)
+			out, err = a.Doc(r.Context(), snapshotID, id)
 		}
 		if err != nil {
+			if errors.Is(err, runner.ErrStaleGeneration) {
+				writeErr(w, http.StatusGone, "stale_generation", err.Error())
+				return
+			}
 			writeErr(w, http.StatusInternalServerError, "lookup_failed", err.Error())
 			return
 		}

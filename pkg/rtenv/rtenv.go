@@ -7,5 +7,6 @@ package rtenv
 // indexes, temp directories). AddCloser registers a cleanup that runs when the
 // runtime closes; it is never nil when handed to a native.
 type Env struct {
+	Resources *Resources
 	AddCloser func(func() error)
 }

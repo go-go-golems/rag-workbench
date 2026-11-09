@@ -27,103 +27,6 @@ var __ragModule = (() => {
     rag: () => rag
   });
 
-  // pkg/ragjs/src/graph/references.ts
-  function references(node, def = {}) {
-    const refs = node.in.map((target, i) => ({
-      kind: "data",
-      target,
-      set: /* @__PURE__ */ __name((value) => {
-        node.in[i] = value;
-      }, "set")
-    }));
-    refs.push(...def.references?.(node.p) || []);
-    for (const target of def.uses?.(node.p) || []) {
-      if (!refs.some((r) => r.kind === "artifact" && r.target === target))
-        refs.push({ kind: "artifact", target });
-    }
-    for (const target of def.reads?.(node.p) || []) refs.push({ kind: "signal", target });
-    const visit = /* @__PURE__ */ __name((value) => {
-      if (!value || typeof value !== "object") return;
-      const object = value;
-      if (typeof object.$bake === "string") {
-        const bindings = object.datasets;
-        for (const [name, target] of Object.entries(bindings || {}))
-          refs.push({
-            kind: "artifact",
-            target,
-            set: /* @__PURE__ */ __name((value2) => {
-              if (bindings) bindings[name] = value2;
-            }, "set")
-          });
-      } else for (const child of Object.values(object)) visit(child);
-    }, "visit");
-    visit(node.p);
-    const when = node.when;
-    if (when?.decision) {
-      const split = when.decision.indexOf(".");
-      const output = when.decision.slice(split);
-      refs.push({
-        kind: "decision",
-        target: when.decision.slice(0, split),
-        set: /* @__PURE__ */ __name((target) => {
-          when.decision = target + output;
-        }, "set")
-      });
-    }
-    for (const [name, target] of Object.entries(when?.bindings || {})) {
-      refs.push({
-        kind: "decision",
-        target,
-        set: /* @__PURE__ */ __name((value) => {
-          if (when?.bindings) when.bindings[name] = value;
-        }, "set")
-      });
-    }
-    return refs;
-  }
-  __name(references, "references");
-  function rewriteReferences(refs, from, to) {
-    const affected = refs.filter((r) => r.target === from);
-    if (affected.some((r) => !r.set))
-      throw new Error(`reference to '${from}' has no declared rewrite binding`);
-    for (const ref of affected) ref.set?.(to);
-  }
-  __name(rewriteReferences, "rewriteReferences");
-  function outputReferences(outputs) {
-    return Object.entries(outputs).map(([name, target]) => ({
-      kind: "output",
-      target,
-      set: /* @__PURE__ */ __name((value) => {
-        outputs[name] = value;
-      }, "set")
-    }));
-  }
-  __name(outputReferences, "outputReferences");
-  function indexReferences(params) {
-    if (typeof params.index === "string")
-      return [
-        {
-          kind: "artifact",
-          target: "ix-" + params.index,
-          set: /* @__PURE__ */ __name((target) => {
-            if (!target.startsWith("ix-")) throw new Error("index node IDs must start with ix-");
-            params.index = target.slice(3);
-          }, "set")
-        }
-      ];
-    if (Array.isArray(params.indexes))
-      return params.indexes.map((name, i) => ({
-        kind: "artifact",
-        target: "ix-" + String(name),
-        set: /* @__PURE__ */ __name((target) => {
-          if (!target.startsWith("ix-")) throw new Error("index node IDs must start with ix-");
-          params.indexes[i] = target.slice(3);
-        }, "set")
-      }));
-    return [];
-  }
-  __name(indexReferences, "indexReferences");
-
   // pkg/ragjs/src/core/errors.ts
   var _RagError = class _RagError extends Error {
     constructor(code, message, detail) {
@@ -545,6 +448,103 @@ var __ragModule = (() => {
     }
   }, "timed");
   var env0 = {};
+
+  // pkg/ragjs/src/graph/references.ts
+  function references(node, def = {}) {
+    const refs = node.in.map((target, i) => ({
+      kind: "data",
+      target,
+      set: /* @__PURE__ */ __name((value) => {
+        node.in[i] = value;
+      }, "set")
+    }));
+    refs.push(...def.references?.(node.p) || []);
+    for (const target of def.uses?.(node.p) || []) {
+      if (!refs.some((r) => r.kind === "artifact" && r.target === target))
+        refs.push({ kind: "artifact", target });
+    }
+    for (const target of def.reads?.(node.p) || []) refs.push({ kind: "signal", target });
+    const visit = /* @__PURE__ */ __name((value) => {
+      if (!value || typeof value !== "object") return;
+      const object = value;
+      if (typeof object.$bake === "string") {
+        const bindings = object.datasets;
+        for (const [name, target] of Object.entries(bindings || {}))
+          refs.push({
+            kind: "artifact",
+            target,
+            set: /* @__PURE__ */ __name((value2) => {
+              if (bindings) bindings[name] = value2;
+            }, "set")
+          });
+      } else for (const child of Object.values(object)) visit(child);
+    }, "visit");
+    visit(node.p);
+    const when = node.when;
+    if (when?.decision) {
+      const split = when.decision.indexOf(".");
+      const output = when.decision.slice(split);
+      refs.push({
+        kind: "decision",
+        target: when.decision.slice(0, split),
+        set: /* @__PURE__ */ __name((target) => {
+          when.decision = target + output;
+        }, "set")
+      });
+    }
+    for (const [name, target] of Object.entries(when?.bindings || {})) {
+      refs.push({
+        kind: "decision",
+        target,
+        set: /* @__PURE__ */ __name((value) => {
+          if (when?.bindings) when.bindings[name] = value;
+        }, "set")
+      });
+    }
+    return refs;
+  }
+  __name(references, "references");
+  function rewriteReferences(refs, from, to) {
+    const affected = refs.filter((r) => r.target === from);
+    if (affected.some((r) => !r.set))
+      throw new Error(`reference to '${from}' has no declared rewrite binding`);
+    for (const ref of affected) ref.set?.(to);
+  }
+  __name(rewriteReferences, "rewriteReferences");
+  function outputReferences(outputs) {
+    return Object.entries(outputs).map(([name, target]) => ({
+      kind: "output",
+      target,
+      set: /* @__PURE__ */ __name((value) => {
+        outputs[name] = value;
+      }, "set")
+    }));
+  }
+  __name(outputReferences, "outputReferences");
+  function indexReferences(params) {
+    if (typeof params.index === "string")
+      return [
+        {
+          kind: "artifact",
+          target: "ix-" + params.index,
+          set: /* @__PURE__ */ __name((target) => {
+            if (!target.startsWith("ix-")) throw new Error("index node IDs must start with ix-");
+            params.index = target.slice(3);
+          }, "set")
+        }
+      ];
+    if (Array.isArray(params.indexes))
+      return params.indexes.map((name, i) => ({
+        kind: "artifact",
+        target: "ix-" + String(name),
+        set: /* @__PURE__ */ __name((target) => {
+          if (!target.startsWith("ix-")) throw new Error("index node IDs must start with ix-");
+          params.indexes[i] = target.slice(3);
+        }, "set")
+      }));
+    return [];
+  }
+  __name(indexReferences, "indexReferences");
 
   // pkg/ragjs/src/graph/graph.js
   function rag_bake(bindings, f) {
@@ -1868,6 +1868,13 @@ var __ragModule = (() => {
 
   // pkg/ragjs/src/components/builtins.js
   function installBuiltins() {
+    build("snapshot.value", {
+      in: [],
+      out: "value",
+      args: optArgs,
+      ports: /* @__PURE__ */ __name((p) => ({ in: p.inputs, out: p.kind }), "ports"),
+      all: /* @__PURE__ */ __name((_inputs, _ctx, p) => p.value, "all")
+    });
     build("source.inline", {
       in: [],
       out: "files",
@@ -1963,14 +1970,14 @@ var __ragModule = (() => {
       out: "index",
       args: optArgs,
       describe: /* @__PURE__ */ __name((p) => Object.entries(p.fields || { title: 2, headingPath: 3, text: 1 }).map(([k, v]) => `${k}×${v}`).join(" "), "describe"),
-      all: /* @__PURE__ */ __name(([chunks], ctx, p) => new Bm25Index(chunks, p), "all")
+      all: /* @__PURE__ */ __name(([chunks], ctx, p) => new Bm25Index(chunks.values(), p), "all")
     });
     build("index.terms", {
       in: ["chunks"],
       out: "index",
       args: optArgs,
       describe: /* @__PURE__ */ __name((p) => (p.keys || ["type", "tags", "status"]).join(" · "), "describe"),
-      all: /* @__PURE__ */ __name(([chunks], ctx, p) => new TermsIndex(chunks, p), "all"),
+      all: /* @__PURE__ */ __name(([chunks], ctx, p) => new TermsIndex(chunks.values(), p), "all"),
       // artifact store: the value → key → ids map (byDoc, which nothing reads, comes back empty)
       persist: {
         save: /* @__PURE__ */ __name((ix) => ({ keys: ix.keys, N: ix.N, map: [...ix.map].map(([v, m]) => [v, [...m]]) }), "save"),
@@ -2602,64 +2609,78 @@ Question: ${s.q}`;
     return dataset(id, kind, entries);
   }
   __name(memoryDataset, "memoryDataset");
-
-  // pkg/ragjs/src/engine/ownership.ts
-  var _ResourceRegistry = class _ResourceRegistry {
-    constructor() {
-      this.entries = /* @__PURE__ */ new Map();
+  function referenceKey(ref) {
+    if (!ref || typeof ref.dataset !== "string" || typeof ref.id !== "string")
+      throw new RagError("reference", "expected {dataset, id}");
+    return JSON.stringify([ref.dataset, ref.id]);
+  }
+  __name(referenceKey, "referenceKey");
+  function qualify(datasetId, localId) {
+    return referenceKey({ dataset: datasetId, id: localId });
+  }
+  __name(qualify, "qualify");
+  function unqualify(id) {
+    let pair;
+    try {
+      pair = JSON.parse(id);
+    } catch {
+      throw new RagError("reference", "record ID must include its dataset identity");
     }
-    retain(resource, close) {
-      let entry = this.entries.get(resource);
-      if (!entry) {
-        entry = { owners: 0, close };
-        this.entries.set(resource, entry);
-      }
-      entry.owners++;
-      let released = false;
-      return () => {
-        if (released) return;
-        released = true;
-        if (--entry.owners === 0) {
-          this.entries.delete(resource);
-          entry.close();
-        }
-      };
+    if (!Array.isArray(pair) || pair.length !== 2 || pair.some((v) => typeof v !== "string") || JSON.stringify(pair) !== id)
+      throw new RagError("reference", "invalid qualified record ID");
+    return { dataset: pair[0], id: pair[1] };
+  }
+  __name(unqualify, "unqualify");
+  var _RecordCatalog = class _RecordCatalog {
+    constructor() {
+      this.sources = /* @__PURE__ */ new Map();
+    }
+    add(data, documents) {
+      if (this.sources.has(data.id)) return;
+      this.sources.set(data.id, { data, documents });
     }
     get size() {
-      return this.entries.size;
+      let size = 0;
+      for (const { data } of this.sources.values()) size += data.size;
+      return size;
+    }
+    get(id) {
+      const ref = unqualify(id);
+      const source = this.sources.get(ref.dataset);
+      if (!source)
+        throw new RagError("reference", `dataset '${ref.dataset}' is not in this snapshot`);
+      const record = source.data.get(ref.id);
+      return record ? this.project(record, source.data.id, source.documents) : null;
+    }
+    has(id) {
+      return this.get(id) !== null;
+    }
+    project(record, datasetId, documents) {
+      return immutable({
+        ...record,
+        id: qualify(datasetId, record.id),
+        ...typeof record.docId === "string" && documents ? { docId: qualify(documents, record.docId) } : {}
+      });
+    }
+    *values() {
+      for (const { data, documents } of this.sources.values())
+        for (const record of data.values()) yield this.project(record, data.id, documents);
+    }
+    *keys() {
+      for (const record of this.values()) yield record.id;
+    }
+    *entries() {
+      for (const record of this.values()) yield [record.id, record];
+    }
+    [Symbol.iterator]() {
+      return this.entries();
+    }
+    forEach(callback) {
+      for (const record of this.values()) callback(record, record.id);
     }
   };
-  __name(_ResourceRegistry, "ResourceRegistry");
-  var ResourceRegistry = _ResourceRegistry;
-  var _OwnershipScope = class _OwnershipScope {
-    constructor() {
-      this.releases = [];
-      this.closed = false;
-    }
-    own(release) {
-      if (this.closed) {
-        release();
-        throw new Error("ownership scope is closed");
-      }
-      this.releases.push(release);
-    }
-    close() {
-      if (this.closed) return;
-      this.closed = true;
-      let failure;
-      for (const release of this.releases.reverse()) {
-        try {
-          release();
-        } catch (error) {
-          failure ?? (failure = error);
-        }
-      }
-      this.releases = [];
-      if (failure) throw failure;
-    }
-  };
-  __name(_OwnershipScope, "OwnershipScope");
-  var OwnershipScope = _OwnershipScope;
+  __name(_RecordCatalog, "RecordCatalog");
+  var RecordCatalog = _RecordCatalog;
 
   // pkg/ragjs/src/engine/scope.ts
   var currentScope = null;
@@ -2843,6 +2864,66 @@ Question: ${s.q}`;
   __name(_BuildJobs, "BuildJobs");
   var BuildJobs = _BuildJobs;
 
+  // pkg/ragjs/src/engine/ownership.ts
+  var _ResourceRegistry = class _ResourceRegistry {
+    constructor() {
+      this.closed = 0;
+      this.entries = /* @__PURE__ */ new Map();
+    }
+    retain(resource, close) {
+      let entry = this.entries.get(resource);
+      if (!entry) {
+        entry = { owners: 0, close };
+        this.entries.set(resource, entry);
+      }
+      entry.owners++;
+      let released = false;
+      return () => {
+        if (released) return;
+        released = true;
+        if (--entry.owners === 0) {
+          this.entries.delete(resource);
+          entry.close();
+          this.closed++;
+        }
+      };
+    }
+    get size() {
+      return this.entries.size;
+    }
+  };
+  __name(_ResourceRegistry, "ResourceRegistry");
+  var ResourceRegistry = _ResourceRegistry;
+  var _OwnershipScope = class _OwnershipScope {
+    constructor() {
+      this.releases = [];
+      this.closed = false;
+    }
+    own(release) {
+      if (this.closed) {
+        release();
+        throw new Error("ownership scope is closed");
+      }
+      this.releases.push(release);
+    }
+    close() {
+      if (this.closed) return;
+      this.closed = true;
+      let failure;
+      for (const release of this.releases.reverse()) {
+        try {
+          release();
+        } catch (error) {
+          failure ?? (failure = error);
+        }
+      }
+      this.releases = [];
+      if (failure) throw failure;
+    }
+  };
+  __name(_OwnershipScope, "OwnershipScope");
+  var OwnershipScope = _OwnershipScope;
+
   // pkg/ragjs/src/engine/records.js
   var _Lazy = class _Lazy {
     constructor(load, onLoad) {
@@ -2864,39 +2945,6 @@ Question: ${s.q}`;
   };
   __name(_Lazy, "Lazy");
   var Lazy = _Lazy;
-  function unionChunks(map, views) {
-    const get = /* @__PURE__ */ __name((id) => map.get(id) ?? views.reduce((hit, v) => hit ?? v.get(id), void 0), "get");
-    return {
-      get,
-      has: /* @__PURE__ */ __name((id) => map.has(id) || views.some((v) => v.has(id)), "has"),
-      get size() {
-        return (/* @__PURE__ */ new Set([...map.keys(), ...views.flatMap((v) => [...v.keys()])])).size;
-      },
-      *values() {
-        const seen = new Set(map.keys());
-        for (const v of views)
-          for (const c of v.values())
-            if (!seen.has(c.id)) {
-              seen.add(c.id);
-              yield get(c.id);
-            }
-        yield* map.values();
-      },
-      *keys() {
-        for (const c of this.values()) yield c.id;
-      },
-      *entries() {
-        for (const c of this.values()) yield [c.id, c];
-      },
-      forEach(f) {
-        for (const c of this.values()) f(c, c.id, this);
-      },
-      [Symbol.iterator]() {
-        return this.entries();
-      }
-    };
-  }
-  __name(unionChunks, "unionChunks");
   var _Outputs = class _Outputs extends Map {
     get(k) {
       const v = super.get(k);
@@ -2906,7 +2954,6 @@ Question: ${s.q}`;
   __name(_Outputs, "Outputs");
   var Outputs = _Outputs;
   var isView = /* @__PURE__ */ __name((v) => v != null && typeof v === "object" && v.__records !== void 0, "isView");
-  var asArray = /* @__PURE__ */ __name((v) => isView(v) ? v.toArray() : v, "asArray");
   var JSON_PERSIST = { save: /* @__PURE__ */ __name((v) => v, "save"), load: /* @__PURE__ */ __name((x) => x, "load") };
   var FULL_DELTA = Object.freeze({ full: true });
   var persistOf = /* @__PURE__ */ __name((def) => !def || def.persist === false ? null : def.persist || (["docs", "chunks"].includes(def.out) ? JSON_PERSIST : null), "persistOf");
@@ -2917,6 +2964,8 @@ Question: ${s.q}`;
     const ancestors = /* @__PURE__ */ new Set();
     let bytes = 0;
     const copy = /* @__PURE__ */ __name((item, depth) => {
+      bytes += 8;
+      if (bytes > maxBytes) throw new RagError("result_limit", "result exceeds byte budget");
       if (depth > 100) throw new RagError("result_limit", "result nesting exceeds 100 levels");
       if (item === null || item === void 0 || typeof item === "boolean") return item;
       if (typeof item === "string") {
@@ -2981,7 +3030,7 @@ Question: ${s.q}`;
       const emit = safeEmit(opts) || (() => {
       });
       let art = engine.artifacts(ir);
-      if (!art) {
+      if (!art || engine.dirty(ir).length) {
         const rep = await engine.buildShared(ir, {
           signal: opts.signal,
           onProgress: opts.onProgress,
@@ -2990,6 +3039,11 @@ Question: ${s.q}`;
         });
         if (!rep.ok) throw new RagError("build", rep.errors.join("\n"));
         art = engine.artifacts(ir);
+        if (!art)
+          throw new RagError(
+            "build_pending",
+            "required build work is deferred; enable its provider calls"
+          );
       }
       const release = engine.acquire(art);
       try {
@@ -3256,16 +3310,7 @@ Question: ${s.q}`;
         doc: /* @__PURE__ */ __name((id) => art.docs.get(id) || null, "doc"),
         docs: /* @__PURE__ */ __name(() => [...art.docs.values()], "docs"),
         links: /* @__PURE__ */ __name((docId) => art.links.get(docId) || [], "links"),
-        neighbors: /* @__PURE__ */ __name((id, o = {}) => {
-          const c = art.chunks.get(id);
-          if (!c) return [];
-          const list = art.order.get(c.docId) || [], i = list.indexOf(id);
-          if (i < 0) return [];
-          return [
-            ...list.slice(Math.max(0, i - (o.before ?? 1)), i),
-            ...list.slice(i + 1, i + 1 + (o.after ?? 1))
-          ].map((x) => art.chunks.get(x));
-        }, "neighbors"),
+        neighbors: /* @__PURE__ */ __name((id, o = {}) => art.neighbors(id, o.before ?? 1, o.after ?? 1).map((id2) => art.chunks.get(id2)), "neighbors"),
         log: /* @__PURE__ */ __name((...a) => this.engine.env.log && this.engine.env.log(`[${n.id}]`, ...a), "log"),
         note: /* @__PURE__ */ __name((t) => {
           notes.push(String(t));
@@ -3314,15 +3359,19 @@ Question: ${s.q}`;
     }, "remember");
     const scan = /* @__PURE__ */ __name((value) => {
       if (!value || typeof value !== "object") return;
-      if (typeof value.id === "string") remember(value.id);
+      if (typeof value.id === "string" && value.id.startsWith("[")) {
+        try {
+          remember(value.id);
+        } catch (error) {
+          if (error.code !== "reference") throw error;
+        }
+      }
       if (Array.isArray(value)) value.forEach(scan);
       else Object.values(value).forEach(scan);
     }, "scan");
     scan(result);
     for (const record of [...records.values()]) {
-      const order = art.order.get(record.docId) || [];
-      const i = order.indexOf(record.id);
-      for (const id of order.slice(Math.max(0, i - 1), i + 2)) remember(id);
+      for (const id of art.neighbors(record.id)) remember(id);
     }
     result.snapshotId = art.key;
     result.records = Object.fromEntries(records);
@@ -3330,11 +3379,9 @@ Question: ${s.q}`;
     for (const hit of result.hits) {
       const record = records.get(hit.id);
       if (!record) continue;
-      const order = art.order.get(record.docId) || [];
-      const i = order.indexOf(record.id);
       result.neighborRefs[hit.id] = {
-        prev: i > 0 ? order[i - 1] : null,
-        next: i >= 0 && i + 1 < order.length ? order[i + 1] : null
+        prev: art.neighbors(hit.id, 1, 0)[0] || null,
+        next: art.neighbors(hit.id, 0, 1)[0] || null
       };
     }
     def("chunk", (id) => records.get(id) || null);
@@ -3397,6 +3444,9 @@ Question: ${s.q}`;
       this.env = env;
       this.memo = /* @__PURE__ */ new Map();
       this.resources = new ResourceRegistry();
+      this.published = /* @__PURE__ */ new Map();
+      this.generations = /* @__PURE__ */ new Map();
+      this.publication = /* @__PURE__ */ new Map();
       this.memoOwners = /* @__PURE__ */ new Map();
       this.activeSnapshots = /* @__PURE__ */ new Map();
       this.recent = /* @__PURE__ */ new Map();
@@ -3509,8 +3559,27 @@ Question: ${s.q}`;
         return fromWireDecision(JSON.parse(s), +(now() - t0).toFixed(1));
       });
     }
+    slotKey(ir) {
+      return hash([
+        "slot",
+        ir.corpus,
+        ir.nodes.filter((n) => n.phase === "build").map((n) => [n.id, n.t, n.p, n.in])
+      ]);
+    }
     async build(ir, opts = {}) {
       ir = compile(ir);
+      const slot = this.slotKey(ir);
+      const previous = this.publication.get(slot) || Promise.resolve();
+      const next = previous.catch(() => {
+      }).then(() => this.buildCandidate(ir, opts));
+      this.publication.set(slot, next);
+      try {
+        return await next;
+      } finally {
+        if (this.publication.get(slot) === next) this.publication.delete(slot);
+      }
+    }
+    async buildCandidate(ir, opts = {}) {
       const t0 = now();
       const dg = this.digests(ir);
       let lineages = /* @__PURE__ */ new Map();
@@ -3524,6 +3593,7 @@ Question: ${s.q}`;
       const report = { ok: true, ms: 0, nodes: {}, errors: [] };
       const bemit = safeEmit(opts);
       const outputs = new Outputs();
+      outputs.digests = dg;
       const deltas = /* @__PURE__ */ new Map();
       const counter = { calls: 0 };
       for (const n of ir.nodes) {
@@ -3594,7 +3664,7 @@ Question: ${s.q}`;
         const c0 = counter.calls;
         try {
           const p = await this.resolveBakes(n, n.p, outputs, ir);
-          const inputArrays = /* @__PURE__ */ __name(() => n.in.map((i) => asArray(outputs.get(i))), "inputArrays");
+          const inputs = /* @__PURE__ */ __name(() => n.in.map((id) => this.inputDataset(id, outputs, ir)), "inputs");
           const ctx = this.buildCtx(n, ir, outputs, counter, opts.signal);
           let value, lazy = null;
           const inc = def.delta && !def.map && !(opts.full ?? this.env.fullBuild) && !opts.force && opts.persist !== false ? await this.tryDelta(n, def, d, lineages.get(n.id), deltas, outputs, ctx, p, opts) : null;
@@ -3617,7 +3687,8 @@ Question: ${s.q}`;
               delta: inc.summary || {}
             });
           } else if (def.map) {
-            const items = inputArrays()[0] || [];
+            const source = inputs()[0];
+            const items = source?.materialize ? source.materialize() : source || [];
             const fnKey = hash([n.t, p]);
             const results = new Array(items.length);
             let next = 0, budget = (p.budget && p.budget.calls) ?? Infinity;
@@ -3675,7 +3746,7 @@ Question: ${s.q}`;
             value = results.flat().filter((x) => x != null);
             if (def.post) value = def.post(value);
           } else {
-            value = await def.all(inputArrays(), ctx, p, n);
+            value = await def.all(inputs(), ctx, p, n);
           }
           if (inc) st.count = inc.count ?? (lazy ? 0 : value.length ?? 0);
           else {
@@ -3764,17 +3835,29 @@ Question: ${s.q}`;
             }
           }
       }
-      if (report.ok && this.env.artifacts?.publish && !this.pending(ir).length) {
-        const roots = ir.nodes.filter((n) => n.phase === "build" && persistOf(REG.get(n.t))).map((n) => storeKey(dg.get(n.id), REG.get(n.t))).filter((key) => this.env.artifacts.has(key));
-        this.env.artifacts.publish(
-          hash([
-            "slot",
-            ir.corpus,
-            ir.nodes.filter((n) => n.phase === "build").map((n) => [n.id, n.t, n.p, n.in])
-          ]),
-          hash([...dg]),
-          roots
-        );
+      const complete = report.ok && [...dg.values()].every((digest) => this.memo.has(digest));
+      if (complete) {
+        const snapshot = this.makeArtifacts(ir, dg);
+        const release = this.acquire(snapshot);
+        const slot = this.slotKey(ir);
+        try {
+          if (this.env.artifacts?.publish)
+            this.env.artifacts.publish(slot, hash([...dg]), snapshot.storeKeys);
+        } catch (error) {
+          release();
+          throw error;
+        }
+        const history = this.published.get(slot) || [];
+        const previous = history.findIndex((entry) => entry.snapshot.key === snapshot.key);
+        if (previous >= 0) history.splice(previous, 1)[0].release();
+        history.unshift({ snapshot, release });
+        this.generations.set(snapshot.key, snapshot);
+        while (history.length > 2) {
+          const old = history.pop();
+          this.generations.delete(old.snapshot.key);
+          old.release();
+        }
+        this.published.set(slot, history);
       }
       report.ms = +(now() - t0).toFixed(1);
       report.calls = counter.calls;
@@ -3800,15 +3883,14 @@ Question: ${s.q}`;
       const owner = new OwnershipScope();
       try {
         for (const [node, value] of art.byId) {
-          const resolved = art.byId.get(node);
-          this.retainValue(resolved, owner);
+          this.retainValue(value instanceof Lazy ? value.done ? value.v : null : value, owner);
         }
+        if (this.env.artifacts?.pin && art.storeKeys.length)
+          owner.own(this.env.artifacts.pin(art.storeKeys));
       } catch (error) {
         owner.close();
         throw error;
       }
-      if (this.env.artifacts?.pin && art.storeKeys.length)
-        owner.own(this.env.artifacts.pin(art.storeKeys));
       this.activeSnapshots.set(art, (this.activeSnapshots.get(art) || 0) + 1);
       let released = false;
       return () => {
@@ -3824,7 +3906,7 @@ Question: ${s.q}`;
       const liveDigests = /* @__PURE__ */ new Set();
       for (const ir of arr(irs))
         for (const d of this.digests(compile(ir)).values()) liveDigests.add(d);
-      const before = this.resources.size;
+      const before = this.lastCollectedClosed || 0;
       for (const [digest] of this.memo) {
         if (liveDigests.has(digest)) continue;
         this.memo.delete(digest);
@@ -3834,8 +3916,10 @@ Question: ${s.q}`;
       for (const digest of this.partial.keys())
         if (!liveDigests.has(digest)) this.partial.delete(digest);
       this._art = null;
+      const closed = this.resources.closed - before;
+      this.lastCollectedClosed = this.resources.closed;
       return {
-        closed: before - this.resources.size,
+        closed,
         active: this.activeSnapshots.size,
         memo: this.memo.size
       };
@@ -3891,11 +3975,19 @@ Question: ${s.q}`;
         baseScope.close();
       }
     }
+    inputDataset(id, outputs, ir) {
+      const node = ir.nodes.find((n) => n.id === id);
+      const value = outputs.get(id);
+      if (!node || !["docs", "chunks"].includes(node.out)) return value;
+      const kind = node.out === "docs" ? "documents" : "chunks";
+      return isView(value) ? dataset(outputs.digests.get(id), kind, value) : memoryDataset(outputs.digests.get(id), kind, value);
+    }
     buildCtx(n, ir, outputs, counter, signal) {
-      const firstOf = /* @__PURE__ */ __name((t) => {
-        const id = ir.nodes.find((x) => x.phase === "build" && x.out === t && outputs.has(x.id));
-        return id ? asArray(outputs.get(id.id)) : [];
-      }, "firstOf");
+      const dataset2 = /* @__PURE__ */ __name((id) => {
+        const value = this.inputDataset(id, outputs, ir);
+        if (!value?.materialize) throw new RagError("dataset", `${id} is not a dataset`);
+        return value;
+      }, "dataset");
       return {
         node: n,
         sample: this.sampler(counter, signal),
@@ -3906,12 +3998,7 @@ Question: ${s.q}`;
         clip,
         log: /* @__PURE__ */ __name((...a) => this.env.log && this.env.log(`[${n.id}]`, ...a), "log"),
         files: /* @__PURE__ */ __name(() => this.files(), "files"),
-        get docs() {
-          return firstOf("docs");
-        },
-        get chunks() {
-          return firstOf("chunks");
-        }
+        dataset: dataset2
       };
     }
     async resolveBakes(n, p, outputs, ir) {
@@ -3922,7 +4009,7 @@ Question: ${s.q}`;
       }, "scan");
       scan(p);
       if (!found) return p;
-      const digests = this.digests(ir);
+      const digests = outputs.digests;
       const walk = /* @__PURE__ */ __name(async (v) => {
         if (isBake(v)) {
           if (!v.datasets) throw new RagError("bake", "bake requires explicit dataset bindings");
@@ -3966,7 +4053,15 @@ Question: ${s.q}`;
       return this.resolved.get(n.id + ":" + hash(n.p)) || n.p;
     }
     artifacts(ir) {
-      const dg = this.digests(ir);
+      return this.published.get(this.slotKey(ir))?.[0]?.snapshot || null;
+    }
+    generation(id) {
+      const snapshot = this.generations.get(id);
+      if (!snapshot)
+        throw new RagError("stale_generation", "snapshot is no longer retained; refresh the query");
+      return snapshot;
+    }
+    makeArtifacts(ir, dg) {
       const got = /* @__PURE__ */ __name((d) => this.memo.get(d) || this.partial.get(d), "got");
       const missing = [...dg].filter(([, d]) => !got(d)).map(([id]) => id);
       if (missing.length) return null;
@@ -3974,58 +4069,87 @@ Question: ${s.q}`;
       if (this._art && this._art.key === key) return this._art;
       const tArt = now();
       const byId = new Outputs();
+      byId.digests = dg;
       for (const [id, d] of dg) {
         const m = got(d);
         byId.set(id, m.lazy && !m.lazy.done ? m.lazy : m.value);
       }
-      let chunks = /* @__PURE__ */ new Map(), order = /* @__PURE__ */ new Map();
-      const indexes = /* @__PURE__ */ new Map(), docNodes = [], views = [];
-      let synonyms = null;
+      const chunks = new RecordCatalog(), docs = new RecordCatalog();
+      const indexes = /* @__PURE__ */ new Map(), orders = /* @__PURE__ */ new Map(), datasets = /* @__PURE__ */ new Map();
+      const documentsFor = /* @__PURE__ */ new Map();
+      let synonyms = null, links = null;
       for (const n of ir.nodes) {
         if (n.phase !== "build") continue;
-        if (n.out === "docs")
-          docNodes.push(n.id);
-        else if (n.out === "chunks") {
-          const v = byId.get(n.id);
-          if (isView(v)) views.push(v);
-          else for (const c of v) chunks.set(c.id, c);
-        } else if (n.out === "index")
-          indexes.set(n.p.name || n.id.replace(/^ix-/, ""), byId.get(n.id));
-        if (n.t === "synonyms") synonyms = byId.get(n.id);
-      }
-      let docs = null, links = null;
-      const docsMap = /* @__PURE__ */ __name(() => {
-        if (!docs) {
-          docs = /* @__PURE__ */ new Map();
-          const dup = [];
-          for (const id of docNodes)
-            for (const d of byId.get(id)) {
-              if (docs.has(d.id)) dup.push(d.name || d.id);
-              else docs.set(d.id, d);
-            }
-          if (dup.length && this.env.log)
-            this.env.log(
-              `[artifacts] ${dup.length} doc(s) share an id with an earlier doc and are not in art.docs: ${dup.slice(0, 5).join(", ")}`
+        if (!["docs", "chunks", "index"].includes(n.out) && n.t !== "synonyms") continue;
+        const value = byId.get(n.id);
+        if (n.out === "docs" || n.out === "chunks") {
+          const kind = n.out === "docs" ? "documents" : "chunks";
+          const data = isView(value) ? dataset(dg.get(n.id), kind, value) : memoryDataset(dg.get(n.id), kind, value);
+          datasets.set(n.id, data);
+          const documents = n.out === "docs" ? data.id : documentsFor.get(n.in[0]);
+          if (!documents)
+            throw new RagError(
+              "dataset",
+              `${n.id}: chunks require an explicit source-document input`
             );
+          documentsFor.set(n.id, documents);
+          if (n.out === "docs") docs.add(data);
+          else {
+            chunks.add(data, documents);
+            const perDocument = /* @__PURE__ */ new Map();
+            orders.set(data.id, {
+              get(docId) {
+                const local = unqualify(docId);
+                if (local.dataset !== documents)
+                  throw new RagError("reference", "document belongs to a different dataset");
+                if (isView(value)) return value.order(local.id).map((id) => qualify(data.id, id));
+                if (!perDocument.size)
+                  for (const c of data.values()) {
+                    if (!perDocument.has(c.docId)) perDocument.set(c.docId, []);
+                    perDocument.get(c.docId).push(qualify(data.id, c.id));
+                  }
+                return perDocument.get(local.id) || [];
+              }
+            });
+          }
+        } else if (n.out === "index") {
+          const data = datasets.get(n.in[0]);
+          if (!data) throw new RagError("dataset", `${n.id}: index requires a chunk dataset`);
+          const bound = Object.create(value);
+          bound.datasetId = data.id;
+          const ranked = /* @__PURE__ */ __name((hits) => hits.map((h) => ({ ...h, id: qualify(data.id, h.id) })), "ranked");
+          for (const method of ["search", "searchIn"])
+            if (typeof value[method] === "function")
+              bound[method] = (...args) => {
+                if (method === "searchIn") {
+                  const document = unqualify(args[0]);
+                  if (document.dataset !== documentsFor.get(n.in[0]))
+                    throw new RagError("reference", "document belongs to a different dataset");
+                  args[0] = document.id;
+                }
+                const found = value[method](...args);
+                return found && typeof found.then === "function" ? found.then(ranked) : ranked(found);
+              };
+          indexes.set(n.p.name || n.id.replace(/^ix-/, ""), bound);
         }
-        return docs;
-      }, "docsMap");
-      const primary = ir.nodes.find(
-        (n) => n.phase === "build" && n.out === "chunks" && n.t !== "enrich" && n.t !== "enrich.llm"
-      );
-      const primaryOut = primary ? byId.get(primary.id) : null;
-      if (isView(primaryOut))
-        order = {
-          get: /* @__PURE__ */ __name((docId) => primaryOut.order(docId), "get"),
-          has: /* @__PURE__ */ __name((docId) => primaryOut.order(docId).length > 0, "has")
-        };
-      else if (primary)
-        for (const c of primaryOut) {
-          if (!order.has(c.docId)) order.set(c.docId, []);
-          order.get(c.docId).push(c.id);
-        }
-      if (views.length)
-        chunks = !chunks.size && views.length === 1 ? views[0] : unionChunks(chunks, views);
+        if (n.t === "synonyms") synonyms = value;
+      }
+      const order = {
+        get: /* @__PURE__ */ __name((docId) => [...orders.values()].flatMap((source) => {
+          try {
+            return source.get(docId);
+          } catch {
+            return [];
+          }
+        }), "get")
+      };
+      const neighbors = /* @__PURE__ */ __name((id, before = 1, after = 1) => {
+        const record = chunks.get(id);
+        if (!record) return [];
+        const ids = orders.get(unqualify(id).dataset).get(record.docId), at = ids.indexOf(id);
+        return [...ids.slice(Math.max(0, at - before), at), ...ids.slice(at + 1, at + 1 + after)];
+      }, "neighbors");
+      const docsMap = /* @__PURE__ */ __name(() => docs, "docsMap");
       const linksMap = /* @__PURE__ */ __name(() => {
         if (links) return links;
         const norm = /* @__PURE__ */ __name((s) => String(s).toLowerCase().replace(/^(proj|project report|project)\s*-\s*/i, "").replace(/[^a-z0-9]+/g, " ").trim(), "norm");
@@ -4050,6 +4174,8 @@ Question: ${s.q}`;
         key,
         storeKeys: ir.nodes.filter((n) => n.phase === "build" && persistOf(REG.get(n.t))).map((n) => storeKey(dg.get(n.id), REG.get(n.t))).filter((key2) => this.env.artifacts?.has(key2)),
         byId,
+        datasets,
+        neighbors,
         chunks,
         order,
         indexes,
@@ -4703,7 +4829,30 @@ ${clip(c.text, 1500)}`
   // pkg/ragjs/src/export/html.js
   async function exportHtml(target, opts = {}) {
     const { ir, engine } = resolveTarget(target);
-    const pruned = projectLexical(ir);
+    if (!engine.artifacts(ir)) {
+      const report = await engine.buildShared(ir);
+      if (!report.ok) throw new RagError("export", report.errors.join("; "));
+    }
+    const snapshot = engine.artifacts(ir);
+    if (!snapshot) throw new RagError("export", "a complete build is required");
+    const release = engine.acquire(snapshot);
+    let pruned;
+    try {
+      const lexical = projectLexical(ir);
+      const changes = [];
+      for (const node of lexical.nodes) {
+        if (node.phase !== "build" || node.out === "index") continue;
+        const value = node.out === "files" ? [] : node.out === "docs" || node.out === "chunks" ? engine.inputDataset(node.id, snapshot.byId, ir).materialize() : snapshot.byId.get(node.id);
+        changes.push({
+          op: "replace",
+          node: node.id,
+          with: { t: "snapshot.value", p: { kind: node.out, inputs: portsOf(node).in, value } }
+        });
+      }
+      pruned = applyOps(lexical, changes);
+    } finally {
+      release();
+    }
     const src = engine.env.librarySource ? await engine.env.librarySource() : "";
     const files = engine.files().map((f) => ({ name: f.name, text: f.text }));
     const title = opts.title || ir.id;
