@@ -441,3 +441,62 @@ A patch attempting this reorganization failed because its last hunk expected a s
 ### Final validation receipt
 
 Focused docmgr frontmatter validation passed for the five candidates, comparison, diary and index. All 20 frozen input hashes, 20 writer artifact hashes, five exact final-body copies and three installed-skill hashes matched. All relative links in the comparison and index resolved. `git diff --check` passed before staging. Only this ticket changed; runtime tests were not run.
+
+
+## Step 10: Prepare the third writing experiment around understandability
+
+Revised the ticket-local generic guidance to make first-use teaching, concrete relationships and explanatory continuity explicit. The second pass now distinguishes reader confusion from technical corrections and finishes by reconciling the revised document. Prepared another independent three-Codex/two-Opus batch, with the same original design, source baseline and four-artifact procedure as round two.
+
+### Prompt Context
+
+**User prompt (verbatim):** "ok, improve, and then do another 3 + 2 run and review"
+
+**Assistant interpretation:** Improve the generic writing guidance using the clarity-focused conclusion, commission five fresh writers, review complete documents and report.
+
+**Inferred user intent:** Improve how reliably the guides teach a newcomer without overemphasizing implementation-perfectness.
+
+**Prior results commit:** `e135c0f` — five round-two guides and comparison.
+
+### What I did
+
+- Created `scripts/03-clarity-guidance-experiment/` with a copied candidate skill, revised writing guidance/checklist, shared context, five prompts, two tmux runners and input hashes.
+- Added first-use explanations, concrete instances of relationships, sustained explanation through later chapters, a proportional mental execution of examples, and a final consistency reread within the existing second pass.
+- Kept changes generic. Writers receive no prior answers, review reports or sibling guides.
+- Fixed the evaluation plan before launch: primary qualitative assessment of understandability across whole documents, with technical corrections separately bounded.
+- Added task `99ka` and reference document 07. Installed skills, original design and runtime remain unchanged.
+
+### Why
+
+The previous batch already improved substantive explanations. The next step is focused writing guidance, not a longer domain checklist or more mandatory sections. Keeping equivalent inputs and procedure makes observed differences easier to discuss, although this is still not a controlled experiment.
+
+### What worked
+
+Prepared 21 hashed inputs and disjoint output directories. Existing model configuration and external-service authorization carry forward: three Sol-medium agents and two Opus-5.5-medium tmux writers.
+
+### What didn't work
+
+No failures at preparation. No writers have launched at this checkpoint.
+
+### What I learned
+
+The review should judge whether readers can explain relationships and behavior, then separately flag technical problems that need correction. A small source inaccuracy should not obscure an effective explanation.
+
+### What was tricky to build
+
+The consistency reread must not become an endless extra drafting cycle. It is specified as the final part of the second pass, preserving the same four output artifacts and no fixed word count.
+
+### What warrants a second pair of eyes
+
+Check whether the new instructions improve first-use teaching and later-chapter continuity across all five guides rather than merely causing more introductory prose.
+
+### What should be done in the future
+
+Launch all five writers, preserve artifacts, compare the whole documents and report. Do not install the candidate or replace the original automatically.
+
+### Code review instructions
+
+Read `guidance-changes.md`, candidate `references/writing-style.md`, and the frozen evaluation plan in the round-three directory. Compare the skill diff against round two. Runtime tests are unnecessary for this documentation-only preparation.
+
+### Technical details
+
+Task: `99ka`. Output files per writer: research.md, first-draft.md, review-notes.md, final.md. Fresh agents avoid earlier answers; Claude uses safe mode with Read/Glob/Grep/Write. No additional delegation by writers. Baseline runtime remains `c267f91`.
