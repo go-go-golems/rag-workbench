@@ -1,0 +1,16 @@
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "allowJs": true,
+    "checkJs": false,
+    "strict": true,
+    "noEmit": true,
+    "verbatimModuleSyntax": true,
+    "lib": ["ES2020", "DOM"],
+    "types": [],
+    "allowImportingTsExtensions": true
+  },
+  "include": ["pkg/ragjs/src/**/*.ts", "pkg/ragjs/src/**/*.js", "pkg/ragjs/type-tests/**/*.ts"]
+}

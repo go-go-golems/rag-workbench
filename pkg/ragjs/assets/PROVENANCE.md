@@ -13,3 +13,14 @@ From now on these files are owned here and evolve with the Go backend.
 
 1. `rag.js`, `gui.js`: Unicode property escapes (`\p{L}\p{N}`) replaced by a feature-detected class body `LN` (`rag.util.LN`). goja matches nothing for `\p{..}` without raising an error (RAGWB-001 diary step 3, decision D6).
 2. `rag.js` `Engine.digests`: generic `def.digest(params, engine)` hook so native source components fold content digests into their node digest.
+
+## Modular runtime (RAGWB-010)
+
+`rag.js` is now generated from `../src/` with `pnpm build`. Edit the source
+modules, then commit both source and generated output. `pnpm check:generated`
+compares a fresh in-memory bundle with the committed bytes without rewriting it.
+`gui.js` and `kit.js` remain directly maintained assets.
+
+The generated script preserves the existing CommonJS/browser publication
+boundary. TypeScript is erased during bundling; Goja does not need an ESM loader.
+See `../src/README.md` for module responsibilities and type coverage.
