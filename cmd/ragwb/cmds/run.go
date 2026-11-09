@@ -88,6 +88,7 @@ func NewRunCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			defer store.Close()
 			base := filepath.Dir(path)
 			rec := timing.Default
 			rec.Phase("runtime + script (build, query, evals)")
@@ -152,6 +153,7 @@ func NewPresetsCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			defer store.Close()
 			factory, err := runner.NewFactory(runner.Config{Verbose: f.verbose, Roots: Roots(), JSComponents: JSComponents(), IndexBackend: IndexBackend(), LLM: backend, Decider: decider, BuildCalls: BuildCalls(), FullBuild: FullBuild(), Embedder: embedder, EmbedCache: embedCache, Artifacts: store})
 			if err != nil {
 				return err

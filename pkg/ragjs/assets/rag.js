@@ -2912,6 +2912,47 @@ Question: ${s.q}`;
   var persistOf = /* @__PURE__ */ __name((def) => !def || def.persist === false ? null : def.persist || (["docs", "chunks"].includes(def.out) ? JSON_PERSIST : null), "persistOf");
   var storeKey = /* @__PURE__ */ __name((d, def) => hash([d, def.src || ""]), "storeKey");
 
+  // pkg/ragjs/src/engine/result.ts
+  function detach(value, maxBytes = 16 * 1024 * 1024) {
+    const ancestors = /* @__PURE__ */ new Set();
+    let bytes = 0;
+    const copy = /* @__PURE__ */ __name((item, depth) => {
+      if (depth > 100) throw new RagError("result_limit", "result nesting exceeds 100 levels");
+      if (item === null || item === void 0 || typeof item === "boolean") return item;
+      if (typeof item === "string") {
+        bytes += item.length * 2;
+        if (bytes > maxBytes) throw new RagError("result_limit", "result exceeds byte budget");
+        return item;
+      }
+      if (typeof item === "number") {
+        if (!Number.isFinite(item))
+          throw new RagError("result", "result contains a non-finite number");
+        bytes += 8;
+        return item;
+      }
+      if (typeof item !== "object")
+        throw new RagError("result", "result must contain only plain data");
+      if (ancestors.has(item)) throw new RagError("result", "result contains a cycle");
+      if (!Array.isArray(item) && Object.getPrototypeOf(item) !== Object.prototype && Object.getPrototypeOf(item) !== null)
+        throw new RagError("result", "result contains an instance or resource");
+      ancestors.add(item);
+      let out;
+      if (Array.isArray(item)) out = item.map((value2) => copy(value2, depth + 1));
+      else {
+        const result = {};
+        for (const [key, child] of Object.entries(item)) {
+          copy(key, depth + 1);
+          result[key] = copy(child, depth + 1);
+        }
+        out = result;
+      }
+      ancestors.delete(item);
+      return out;
+    }, "copy");
+    return copy(value, 0);
+  }
+  __name(detach, "detach");
+
   // pkg/ragjs/src/engine/session.js
   var countOf = /* @__PURE__ */ __name((v) => v == null ? 0 : Array.isArray(v) ? v.length : v.evidence ? v.evidence.length : 1, "countOf");
   var _Session = class _Session {
@@ -3155,7 +3196,7 @@ Question: ${s.q}`;
           });
         }
         const o = ir.outputs;
-        const result = {
+        const result = detach({
           runId,
           trigger,
           signals: s,
@@ -3167,7 +3208,7 @@ Question: ${s.q}`;
           errors,
           ms: +(now() - t0).toFixed(1),
           calls: counter.calls
-        };
+        });
         decorateResult(result, art);
         emit({ type: "runEnd", ms: result.ms, calls: result.calls, errors });
         this.last = result;
@@ -3670,6 +3711,15 @@ Question: ${s.q}`;
                 const sk = storeKey(d, def);
                 store2.save(sk, n.t, codec2.save(lazy || value, n.p), st.count);
                 st.saved = true;
+                if (store2.describe)
+                  store2.describe(
+                    sk,
+                    lineages.get(n.id) || "",
+                    n.in.map((id) => {
+                      const source = ir.nodes.find((x) => x.id === id);
+                      return persistOf(REG.get(source.t)) ? storeKey(dg.get(id), REG.get(source.t)) : null;
+                    }).filter((key) => key && store2.has(key))
+                  );
                 const lin = lineages.get(n.id);
                 if (lin && store2.lineageRecord)
                   store2.lineageRecord(
@@ -3714,6 +3764,18 @@ Question: ${s.q}`;
             }
           }
       }
+      if (report.ok && this.env.artifacts?.publish && !this.pending(ir).length) {
+        const roots = ir.nodes.filter((n) => n.phase === "build" && persistOf(REG.get(n.t))).map((n) => storeKey(dg.get(n.id), REG.get(n.t))).filter((key) => this.env.artifacts.has(key));
+        this.env.artifacts.publish(
+          hash([
+            "slot",
+            ir.corpus,
+            ir.nodes.filter((n) => n.phase === "build").map((n) => [n.id, n.t, n.p, n.in])
+          ]),
+          hash([...dg]),
+          roots
+        );
+      }
       report.ms = +(now() - t0).toFixed(1);
       report.calls = counter.calls;
       report.passes = passesOf(ir, report);
@@ -3729,9 +3791,9 @@ Question: ${s.q}`;
         scope.own(this.resources.retain(handle, () => handle.close()));
     }
     ownMemo(digest, value) {
-      if (this.memoOwners.has(digest)) return;
       const owner = new OwnershipScope();
       this.retainValue(value, owner);
+      this.memoOwners.get(digest)?.close();
       this.memoOwners.set(digest, owner);
     }
     acquire(art) {
@@ -3745,6 +3807,8 @@ Question: ${s.q}`;
         owner.close();
         throw error;
       }
+      if (this.env.artifacts?.pin && art.storeKeys.length)
+        owner.own(this.env.artifacts.pin(art.storeKeys));
       this.activeSnapshots.set(art, (this.activeSnapshots.get(art) || 0) + 1);
       let released = false;
       return () => {
@@ -3984,6 +4048,7 @@ Question: ${s.q}`;
       }, "linksMap");
       this._art = {
         key,
+        storeKeys: ir.nodes.filter((n) => n.phase === "build" && persistOf(REG.get(n.t))).map((n) => storeKey(dg.get(n.id), REG.get(n.t))).filter((key2) => this.env.artifacts?.has(key2)),
         byId,
         chunks,
         order,

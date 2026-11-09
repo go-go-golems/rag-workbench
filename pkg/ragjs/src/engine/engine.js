@@ -369,6 +369,20 @@ class Engine {
               const sk = storeKey(d, def);
               store.save(sk, n.t, codec.save(lazy || value, n.p), st.count);
               st.saved = true;
+              if (store.describe)
+                store.describe(
+                  sk,
+                  lineages.get(n.id) || '',
+                  n.in
+                    .map((id) => {
+                      const source = ir.nodes.find((x) => x.id === id);
+                      return persistOf(REG.get(source.t))
+                        ? storeKey(dg.get(id), REG.get(source.t))
+                        : null;
+                    })
+                    .filter((key) => key && store.has(key)),
+                );
+
               const lin = lineages.get(n.id);
               if (lin && store.lineageRecord)
                 store.lineageRecord(
@@ -413,6 +427,21 @@ class Engine {
             report.errors.push(`${n.id}: ${e.message}`);
           }
         }
+    if (report.ok && this.env.artifacts?.publish && !this.pending(ir).length) {
+      const roots = ir.nodes
+        .filter((n) => n.phase === 'build' && persistOf(REG.get(n.t)))
+        .map((n) => storeKey(dg.get(n.id), REG.get(n.t)))
+        .filter((key) => this.env.artifacts.has(key));
+      this.env.artifacts.publish(
+        hash([
+          'slot',
+          ir.corpus,
+          ir.nodes.filter((n) => n.phase === 'build').map((n) => [n.id, n.t, n.p, n.in]),
+        ]),
+        hash([...dg]),
+        roots,
+      );
+    }
     report.ms = +(now() - t0).toFixed(1);
     report.calls = counter.calls;
     report.passes = passesOf(ir, report);
@@ -428,9 +457,9 @@ class Engine {
       scope.own(this.resources.retain(handle, () => handle.close()));
   }
   ownMemo(digest, value) {
-    if (this.memoOwners.has(digest)) return;
     const owner = new OwnershipScope();
     this.retainValue(value, owner);
+    this.memoOwners.get(digest)?.close();
     this.memoOwners.set(digest, owner);
   }
   acquire(art) {
@@ -444,6 +473,8 @@ class Engine {
       owner.close();
       throw error;
     }
+    if (this.env.artifacts?.pin && art.storeKeys.length)
+      owner.own(this.env.artifacts.pin(art.storeKeys));
     this.activeSnapshots.set(art, (this.activeSnapshots.get(art) || 0) + 1);
     let released = false;
     return () => {
@@ -708,6 +739,10 @@ class Engine {
     };
     this._art = {
       key,
+      storeKeys: ir.nodes
+        .filter((n) => n.phase === 'build' && persistOf(REG.get(n.t)))
+        .map((n) => storeKey(dg.get(n.id), REG.get(n.t)))
+        .filter((key) => this.env.artifacts?.has(key)),
       byId,
       chunks,
       order,

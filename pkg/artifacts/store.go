@@ -20,19 +20,21 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
-	"strings"
+	"sync"
 	"time"
 )
 
 // Meta describes one stored output.
 type Meta struct {
-	Key     string    `json:"key"`
-	Type    string    `json:"type"`  // component type, e.g. parse.markdown
-	Codec   string    `json:"codec"` // json | bm25 | …
-	Count   int       `json:"count"` // items, as the build report shows them
-	Size    int64     `json:"size"`  // payload bytes
-	Created time.Time `json:"created"`
-	NS      string    `json:"ns,omitempty"`
+	Dependencies []string  `json:"dependencies,omitempty"`
+	Lineage      string    `json:"lineage,omitempty"`
+	Key          string    `json:"key"`
+	Type         string    `json:"type"`  // component type, e.g. parse.markdown
+	Codec        string    `json:"codec"` // json | bm25 | …
+	Count        int       `json:"count"` // items, as the build report shows them
+	Size         int64     `json:"size"`  // payload bytes
+	Created      time.Time `json:"created"`
+	NS           string    `json:"ns,omitempty"`
 	// Kind is "" (a blob, <key>.bin, read with Load) or "file"/"dir" (a payload
 	// opened in place at Path: <key>.<codec>).
 	Kind string `json:"kind,omitempty"`
@@ -46,8 +48,11 @@ const (
 
 // Store is one namespace of an artifact directory.
 type Store struct {
-	Dir string // root of all namespaces
-	NS  string
+	mu   sync.Mutex
+	lock *os.File
+	pins map[string]int
+	Dir  string // root of all namespaces
+	NS   string
 }
 
 var keyRE = regexp.MustCompile(`^[0-9a-z]{1,64}$`)
@@ -64,7 +69,15 @@ func Open(dir, ns string) (*Store, error) {
 	if err := os.MkdirAll(filepath.Join(abs, ns), 0o755); err != nil {
 		return nil, err
 	}
-	return &Store{Dir: abs, NS: ns}, nil
+	lockDir := filepath.Join(abs, ".locks")
+	if err := os.MkdirAll(lockDir, 0700); err != nil {
+		return nil, err
+	}
+	lock, err := lockNamespace(filepath.Join(lockDir, ns+".lock"))
+	if err != nil {
+		return nil, err
+	}
+	return &Store{Dir: abs, NS: ns, lock: lock, pins: map[string]int{}}, nil
 }
 
 func (s *Store) path(key, ext string) (string, error) {
@@ -240,6 +253,11 @@ func writeAtomic(p string, data []byte) error {
 		_ = os.Remove(tmp)
 		return err
 	}
+	if err := f.Sync(); err != nil {
+		_ = f.Close()
+		_ = os.Remove(tmp)
+		return err
+	}
 	if err := f.Close(); err != nil {
 		_ = os.Remove(tmp)
 		return err
@@ -248,7 +266,12 @@ func writeAtomic(p string, data []byte) error {
 		_ = os.Remove(tmp)
 		return err
 	}
-	return nil
+	directory, err := os.Open(filepath.Dir(p))
+	if err != nil {
+		return err
+	}
+	defer directory.Close()
+	return directory.Sync()
 }
 
 // Load returns a stored output.
@@ -271,37 +294,70 @@ func (s *Store) Load(key string) (Meta, []byte, error) {
 // List returns the outputs of every namespace under Dir, newest first.
 func List(dir string) ([]Meta, error) {
 	out := []Meta{}
-	err := filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
+	namespaces, err := os.ReadDir(dir)
+	if errors.Is(err, fs.ErrNotExist) {
+		return out, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	for _, ns := range namespaces {
+		if !ns.IsDir() || !keyRE.MatchString(ns.Name()) {
+			continue
+		}
+		shards, err := os.ReadDir(filepath.Join(dir, ns.Name()))
 		if err != nil {
-			if errors.Is(err, fs.ErrNotExist) {
-				return nil
+			return nil, err
+		}
+		for _, shard := range shards {
+			if !shard.IsDir() || len(shard.Name()) > 2 || !keyRE.MatchString(shard.Name()) {
+				continue
 			}
-			return err
-		}
-		if d.IsDir() {
-			if strings.HasPrefix(d.Name(), ".tmp-") || strings.Contains(d.Name(), ".") || d.Name() == "lineage" {
-				return filepath.SkipDir // temp builds and directory payloads (<key>.<codec>/) hold no metadata
+			root := filepath.Join(dir, ns.Name(), shard.Name())
+			files, err := os.ReadDir(root)
+			if err != nil {
+				return nil, err
 			}
-			return nil
+			for _, file := range files {
+				if file.IsDir() || filepath.Ext(file.Name()) != ".json" {
+					continue
+				}
+				b, err := os.ReadFile(filepath.Join(root, file.Name()))
+				if err != nil {
+					return nil, err
+				}
+				var meta Meta
+				if err = json.Unmarshal(b, &meta); err != nil {
+					return nil, fmt.Errorf("invalid artifact metadata %s: %w", file.Name(), err)
+				}
+				if meta.Key == "" || file.Name() != meta.Key+".json" {
+					return nil, fmt.Errorf("invalid artifact identity %s", file.Name())
+				}
+				meta.NS = ns.Name()
+				out = append(out, meta)
+			}
 		}
-		if filepath.Ext(p) != ".json" {
-			return nil
-		}
-		b, err := os.ReadFile(p)
-		if err != nil {
-			return nil
-		}
-		var m Meta
-		if json.Unmarshal(b, &m) != nil || m.Key == "" {
-			return nil
-		}
-		rel, _ := filepath.Rel(dir, p)
-		m.NS = filepath.Dir(filepath.Dir(rel))
-		out = append(out, m)
-		return nil
-	})
+	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Created.After(out[j].Created) })
-	return out, err
+	return out, nil
+}
+
+// Close releases the namespace only after the owner has stopped its work.
+func (s *Store) Close() error {
+	if s == nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.lock == nil {
+		return nil
+	}
+	if len(s.pins) > 0 {
+		return fmt.Errorf("cannot close store with %d pinned artifacts", len(s.pins))
+	}
+	err := unlockNamespace(s.lock)
+	s.lock = nil
+	return err
 }
 
 // Prune deletes every namespace under dir except keep ("" deletes all).
@@ -318,8 +374,17 @@ func Prune(dir, keep string) (int, error) {
 		if !e.IsDir() || e.Name() == keep || !keyRE.MatchString(e.Name()) {
 			continue
 		}
-		if err := os.RemoveAll(filepath.Join(dir, e.Name())); err != nil {
+		owner, err := Open(dir, e.Name())
+		if err != nil {
 			return n, err
+		}
+		err = os.RemoveAll(filepath.Join(dir, e.Name()))
+		closeErr := owner.Close()
+		if err != nil {
+			return n, err
+		}
+		if closeErr != nil {
+			return n, closeErr
 		}
 		n++
 	}

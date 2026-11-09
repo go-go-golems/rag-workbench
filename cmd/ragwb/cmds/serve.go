@@ -64,6 +64,7 @@ func NewServeCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			defer artStore.Close()
 			var corpus []runner.File
 			if files != "" {
 				if corpus, err = runner.ReadFlatCorpus(files); err != nil {

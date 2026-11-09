@@ -721,3 +721,53 @@ See Step 13 for the implementation request and validation preference.
 - Result record detachment currently bounds copied record text to 16 MiB; richer custom-output validation belongs to the remaining result boundary cutover.
 - SSE limits: 256 queued events, 1 MiB per event, 64 KiB coalesced text, 5-second per-write deadline.
 - All APIs/IR changes are direct cutovers with no legacy fallback.
+
+## Step 15: Make snapshot metadata the collection authority
+
+The store now has explicit namespace ownership and snapshot metadata. Published manifests and active pins supply reachability roots; truncated lineage history is no longer the collector's artifact inventory. This remains an intermediate checkpoint pending full generation-aware dataset migration and integrated validation.
+
+### Prompt Context
+See Step 13. Previous checkpoint: `dca97c5`.
+
+### What I did
+- Added OS-backed exclusive namespace locking on Unix and explicit unsupported-platform errors elsewhere; pruning obtains the same lock.
+- Replaced recursive filename heuristics with schema traversal for inventory, including dotted roots and strict metadata parsing.
+- Added descriptor dependency edges, snapshot manifests, atomic current pointers and active artifact pins. Connected successful builds and query leases to the persistence bridge.
+- Replaced lineage-based sweeping with snapshot reachability and corruption refusal. Fresh unpublished outputs receive a recovery grace interval.
+- Added file and parent-directory synchronization to atomic metadata writes.
+- Added strict detached-output copying, rejecting cycles, functions, resource instances and oversized/deep output data.
+- Added 45-generation, active-reader, second-owner and corruption regressions for final execution.
+
+### Why
+- A bounded incremental search list cannot also inventory every persisted output.
+- Process-local leases alone cannot protect files from an independent collector.
+- Result methods must not retain executor resources through hidden instances.
+
+### What worked
+- Targeted Go compilation and TypeScript checking passed after integration fixes; the previous server/ownership checkpoint also compiled.
+- New collector fixtures assert exact unreachable counts beyond the old 32-entry lineage limit.
+
+### What didn't work
+- The first targeted store build found `pkg/artifacts/store.go:23:2: "strings" imported and not used`; removed the obsolete import and compilation passed.
+- The broad regression suite remains deferred. Old lineage/cleanup assertions still need migration to the new ownership contract.
+
+### What I learned
+- A namespace lock must live outside the namespace directory so pruning cannot unlink its own lock identity and admit a second owner.
+
+### What was tricky to build
+- Destructive collection validates authoritative metadata before deleting anything. Pins mark dependencies transitively, including lazily opened shard payloads.
+- Metadata synchronization strengthens publication ordering, but complete payload-tree durability and crash injection still require verification.
+
+### What warrants a second pair of eyes
+- Remaining requirements include stable snapshot publication under concurrent refresh, all native resource adoption paths, host shutdown joining and dataset-qualified consumer migration.
+- Review old snapshot retirement and grace-period behavior when active pins outlive manifest retention.
+
+### What should be done in the future
+- Finish the cutover and migrate old tests before running the full integrated validation gate.
+
+### Code review instructions
+- Start with artifacts/snapshot.go, lock_unix.go and lineage.go; then follow natives/persist.go into engine publication and query pinning.
+
+### Technical details
+- Locks are stored in root/.locks/<namespace>.lock; manifests under namespace/snapshots; pointers under namespace/current.
+- A failed or unsupported lock rejects writable ownership. No legacy store reader was added.

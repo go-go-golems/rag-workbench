@@ -46,7 +46,7 @@ func (p Persist) InstallEnv(vm *goja.Runtime, rag *goja.Object, env rtenv.Env) e
 	}
 	addCloser := env.AddCloser
 	if addCloser == nil {
-		addCloser = func(func() error) {}
+		return fmt.Errorf("artifacts: resource registry is required")
 	}
 	mv, err := vm.RunString(recordsViewJS)
 	if err != nil {
@@ -63,6 +63,24 @@ func (p Persist) InstallEnv(vm *goja.Runtime, rag *goja.Object, env rtenv.Env) e
 		return fmt.Errorf("artifacts: JSON is not available")
 	}
 	a := vm.NewObject()
+	_ = a.Set("describe", func(key, lineage string, deps []string) {
+		if err := p.Store.Describe(key, lineage, deps); err != nil {
+			panic(vm.NewGoError(err))
+		}
+	})
+	_ = a.Set("publish", func(slot, id string, roots []string) {
+		if err := p.Store.Publish(artifacts.Snapshot{ID: id, Slot: slot, Roots: roots}); err != nil {
+			panic(vm.NewGoError(err))
+		}
+	})
+	_ = a.Set("pin", func(keys []string) func() {
+		release, err := p.Store.Pin(keys)
+		if err != nil {
+			panic(vm.NewGoError(err))
+		}
+		return release
+	})
+
 	// lineage index (RAGWB-003 §6.4): the previous stored output of "this node of this pipeline"
 	_ = a.Set("lineageLatest", func(lineage string) goja.Value {
 		e, err := p.Store.LineageLatest(lineage)

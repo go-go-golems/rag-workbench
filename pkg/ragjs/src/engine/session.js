@@ -1,3 +1,4 @@
+import { detach } from './result.ts';
 import { normHits } from '../components/hits.js';
 import { portsOf, REG } from '../components/registry.js';
 import { RagError } from '../core/errors.ts';
@@ -269,7 +270,7 @@ class Session {
         });
       }
       const o = ir.outputs;
-      const result = {
+      const result = detach({
         runId,
         trigger,
         signals: s,
@@ -281,7 +282,7 @@ class Session {
         errors,
         ms: +(now() - t0).toFixed(1),
         calls: counter.calls,
-      };
+      });
       decorateResult(result, art);
       emit({ type: 'runEnd', ms: result.ms, calls: result.calls, errors });
       this.last = result;
