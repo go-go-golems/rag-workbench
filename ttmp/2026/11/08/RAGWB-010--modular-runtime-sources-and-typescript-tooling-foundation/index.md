@@ -1,7 +1,7 @@
 ---
 Title: Modular runtime sources and TypeScript tooling foundation
 Ticket: RAGWB-010
-Status: active
+Status: complete
 Topics:
     - rag
     - search
@@ -11,7 +11,7 @@ Owners: []
 RelatedFiles: []
 ExternalSources: []
 Summary: ""
-LastUpdated: 2026-11-08T20:05:57.030778445-05:00
+LastUpdated: 2026-11-08T20:23:59.163550778-05:00
 WhatFor: ""
 WhenToUse: ""
 ---
@@ -24,4 +24,4 @@ RAGWB-010 prepares RAGWB-009 with modular source, a reproducible committed bundl
 - [Diary](reference/01-implementation-diary.md)
 - [Tasks](tasks.md)
 
-Status: design complete; implementation in progress.
+Implementation complete in `cac9262`: 26 acyclic source modules, four strict TypeScript implementations, pinned tooling, CI and bundle integration checks. Final guide delivery is recorded in the diary. RAGWB-009 remains the next semantic refactor.

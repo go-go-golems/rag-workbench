@@ -179,3 +179,13 @@ After removing field-order preservation and correcting the source-spelling asser
 - `git diff --check`: passed.
 
 No claim of visual browser testing or complete engine type coverage is made.
+
+## Step 3: Publish results and hand off to RAGWB-009
+
+Implementation commit `cac9262` contains the modular runtime, tooling, type coverage and test corrections. Updated the intern guide with the actual module inventory, version pins, validation results and limitations. Updated the 009 guide and diary to point at the new source locations and retain the no-compatibility policy.
+
+- **Checks:** docmgr doctor passed for both tickets; all concrete source references in the 010 guide exist; the source inventory is 26 modules (four TypeScript and 22 JavaScript).
+- **Delivery:** `remarquee upload bundle` with ToC depth 2 and a new document name succeeded: `OK: uploaded RAGWB 010 Modular Runtime Guide with Results.pdf -> /ai/2026/11/08/RAGWB-010`.
+- **Preservation:** The original pre-implementation guide was not overwritten. The receipt establishes cloud delivery, not physical device synchronization.
+- **Result:** 010 is complete. 009's semantic ownership/refactoring tasks remain open; the foundation does not claim to fix their review findings.
+- **Git:** Design checkpoint `fc4e81c`; implementation `cac9262`; this final documentation checkpoint records the handoff. No branch push or remote CI run is claimed.

@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "digest": "9d5a8d73580f5d78beb4dd9a1c57119433480953d9a69186f8d051057a4f578d",
+  "request": {
+    "ticket": "RAGWB-010",
+    "status": "complete",
+    "intent": "",
+    "entry": "Completed modular runtime and typed tooling foundation in cac9262; validated integration, uploaded final guide with results, and updated 009 handoff."
+  },
+  "receipt": {
+    "sequence": 1,
+    "operation_id": "close-9069664b770b9f2f5662e73c7e41a19d",
+    "state": "committed",
+    "created_at": "2026-11-09T01:23:59.163643335Z",
+    "changed_paths": [
+      "changelog.md",
+      "index.md"
+    ],
+    "before": {
+      "changelog.md": "e17b9accd709859cc157bcf503f2428d986996fe78861d4072a62029a828ed5d",
+      "index.md": "ddb18ae6cf3806794146e8a53161602d17eec768cb3e2379ef0e6d70da4a71d0"
+    },
+    "after": {
+      "changelog.md": "0b27ce66bb4f53d5e86b0fc2a768f10b656215de5848a3e91c1d73d460c1349d",
+      "index.md": "a059a23a55d6f695284b92ac16795e46e6a0b3e42c3b6b6d1670c60911f79a25"
+    }
+  },
+  "changes": [
+    {
+      "path": "changelog.md",
+      "before": "e17b9accd709859cc157bcf503f2428d986996fe78861d4072a62029a828ed5d",
+      "after": "IyBDaGFuZ2Vsb2cKCiMjIDIwMjYtMTEtMDgKCi0gSW5pdGlhbCB3b3Jrc3BhY2UgY3JlYXRlZAoKIyMgMjAyNi0xMS0wOAoKRGVzaWduZWQgbW9kdWxhciBydW50aW1lIGFuZCB0eXBlZCB0b29saW5nIGZvdW5kYXRpb247IGRlbGl2ZXJlZCBpbnRlcm4gZ3VpZGUgdG8gcmVNYXJrYWJsZSBhbmQgdXBkYXRlZCAwMDkgc2VxdWVuY2luZy4KCiMjIDIwMjYtMTEtMDgKCkltcGxlbWVudGVkIGV4cGxpY2l0IGFjeWNsaWMgcnVudGltZSBtb2R1bGVzLCByZXByb2R1Y2libGUgYnVuZGxlLCBzdHJpY3QgdHlwZWQgZm91bmRhdGlvbiwgQmlvbWUsIENJIGFuZCBydW50aW1lIGNoZWNrczsgcmVtb3ZlZCBpbmNpZGVudGFsIGZpZWxkLW9yZGVyIGFuZCBzb3VyY2Utc3BlbGxpbmcgY29uc3RyYWludHMuCgojIyAyMDI2LTExLTA4CgpDb21wbGV0ZWQgbW9kdWxhciBydW50aW1lIGFuZCB0eXBlZCB0b29saW5nIGZvdW5kYXRpb24gaW4gY2FjOTI2MjsgdmFsaWRhdGVkIGludGVncmF0aW9uLCB1cGxvYWRlZCBmaW5hbCBndWlkZSB3aXRoIHJlc3VsdHMsIGFuZCB1cGRhdGVkIDAwOSBoYW5kb2ZmLgo="
+    },
+    {
+      "path": "index.md",
+      "before": "ddb18ae6cf3806794146e8a53161602d17eec768cb3e2379ef0e6d70da4a71d0",
+      "after": "LS0tClRpdGxlOiBNb2R1bGFyIHJ1bnRpbWUgc291cmNlcyBhbmQgVHlwZVNjcmlwdCB0b29saW5nIGZvdW5kYXRpb24KVGlja2V0OiBSQUdXQi0wMTAKU3RhdHVzOiBjb21wbGV0ZQpUb3BpY3M6CiAgICAtIHJhZwogICAgLSBzZWFyY2gKRG9jVHlwZTogaW5kZXgKSW50ZW50OiBsb25nLXRlcm0KT3duZXJzOiBbXQpSZWxhdGVkRmlsZXM6IFtdCkV4dGVybmFsU291cmNlczogW10KU3VtbWFyeTogIiIKTGFzdFVwZGF0ZWQ6IDIwMjYtMTEtMDhUMjA6MjM6NTkuMTYzNTUwNzc4LTA1OjAwCldoYXRGb3I6ICIiCldoZW5Ub1VzZTogIiIKLS0tCgojIE1vZHVsYXIgcnVudGltZSBhbmQgVHlwZVNjcmlwdCBmb3VuZGF0aW9uCgpSQUdXQi0wMTAgcHJlcGFyZXMgUkFHV0ItMDA5IHdpdGggbW9kdWxhciBzb3VyY2UsIGEgcmVwcm9kdWNpYmxlIGNvbW1pdHRlZCBidW5kbGUsIHN0cmljdCB0eXBlZCBib3VuZGFyaWVzIGFuZCBsaW50L2J1aWxkIGNoZWNrcy4gU2VtYW50aWMgb3duZXJzaGlwIGNoYW5nZXMgcmVtYWluIGluIDAwOS4KCi0gW0ludGVybiBndWlkZV0oZGVzaWduLWRvYy8wMS1pbnRlcm4tZ3VpZGUtdG8tbW9kdWxhci1ydW50aW1lLXNvdXJjZXMtdHlwZXNjcmlwdC1hbmQtYnVpbGQtdG9vbGluZy5tZCkKLSBbRGlhcnldKHJlZmVyZW5jZS8wMS1pbXBsZW1lbnRhdGlvbi1kaWFyeS5tZCkKLSBbVGFza3NdKHRhc2tzLm1kKQoKSW1wbGVtZW50YXRpb24gY29tcGxldGUgaW4gYGNhYzkyNjJgOiAyNiBhY3ljbGljIHNvdXJjZSBtb2R1bGVzLCBmb3VyIHN0cmljdCBUeXBlU2NyaXB0IGltcGxlbWVudGF0aW9ucywgcGlubmVkIHRvb2xpbmcsIENJIGFuZCBidW5kbGUgaW50ZWdyYXRpb24gY2hlY2tzLiBGaW5hbCBndWlkZSBkZWxpdmVyeSBpcyByZWNvcmRlZCBpbiB0aGUgZGlhcnkuIFJBR1dCLTAwOSByZW1haW5zIHRoZSBuZXh0IHNlbWFudGljIHJlZmFjdG9yLgo="
+    }
+  ]
+}

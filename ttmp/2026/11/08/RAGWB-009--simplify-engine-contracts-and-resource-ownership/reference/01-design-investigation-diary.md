@@ -106,3 +106,12 @@ Delivered the completed design guide to reMarkable and marked only the design/de
 - **Receipt:** `OK: uploaded RAGWB 009 Engine Simplification Intern Guide.pdf -> /ai/2026/11/08/RAGWB-009`.
 - **Limits:** The receipt confirms cloud delivery, not physical device synchronization. The proposed APIs and tests are not implemented by this ticket documentation commit.
 - **Checkpoint:** This entry and the guide are committed together; use the ticket's git history to identify the documentation revision.
+
+## Step 3: Integrate the implemented TypeScript foundation
+
+RAGWB-010 implementation commit `cac9262` establishes modular authored sources and the committed bundle. Updated this guide's section 16 with the actual module map and strict type coverage. Existing baseline line references remain historical evidence.
+
+- Four implementations are strict TypeScript: errors, identity, tokenization and request scopes. The remaining 22 extracted modules are JavaScript awaiting contract-specific migration.
+- The user confirmed compatibility can break to improve simplicity, readability and robustness. Do not preserve object insertion order or source spelling as contracts.
+- 009's semantic tasks remain open. Implement datasets, snapshots, operation outcomes and graph references in TypeScript while changing their runtime representations and consumers directly.
+- Validation/delivery evidence for the foundation belongs to the [010 diary](../../RAGWB-010--modular-runtime-sources-and-typescript-tooling-foundation/reference/01-implementation-diary.md).
