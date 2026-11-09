@@ -1,0 +1,35 @@
+# Research before drafting
+
+Read the entire original 009 design, including section 16 and the ownership/store passages, then the candidate skill and both requested references. Investigation was read-only. No tests or examples were executed. The context identifies runtime baseline c267f91; the checkout reports HEAD 3dcc6e0852463f3dfc1113588233e6d293d112c2. Claims below describe inspected source, not an assertion that the checkout is byte-identical to either historical revision.
+
+## Reader and task
+
+A capable new engineer must understand the existing report/vault pipeline, implement the proposed semantic refactor after 010, migrate all consumers directly, and prove ownership/cancellation/identity behavior with sequence tests. This is a replacement guide, not implementation. Compatibility may break. Four private artifacts are the only authorized writes; no docmgr metadata, diary, implementation or uploads.
+
+## System understood from source
+
+Corpus builders describe source, parse, chunk and indexing work. Plans append live query work. `examples/apps/reports/lib/corpus.js` defines text and metadata indexes and an optional vector corpus; `lib/plans.js` supplies lexical, fused, graded, answer and adaptive decision-routed plans. These are useful concrete entry points.
+
+`runner.NewFactory` installs allowed source roots, native Markdown/BM25/terms, vectors and optional persistence. `ragjs/module.go` embeds generated assets and evaluates a private module per runtime. `pkg/ragjs/src/README.md` and root package.json establish authored sources, deterministic generation, Goja/browser sharing, strict TS coverage limited to selected foundation modules, and pnpm checks. 010 extracted semantics without implementing 009.
+
+Trace: `Engine.run` compiles and captures synchronous request scope; `Session.run` obtains `engine.artifacts(ir)` or awaits `buildShared`, traverses live nodes, emits records and decorates a result with artifact closures. `build` computes content digests, reuses memo or persisted lazy outputs, tries lineage-compatible deltas, otherwise builds and saves outputs. `Engine.artifacts` merges all chunk outputs, constructs indexes and reading order. In serve, `__serve.run` awaits the session, collects and then reacquires current artifacts for result packing. This last reacquisition can disagree with the query's generation.
+
+## Evidence and implications
+
+- `engine/records.js`: `isView`, `asArray`, `unionChunks`. The union prefers any map hit over any view; among views it prefers the first match. `Engine.artifacts` lets later array chunks overwrite earlier IDs. Storage form can therefore change precedence. `components/hits.js` and builtins retrieve/fusion/pack resolve bare IDs and propagate them through evidence.
+- `engine/engine.js`: `resolveBakes` passes raw outputs, uses `docs.map`, and hashes IDs/section counts plus chunk length; equal counts do not identify bytes. `buildCtx` selects the first available docs/chunks stream, another implicit multi-dataset boundary to remove. `gc` closes last cycle's retired handles without active-query accounting. `tryDelta` temporarily opens a base into retirement. `buildShared` saves the first caller's promise/options under build digests only.
+- `engine/session.js`: one local `art` survives awaits, but there is no retaining lease. Result methods close over `art`; all outputs/traces may need records beyond final hits. `engine/scope.ts`: scope inheritance occurs synchronously before the first await; closing emission is distinct from aborting.
+- `natives/persist.go`: persistent records and indexes use AddCloser, with a nil fallback that does nothing. Delta Markdown callbacks create `Records2` wrappers directly in `markdown_native.go`, without that registration. Fresh, load and delta paths need one adoption boundary, including intermediates and duplicate opens.
+- `artifacts/lineage.go`: LineageKeep=32, LineageSearch=8; LineageRecord truncates history and GC only sees histories. Bounded lookup cannot be ownership inventory. `store.go:List` skips dotted directory basenames even for the supplied root. Existing immutable payload/codecs and hard links should survive the refactor.
+- `natives/rerank.go:rerankAsync`: posted settlement reads `callCtx.Err` after the worker's deferred cancel can execute; provider failure can become cancellation. `ragjs/sample.go` and `decide.go` classify before posting, but duplicate bridge scaffolding. Sample tools post request/reply to the VM owner; a shared runner must preserve this richer behavior.
+- `server/sse.go`: queue capacity and a timed Emit already protect against a full event queue, but writes have no deadlines, Flush cannot report error, pump discards write errors, and pending text is not byte-bounded. Both endpoint handlers await pump completion before terminal writes; a blocked socket can prevent cleanup. `handleVerb` has admission control; `handleRun` does not visibly share that wrapper.
+- `graph/graph.js:finalize` already checks missing decisions, types, phases and cycles. `applyOps` rename rewrites inputs and outputs only. Removal checks component uses and rewires data but does not normalize decision references. `export/html.js` removes submit-trigger nodes then context/answer and embeds engine.files; filesystem source data need not be in that list. Export can be rejected by existing validation; do not imply dangling decisions silently execute.
+- `llm/gepp/backend.go:preferred`: empty enabled list means unrestricted for the default-model check but yields no fallback if that default is unavailable. Proposed deterministic fallback can be a small local change with sorted eligible refs.
+
+## Existing test evidence, not execution
+
+Read representative bodies of `runner/records_test.go`, `runner/delta_test.go`, `artifacts/store_test.go:TestLineage`, and `ragjs/route_test.go:TestWhenInPlanEdits`. They exercise useful ordinary cold/warm, incremental/full, four-version lineage and condition-edit behavior, but do not establish the proposed adversarial sequences. Also located served refresh, streaming, outcome and provider tests. Preserve their meaningful semantics while changing obsolete shape assertions.
+
+## Decisions needing explicit treatment
+
+Original target settles synchronous datasets, exact provenance, detached ordinary results, leased snapshots, one writable namespace owner, authoritative descriptors/manifests and derived lineage, independent build jobs, immutable outcomes, bounded SSE and canonical graph references. It does not settle precise identity encoding/hash, chunk-to-document version binding, how ambient first-stream callbacks migrate, exact result/transport byte budgets, stale lookup retention, concurrent refresh winner policy or platform lock/fsync implementation. Recommend minimal concrete policies where helpful, label them proposals and distinguish blockers from tunable details. A snapshot cannot be a mutable global per whole engine; it is published per normalized build identity. Concurrent refresh publication must have an arbiter before implementation can claim consistency.

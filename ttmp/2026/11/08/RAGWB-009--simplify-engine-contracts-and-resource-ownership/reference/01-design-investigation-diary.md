@@ -358,3 +358,86 @@ Start with candidate `references/writing-style.md`, shared `context.md`, and `ev
 ### Technical details
 
 Codex output directories are `writers/codex-a`, `codex-b`, `codex-c`; Claude output directories are `writers/opus-d`, `opus-e`. Each contains research.md, first-draft.md, review-notes.md and final.md when complete. Claude uses safe mode with Read/Glob/Grep/Write tools, no command execution, and writes a structured CLI result receipt. Raw prompts and model/session configuration remain in the experiment directory.
+
+
+## Step 9: Compare all five revised guides and stop at the review boundary
+
+The five writers completed research, a first draft, pre-revision review notes and a final guide. I compared the entire documents and their revisions, then checked consequential source claims independently. Every second pass improved substantive explanations. The batch reaches a useful common explanation floor, while technical readiness remains uneven: local terms still need introduction, and D/E retain contradictions between rules, examples and decision tables. B is the recommended revision base, with specific material worth borrowing from the other four.
+
+### Prompt Context
+
+**User prompt and clarification:** see Step 8 for the verbatim request and the requirement that all documents be similarly understandable to a new developer.
+
+**Assistant interpretation:** Assess all five outputs fairly across the whole guide, preserve their independent results, distinguish writing clarity from technical correctness, and report before doing another revision or implementation.
+
+**Inferred user intent:** Find guidance that reliably produces understandable, technically dependable design documents rather than one exceptional sample.
+
+**Commit (setup):** `3dcc6e0` — "docs: prepare generic two-pass guidance and five-writer experiment". Runtime baseline remains `c267f91`.
+
+### What I did
+
+- Ran three `gpt-6.1-sol` medium agents and two `claude-opus-5-5 --effort medium` tmux processes with identical substantive assignments and separate output directories. No sibling drafts or prior reviews were supplied.
+- Preserved all twenty writer artifacts unchanged. Copied final bodies exactly under docmgr frontmatter into design documents 05–09. Recorded hashes, draft/final word counts, line-change counts and model/completion evidence in `scripts/02-general-guidance-experiment/results-receipt.json`.
+- Verified both Claude runs exited 0, had empty stderr, reported `claude-opus-5-5`, had no permission denials, and wrote research → first draft → review notes → final in that order. Kept verbose CLI result arrays outside Git at `/tmp/ragwb009-round-two-cli-receipts/`; retained bounded evidence rather than full transcripts.
+- Read all five final guides through their implementation, test and open-decision endings. Compared the actual revisions with their review notes and research evidence. Wrote reference 06 with whole-document coverage, per-writer strengths/limitations, a six-dimension rubric, source corrections, and generic guidance recommendations.
+- Rechecked original requirements and source including `Engine.digests`, `decorateResult`, `rerankAsync`, `awaitPromise`, SSE writes/pump, served shell requests and store ownership/publication. No runtime changes or tests were needed for this documentation evaluation.
+- Added round-two navigation to the ticket. Completed only the writing-experiment task; nine implementation tasks remain open.
+
+### Why
+
+The user's success criterion is consistency across independent authors. That requires reporting weak outputs and errors even when the prose is polished. Preserving drafts and pre-revision notes lets reviewers see actual changes instead of relying on claims that a second pass occurred.
+
+### What worked
+
+- All five second passes resolved concrete problems. A/C clarified bindings and ownership; B repaired its fusion contradiction and publication/cancellation boundary; D discovered `awaitPromise` cancellation behavior; E repaired cold/warm identity and added a useful precedence table and namespace-pruning observation.
+- Every guide now connects current behavior to target architecture and gives a coherent implementation/testing path.
+- Frozen setup hashes matched, final bodies matched their writer files, and the installed skill remained unchanged. Source inspection confirmed the important review distinctions without needing a broad test run.
+
+### What didn't work
+
+- A receipt-inspection Python snippet assumed the Claude `--output-format json` file was one object. It failed with `AttributeError: 'list' object has no attribute 'get'`. The output is an array of records; the corrected reader selects the final record with `type == 'result'` and extracts only completion/model/tool-write metadata.
+- Several combined reading commands exceeded the tool's returned-output budget (`Warning: truncated output`). Final-guide material was read in smaller chunks; truncated output was not treated as evidence that an entire document had been inspected.
+- Self-review did not reliably reconcile every section after editing. E closes an adopted reader in the API contract and again in its caller, then wraps the redundant closed reader on duplicate success. D says partial outputs are never current and later proposes publishing them; E changes that original requirement outright. D's teardown conclusion conflates promise settlement with worker completion. These are preserved evaluation findings, not edits made to the submitted candidates.
+- Whole-ticket doctor remains unsuitable for this experiment's raw copied skills and writer fixtures, whose Markdown intentionally lacks docmgr frontmatter. Use focused validation of actual ticket documents; do not modify frozen fixtures merely to satisfy recursive discovery.
+
+### What I learned
+
+Research plus a diagnostic second pass improves relationships and transitions, but it can introduce new design choices and new inconsistencies. A useful generic reread must mentally execute examples, trace both error and success handoffs, reconcile decision tables with earlier promises, and verify the source claims on which the argument depends. More length is not a substitute for those checks.
+
+### What was tricky to build
+
+The experiment changes guidance, research requirements and writing procedure together. It also uses different model/tool environments. There is no control group, blind evaluator or actual intern. Conclusions are qualitative observations about these artifacts, not causal attribution or model rankings. Same-author rereading is explicitly distinguished from independent fresh-context review.
+
+The most important technical distinction was between deciding an operation outcome, delivering a promise result, ending a worker and releasing capacity. D accurately found the current early-return path, then overstated what its proposed promise join would guarantee. Reviewing source alone is therefore insufficient; proposed contracts must also agree with each other.
+
+### What warrants a second pair of eyes
+
+- Check the original partial-publication and freshness requirements against D/E's proposed alternatives.
+- Walk E's adoption code on duplicate success and registry-closed error; inspect D's settlement-versus-capacity claims.
+- Review the shared crash boundary between moving payloads to final paths and publishing their descriptors. The guides need an explicit safe recovery account rather than both promising orphan collection and forbidding inference from unknown files.
+- Review the qualitative scores against the specific cited passages, especially whether each explanation would suffice for a developer new to this project.
+
+### What should be done in the future
+
+After user review, revise generic second-pass instructions around term introduction, example execution, cross-section consistency, evidence and proportional concrete examples. A future consolidated guide can start from B and incorporate the identified strengths of A/C/D/E. Do not silently adopt their changed policies. No skill installation, original-guide replacement, upload, push or 009 implementation is part of this completed comparison.
+
+### Code review instructions
+
+Start with `reference/06-round-two-generic-guidance-five-writer-comparison.md`, then follow its candidate and review-note links. Read any disputed passage in the preserved writer final, then its original requirement and cited source symbol. Check `results-receipt.json` against all twenty writer files and the five published guide bodies. Review the ticket-scoped Git diff and focused docmgr validation; runtime tests were not run in this round.
+
+### Technical details
+
+Final word counts excluding frontmatter: A 5,646; B 6,277; C 5,401; D 8,953; E 9,178. All final documents grew from their first drafts. The evaluation uses six separate 0–3 judgments, no aggregate score. The full comparison includes all major subsystems and endings, not only introductions. Original guide and installed skill are unchanged; candidates retain known defects so the experiment remains inspectable.
+
+
+### User calibration before the final checkpoint
+
+**User prompt (verbatim):** "how far are we, and i'm really kind of interested on the clarity of the writing and understandability, than absolute perfectness"
+
+Reweighted the comparison's presentation accordingly: the primary conclusion now assesses teachability across all five, with an opening section on readable explanations, vocabulary, concrete relationships and continuity through later chapters. Kept technical findings as a separate implementation-readiness review rather than using minor inaccuracies to disqualify otherwise understandable writing. No writer artifact or score was retroactively edited to disguise findings.
+
+A patch attempting this reorganization failed because its last hunk expected a standalone sentence that was actually part of a longer paragraph (`apply_patch verification failed: Failed to find expected lines`). The patch made no changes; a bounded section replacement and exact substring replacement then applied the intended edit.
+
+### Final validation receipt
+
+Focused docmgr frontmatter validation passed for the five candidates, comparison, diary and index. All 20 frozen input hashes, 20 writer artifact hashes, five exact final-body copies and three installed-skill hashes matched. All relative links in the comparison and index resolved. `git diff --check` passed before staging. Only this ticket changed; runtime tests were not run.

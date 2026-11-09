@@ -41,6 +41,16 @@ The design is based on commit `0854c6a` and maps twelve PR review findings to sy
 - [Candidate A](design-doc/02-v2-intern-guide-candidate-a.md), [candidate B](design-doc/03-v2-intern-guide-candidate-b.md), [candidate C](design-doc/04-v2-intern-guide-candidate-c.md)
 - [Uninstalled candidate skill](scripts/01-intern-guide-experiment/candidate-skill/SKILL.md)
 
+## Round-two writing experiment
+
+- [Whole-document comparison and recommendation](reference/06-round-two-generic-guidance-five-writer-comparison.md)
+- [Generic two-pass candidate skill](scripts/02-general-guidance-experiment/candidate-skill/SKILL.md), [writing guidance](scripts/02-general-guidance-experiment/candidate-skill/references/writing-style.md)
+- [Codex A](design-doc/05-round-two-intern-guide-codex-a.md), [Codex B](design-doc/06-round-two-intern-guide-codex-b.md), [Codex C](design-doc/07-round-two-intern-guide-codex-c.md)
+- [Opus D](design-doc/08-round-two-intern-guide-opus-d.md), [Opus E](design-doc/09-round-two-intern-guide-opus-e.md)
+- [Preserved draft hashes and completion evidence](scripts/02-general-guidance-experiment/results-receipt.json)
+
+The experiment is complete. Candidates are preserved for comparison, including known defects; the original guide remains authoritative. Installed skills and runtime code are unchanged.
+
 ## Scope
 
 Unify dataset access and provenance, resource ownership and query snapshot lifetime, artifact inventory and collection, async operation cancellation, HTTP streaming, and graph transformations. Migrate JavaScript callbacks and result references directly. Delete superseded mechanisms instead of preserving parallel paths.
