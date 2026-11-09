@@ -563,3 +563,54 @@ The user then requested selection, delivery and baseline installation. I selecte
 - Models: three `gpt-6.1-sol` medium writers and two `claude-opus-5-5` medium writers; source baseline `c267f91`.
 - Installation changed two ticket-research reference files and two textbook skill entrypoints. Installed skill files live outside this repository; their exact hashes are recorded here.
 - Upload success proves cloud delivery, not physical tablet synchronization.
+
+## Step 12: Extract a standalone understandability revision skill
+
+The user preferred the Claude guides and requested a skill specifically for revising an existing design document. I created and installed `revise-document-for-understandability`, using the same generic writing guidance as the third-round experiment. It is available to Claude Code through the existing skills-directory symlink, and directly to Codex.
+
+### Prompt Context
+**User prompt (verbatim):** "is it clear from the skill what the second pass is about? I think we should make a second skill that is for claude to review a written design-doc for making it readable like we did, I prefer the claude versions much better. make a \"revise document for understandability\" skill (so it would be read design doc, then do all the stuff you asked them in the last round, and the same writing guidance)"
+**Assistant interpretation:** Extract the existing research-and-revision process into a discoverable skill for an existing document.
+**Inferred user intent:** Make the stronger newcomer-facing explanations repeatable in Claude without reconstructing the experiment prompt.
+**Previous commit:** `7553be9` preserved the round-three comparison and baseline promotion.
+
+### What I did
+- Read the installed skill-creator instructions, baseline writing guidance and Opus D assignment.
+- Wrote a standalone skill under scripts/04-understandability-skill, with a bundled exact copy of the generic writing reference.
+- Explicitly separated newcomer reading notes, source research, diagnosis before editing, substantive revision, and whole-document consistency rereading.
+- Installed under ~/.codex/skills and verified ~/.claude/skills resolves to the same installed files.
+- Recorded hashes and validation in installation-receipt.json.
+
+### Why
+- Reviewing an existing document is a distinct entry point from authoring a new one. The provided document serves as the initial draft.
+- Reading the document before source inspection reveals what its explanation actually supplies. Source reading then resolves uncertainties before rewriting.
+- A bundled writing reference makes the skill self-contained for Claude and transferable without requiring a ticket-management skill installation.
+
+### What worked
+- Skill validation passed for the tracked package and installed directory. Both installed files match the tracked package byte for byte.
+- Existing skill discovery requires no new Claude configuration or model-specific launcher.
+
+### What didn't work
+- No creation or installation failures. No additional model experiment was run; package validation does not prove writing quality.
+
+### What I learned
+- The second pass is explicit in the authoring reference, but a dedicated revision entry point makes its purpose and deliverable easier to invoke.
+
+### What was tricky to build
+- The workflow must preserve the design's requirements while allowing a substantial prose rewrite. It therefore separates factual corrections from architectural choices and forbids silently settling open decisions.
+- Source inspection can mask comprehension gaps. The first reading records inference and backtracking before that inspection.
+
+### What warrants a second pair of eyes
+- Try the new entry point on a different design document; the existing experiment validates its underlying guidance, not this exact skill package on another domain.
+
+### What should be done in the future
+- Use the installed skill for ordinary revision requests and adjust based on observed reader confusion rather than adding mandatory checklists.
+
+### Code review instructions
+- Read scripts/04-understandability-skill/revise-document-for-understandability/SKILL.md and its writing reference.
+- Review-only requests do not edit; revision requests produce a complete document. Neither mode automatically launches agents or publishes results.
+
+### Technical details
+- Skill name: `revise-document-for-understandability`.
+- No fixed word count, model dependency or mandatory four-artifact experiment directory.
+- The bundled writing-style reference matches the promoted ticket-research baseline at creation.

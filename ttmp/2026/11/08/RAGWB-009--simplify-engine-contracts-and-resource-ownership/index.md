@@ -68,3 +68,7 @@ Unify dataset access and provenance, resource ownership and query snapshot lifet
 ## Status
 
 Active: design delivery, with implementation tracked separately in the task list.
+
+## Standalone revision skill
+
+[Revise document for understandability](scripts/04-understandability-skill/revise-document-for-understandability/SKILL.md) is installed for Claude Code and Codex. It applies the tested guidance to existing documents, with newcomer reading notes before source research and a complete consistency reread after revision.

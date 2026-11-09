@@ -27,3 +27,7 @@ Completed five-writer generic two-pass experiment: preserved research/drafts/rev
 ## 2026-11-08
 
 Completed third five-writer comparison; selected and uploaded Codex B; promoted tested clarity and two-pass guidance to installed ticket-research and textbook skills.
+
+## 2026-11-08
+
+Created and installed revise-document-for-understandability for Claude Code and Codex, with standalone newcomer review and revision workflow and the tested generic writing guidance.
