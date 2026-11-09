@@ -1,3 +1,4 @@
+import { indexReferences } from '../graph/references.ts';
 import { RagError } from '../core/errors.ts';
 import { fnOf, lam } from '../core/lambda.js';
 import { arr, clip, getPath, isBake, isLambda, isObj, uniq } from '../core/util.js';
@@ -177,7 +178,7 @@ export function installBuiltins() {
         ? { fn: lam(a), ...(b || {}) }
         : { index: a, ...(b || {}) },
     id: (p) => (p.index ? String(p.index) : 'retrieve'),
-    uses: (p) => (p.index ? ['ix-' + p.index] : []),
+    references: indexReferences,
     describe: (p) => (p.fn ? 'custom λ' : `${p.index} · k ${p.k ?? 20}`),
     run: async (s, ctx, queries, p) => {
       if (p.fn)
@@ -217,6 +218,7 @@ export function installBuiltins() {
   });
 
   live('rewrite.llm', {
+    capabilities: ['model'],
     in: ['queries'],
     out: 'queries',
     args: optArgs,
@@ -336,6 +338,7 @@ export function installBuiltins() {
   });
 
   live('rerank.llm', {
+    capabilities: ['model'],
     in: ['hits'],
     out: 'hits',
     args: optArgs,
@@ -424,6 +427,7 @@ export function installBuiltins() {
   }
 
   live('filter.decide', {
+    capabilities: ['model'],
     in: ['hits'],
     out: 'hits',
     args: optArgs,
@@ -454,6 +458,7 @@ export function installBuiltins() {
   });
 
   live('rerank.decide', {
+    capabilities: ['model'],
     in: ['hits'],
     out: 'hits',
     args: optArgs,
@@ -522,7 +527,7 @@ export function installBuiltins() {
     args: optArgs,
     id: () => 'links',
     reads: () => ['q'],
-    uses: (p) => (p.index ? ['ix-' + p.index] : []),
+    references: indexReferences,
     describe: (p) => `[[links]] · decay ${p.decay ?? 0.5}`,
     run: (s, ctx, hits, p) => {
       const ix = ctx.index(p.index) || ctx.firstIndex('bm25');
@@ -594,6 +599,7 @@ export function installBuiltins() {
   });
 
   live('answer', {
+    capabilities: ['model'],
     in: ['context'],
     out: 'answer',
     args: optArgs,
@@ -631,6 +637,7 @@ export function installBuiltins() {
   // RAGWB-007 §3.3: ask a question set about the query; the answers are this
   // node's 'decision' output, read by when-conditions and ctx.decision(id).
   live('classify', {
+    capabilities: ['model'],
     in: [],
     out: 'decision',
     args: optArgs,
@@ -656,13 +663,14 @@ export function installBuiltins() {
   });
 
   live('agentic', {
+    capabilities: ['model'],
     in: ['queries'],
     out: 'answer',
     args: optArgs,
     skip: 'null',
     trigger: 'submit',
     reads: () => ['q'],
-    uses: (p) => arr(p.indexes).map((i) => 'ix-' + i),
+    references: indexReferences,
     describe: (p) => `tools · ≤${p.maxReads ?? 8} reads · ${p.tier || 'default'}`,
     run: async (s, ctx, queries, p) => {
       const names = arr(p.indexes).length

@@ -27,6 +27,87 @@ var __ragModule = (() => {
     rag: () => rag
   });
 
+  // pkg/ragjs/src/graph/references.ts
+  function references(node, def = {}) {
+    const refs = node.in.map((target, i) => ({
+      kind: "data",
+      target,
+      set: /* @__PURE__ */ __name((value) => {
+        node.in[i] = value;
+      }, "set")
+    }));
+    refs.push(...def.references?.(node.p) || []);
+    for (const target of def.uses?.(node.p) || []) {
+      if (!refs.some((r) => r.kind === "artifact" && r.target === target))
+        refs.push({ kind: "artifact", target });
+    }
+    for (const target of def.reads?.(node.p) || []) refs.push({ kind: "signal", target });
+    const when = node.when;
+    if (when?.decision) {
+      const split = when.decision.indexOf(".");
+      const output = when.decision.slice(split);
+      refs.push({
+        kind: "decision",
+        target: when.decision.slice(0, split),
+        set: /* @__PURE__ */ __name((target) => {
+          when.decision = target + output;
+        }, "set")
+      });
+    }
+    for (const [name, target] of Object.entries(when?.bindings || {})) {
+      refs.push({
+        kind: "decision",
+        target,
+        set: /* @__PURE__ */ __name((value) => {
+          if (when?.bindings) when.bindings[name] = value;
+        }, "set")
+      });
+    }
+    return refs;
+  }
+  __name(references, "references");
+  function rewriteReferences(refs, from, to) {
+    const affected = refs.filter((r) => r.target === from);
+    if (affected.some((r) => !r.set))
+      throw new Error(`reference to '${from}' has no declared rewrite binding`);
+    for (const ref of affected) ref.set?.(to);
+  }
+  __name(rewriteReferences, "rewriteReferences");
+  function outputReferences(outputs) {
+    return Object.entries(outputs).map(([name, target]) => ({
+      kind: "output",
+      target,
+      set: /* @__PURE__ */ __name((value) => {
+        outputs[name] = value;
+      }, "set")
+    }));
+  }
+  __name(outputReferences, "outputReferences");
+  function indexReferences(params) {
+    if (typeof params.index === "string")
+      return [
+        {
+          kind: "artifact",
+          target: "ix-" + params.index,
+          set: /* @__PURE__ */ __name((target) => {
+            if (!target.startsWith("ix-")) throw new Error("index node IDs must start with ix-");
+            params.index = target.slice(3);
+          }, "set")
+        }
+      ];
+    if (Array.isArray(params.indexes))
+      return params.indexes.map((name, i) => ({
+        kind: "artifact",
+        target: "ix-" + String(name),
+        set: /* @__PURE__ */ __name((target) => {
+          if (!target.startsWith("ix-")) throw new Error("index node IDs must start with ix-");
+          params.indexes[i] = target.slice(3);
+        }, "set")
+      }));
+    return [];
+  }
+  __name(indexReferences, "indexReferences");
+
   // pkg/ragjs/src/core/errors.ts
   var _RagError = class _RagError extends Error {
     constructor(code, message, detail) {
@@ -746,7 +827,16 @@ var __ragModule = (() => {
   var Fragment = _Fragment;
   var WHEN_KEYS = ["decision", "in", "not", "min", "max"];
   function normWhen(w, id) {
-    if (typeof w === "function" || isLambda(w) || typeof w === "string") return lam(w);
+    if (typeof w === "function" || typeof w === "string")
+      throw new RagError(
+        "compile",
+        `${id}: callback conditions require {$fn, bindings: {name: decisionNode}}`
+      );
+    if (isLambda(w)) {
+      if (!isObj(w.bindings))
+        throw new RagError("compile", `${id}: callback conditions require named decision bindings`);
+      return { ...w, bindings: { ...w.bindings } };
+    }
     if (!isObj(w) || typeof w.decision !== "string" || !/^[A-Za-z][\w-]*\.[\w.-]+$/.test(w.decision))
       throw new RagError(
         "compile",
@@ -766,15 +856,6 @@ var __ragModule = (() => {
     return out;
   }
   __name(normWhen, "normWhen");
-  function whenRefs(w) {
-    if (!w) return [];
-    if (isLambda(w))
-      return uniq(
-        [...w.$fn.matchAll(/\.decision\(\s*['"`]([A-Za-z][\w-]*)['"`]\s*\)/g)].map((m) => m[1])
-      );
-    return [w.decision.split(".")[0]];
-  }
-  __name(whenRefs, "whenRefs");
   function whenHolds(w, decision) {
     const [nodeId, ...rest] = w.decision.split(".");
     const qid = rest.join(".");
@@ -814,7 +895,12 @@ var __ragModule = (() => {
   var ID_RE = /^[A-Za-z][\w-]*$/;
   function finalize(raw) {
     const problems = [];
-    const nodes = raw.nodes.map((n) => ({ ...n, in: [...n.in || []], p: n.p || {} }));
+    const nodes = raw.nodes.map((n) => ({
+      ...n,
+      in: [...n.in || []],
+      p: n.p || {},
+      ...n.when ? { when: normWhen(n.when, n.id) } : {}
+    }));
     const signals = { ...raw.signals || {} };
     for (const k of Object.keys(signals))
       if (!nodes.find((n) => n.id === k))
@@ -861,7 +947,8 @@ var __ragModule = (() => {
           problems.push(`${n.id}: a build node cannot read live node '${src}'`);
         edges.push([src, n.id, from.t === "signal" ? "signal" : "data"]);
       });
-      n.uses = uniq([...def.uses ? def.uses(n.p) : []]);
+      const refs = references(n, def);
+      n.uses = uniq(refs.filter((r) => r.kind === "artifact").map((r) => r.target));
       if (n.t === "retrieve" && byId.has("synonyms")) n.uses.push("synonyms");
       for (const u of n.uses) {
         if (!byId.has(u))
@@ -876,7 +963,7 @@ var __ragModule = (() => {
           const err = checkLambda(n.when, `${n.id}.when`);
           if (err) problems.push(err);
         }
-        for (const r of whenRefs(n.when)) {
+        for (const r of refs.filter((r2) => r2.kind === "decision").map((r2) => r2.target)) {
           const from = byId.get(r);
           if (!from) problems.push(`${n.id}: when reads decision '${r}', which does not exist`);
           else if (from.t === "signal" || portsOf(from).out !== "decision")
@@ -945,7 +1032,7 @@ var __ragModule = (() => {
       );
     const ir = {
       kind: "rag",
-      version: 1,
+      version: 2,
       id: raw.id,
       corpus: raw.corpus || null,
       signals,
@@ -1059,7 +1146,11 @@ var __ragModule = (() => {
   }
   __name(rawOf, "rawOf");
   function compile(target) {
-    if (target && target.kind === "rag") return withMethods(clone(target));
+    if (target && target.kind === "rag") {
+      if (target.version !== 2)
+        throw new RagError("compile", "unsupported IR version; rebuild the plan");
+      return finalize(clone(target));
+    }
     if (target && target.ir && target.ir.kind === "rag") return target.ir;
     const t0 = now();
     const raw = rawOf(target);
@@ -1124,7 +1215,7 @@ var __ragModule = (() => {
   function applyOp(raw, op) {
     raw = {
       ...raw,
-      nodes: raw.nodes.map((n) => ({ ...n, in: [...n.in], p: clone(n.p) })),
+      nodes: clone(raw.nodes),
       signals: { ...raw.signals },
       outputs: { ...raw.outputs },
       pinned: [...raw.pinned]
@@ -1212,7 +1303,9 @@ var __ragModule = (() => {
       }
       case "remove": {
         const n = nodeOf(raw, op.node);
-        const users = raw.nodes.filter((x) => (REG.get(x.t)?.uses?.(x.p) || []).includes(n.id));
+        const users = raw.nodes.filter(
+          (x) => references(x, REG.get(x.t)).some((r) => r.target === n.id && r.kind !== "data")
+        );
         if (users.length)
           throw new Error(
             `'${n.id}' is used by ${users.map((u) => u.id).join(", ")}; remove those first`
@@ -1249,8 +1342,10 @@ var __ragModule = (() => {
       case "rename": {
         const n = nodeOf(raw, op.node);
         if (!ID_RE.test(op.to)) throw new Error("invalid id " + op.to);
-        for (const x of raw.nodes) x.in = x.in.map((y) => y === n.id ? op.to : y);
-        for (const [k, v] of Object.entries(raw.outputs)) if (v === n.id) raw.outputs[k] = op.to;
+        if (raw.nodes.some((x) => x.id === op.to) || Object.prototype.hasOwnProperty.call(raw.signals, op.to))
+          throw new Error(`node '${op.to}' already exists`);
+        for (const x of raw.nodes) rewriteReferences(references(x, REG.get(x.t)), n.id, op.to);
+        rewriteReferences(outputReferences(raw.outputs), n.id, op.to);
         n.id = op.to;
         return raw;
       }
@@ -1261,6 +1356,37 @@ var __ragModule = (() => {
     }
   }
   __name(applyOp, "applyOp");
+  function projectLexical(ir) {
+    const raw = clone(ir);
+    const removed = new Set(
+      raw.nodes.filter(
+        (n) => (REG.get(n.t)?.capabilities || []).includes("model") || n.out === "answer" || n.out === "context"
+      ).map((n) => n.id)
+    );
+    const byId = new Map(raw.nodes.map((n) => [n.id, n]));
+    const bypass = /* @__PURE__ */ __name((id, seen = /* @__PURE__ */ new Set()) => {
+      if (!removed.has(id)) return [id];
+      if (seen.has(id)) throw new RagError("export", "cyclic projection");
+      const n = byId.get(id);
+      const next = /* @__PURE__ */ new Set([...seen, id]);
+      return n.in.flatMap((input) => bypass(input, next));
+    }, "bypass");
+    raw.nodes = raw.nodes.filter((n) => !removed.has(n.id));
+    for (const n of raw.nodes) {
+      n.in = uniq(n.in.flatMap((id) => bypass(id)));
+      if (references(n, REG.get(n.t)).some((r) => r.kind === "decision" && removed.has(r.target)))
+        delete n.when;
+      const dangling = references(n, REG.get(n.t)).find((r) => removed.has(r.target));
+      if (dangling)
+        throw new RagError("export", `${n.id}: unsupported dependency ${dangling.target}`);
+    }
+    raw.outputs = Object.fromEntries(
+      Object.entries(raw.outputs).filter(([, id]) => !removed.has(id))
+    );
+    raw.pinned = raw.pinned.filter((name) => raw.outputs[name]);
+    return finalize(raw);
+  }
+  __name(projectLexical, "projectLexical");
 
   // pkg/ragjs/src/components/markdown.js
   function parseScalar(v) {
@@ -1860,7 +1986,7 @@ var __ragModule = (() => {
       lambdas: ["fn"],
       args: /* @__PURE__ */ __name((a, b) => typeof a === "function" || isLambda(a) ? { fn: lam(a), ...b || {} } : { index: a, ...b || {} }, "args"),
       id: /* @__PURE__ */ __name((p) => p.index ? String(p.index) : "retrieve", "id"),
-      uses: /* @__PURE__ */ __name((p) => p.index ? ["ix-" + p.index] : [], "uses"),
+      references: indexReferences,
       describe: /* @__PURE__ */ __name((p) => p.fn ? "custom λ" : `${p.index} · k ${p.k ?? 20}`, "describe"),
       run: /* @__PURE__ */ __name(async (s, ctx, queries, p) => {
         if (p.fn)
@@ -1892,6 +2018,7 @@ var __ragModule = (() => {
       ), "run")
     });
     live("rewrite.llm", {
+      capabilities: ["model"],
       in: ["queries"],
       out: "queries",
       args: optArgs,
@@ -1998,6 +2125,7 @@ Question: ${s.q}`,
       ).map((h) => ({ id: h.id, score: h.score, via: h.via, reason: h.reason })), "run")
     });
     live("rerank.llm", {
+      capabilities: ["model"],
       in: ["hits"],
       out: "hits",
       args: optArgs,
@@ -2084,6 +2212,7 @@ ${clip((c.text || "").replace(/\s+/g, " "), p.clip ?? 1500)}`,
     }
     __name(gradeHits, "gradeHits");
     live("filter.decide", {
+      capabilities: ["model"],
       in: ["hits"],
       out: "hits",
       args: optArgs,
@@ -2109,6 +2238,7 @@ ${clip((c.text || "").replace(/\s+/g, " "), p.clip ?? 1500)}`,
       }, "run")
     });
     live("rerank.decide", {
+      capabilities: ["model"],
       in: ["hits"],
       out: "hits",
       args: optArgs,
@@ -2165,7 +2295,7 @@ ${clip((c.text || "").replace(/\s+/g, " "), p.clip ?? 1500)}`,
       args: optArgs,
       id: /* @__PURE__ */ __name(() => "links", "id"),
       reads: /* @__PURE__ */ __name(() => ["q"], "reads"),
-      uses: /* @__PURE__ */ __name((p) => p.index ? ["ix-" + p.index] : [], "uses"),
+      references: indexReferences,
       describe: /* @__PURE__ */ __name((p) => `[[links]] · decay ${p.decay ?? 0.5}`, "describe"),
       run: /* @__PURE__ */ __name((s, ctx, hits, p) => {
         const ix = ctx.index(p.index) || ctx.firstIndex("bm25");
@@ -2228,6 +2358,7 @@ ${ctx.chunk(e.id).text}`
       }, "run")
     });
     live("answer", {
+      capabilities: ["model"],
       in: ["context"],
       out: "answer",
       args: optArgs,
@@ -2264,6 +2395,7 @@ Question: ${s.q}`;
       }, "run")
     });
     live("classify", {
+      capabilities: ["model"],
       in: [],
       out: "decision",
       args: optArgs,
@@ -2288,13 +2420,14 @@ Question: ${s.q}`;
       }, "run")
     });
     live("agentic", {
+      capabilities: ["model"],
       in: ["queries"],
       out: "answer",
       args: optArgs,
       skip: "null",
       trigger: "submit",
       reads: /* @__PURE__ */ __name(() => ["q"], "reads"),
-      uses: /* @__PURE__ */ __name((p) => arr(p.indexes).map((i) => "ix-" + i), "uses"),
+      references: indexReferences,
       describe: /* @__PURE__ */ __name((p) => `tools · ≤${p.maxReads ?? 8} reads · ${p.tier || "default"}`, "describe"),
       run: /* @__PURE__ */ __name(async (s, ctx, queries, p) => {
         const names = arr(p.indexes).length ? arr(p.indexes) : ctx.indexNames().filter((n) => (ctx.index(n) || {}).kind === "bm25");
@@ -2659,7 +2792,12 @@ Question: ${s.q}`;
           let w;
           try {
             w = isLambda(n.when) ? {
-              on: !!await fnOf(n.when, `${n.id}.when`)(s, { decision, signals: s }),
+              on: !!await fnOf(n.when, `${n.id}.when`)(s, {
+                decisions: Object.fromEntries(
+                  Object.entries(n.when.bindings).map(([name, id]) => [name, decision(id)])
+                ),
+                signals: s
+              }),
               why: "when λ"
             } : whenHolds(n.when, decision);
           } catch (e) {
@@ -4195,14 +4333,7 @@ ${clip(c.text, 1500)}`
   // pkg/ragjs/src/export/html.js
   async function exportHtml(target, opts = {}) {
     const { ir, engine } = resolveTarget(target);
-    const lexical = applyOps(
-      ir,
-      ir.nodes.filter((n) => n.phase === "live" && triggerOf(n) === "submit" && n.out !== "answer").map((n) => ({ op: "remove", node: n.id }))
-    );
-    const pruned = applyOps(
-      lexical,
-      lexical.nodes.filter((n) => n.out === "answer" || n.out === "context").reverse().map((n) => ({ op: "remove", node: n.id }))
-    );
+    const pruned = projectLexical(ir);
     const src = engine.env.librarySource ? await engine.env.librarySource() : "";
     const files = engine.files().map((f) => ({ name: f.name, text: f.text }));
     const title = opts.title || ir.id;

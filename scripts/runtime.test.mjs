@@ -168,3 +168,48 @@ test('runtime source modules have explicit local imports and no dependency cycle
   }
   for (const file of graph.keys()) visit(file);
 });
+
+test('graph rename rewrites declared decision and index references atomically', () => {
+  const context = runtime();
+  const result = vm.runInContext(
+    `(() => {
+    ${fixture}
+    const routed = plan.classify({id:'route',questions:{needs:{type:'noul',question:'Search?'}}})
+      .retrieve('text',{id:'gated',when:{decision:'route.needs',min:0.5}});
+    const original=rag.compile(routed);
+    const renamed=rag.applyOps(original,[{op:'rename',node:'route',to:'routing'},{op:'rename',node:'ix-text',to:'ix-lexical'}]);
+    let collision='';try {rag.applyOps(original,[{op:'rename',node:'route',to:'gated'}]);}catch(e){collision=e.message;}
+    return JSON.stringify({condition:renamed.node('gated').when.decision,index:renamed.node('gated').p.index,original:original.node('gated').when.decision,collision});
+  })()`,
+    context,
+  );
+  const got = JSON.parse(result);
+  assert.equal(got.condition, 'routing.needs');
+  assert.equal(got.index, 'lexical');
+  assert.equal(got.original, 'route.needs');
+  assert.match(got.collision, /already exists/);
+});
+
+test('lexical export removes model gates in one transaction and retains local submit work', async () => {
+  const context = runtime({ library: source });
+  const html = await vm.runInContext(
+    `(async()=>{
+    ${fixture}
+    rag.configure({librarySource:()=>library});
+    const adaptive=rag.plan('adaptive').over(corpus).signals({q:'snapshot'})
+      .classify({id:'route',questions:{needs:{type:'noul',question:'Search?'}}})
+      .retrieve('text',{when:{decision:'route.needs',min:0.5}})
+      .limit({k:3,trigger:'submit'});
+    return rag.export(adaptive);
+  })()`,
+    context,
+  );
+  const elements = { q: { value: '', addEventListener() {} }, out: { innerHTML: '' } };
+  const browser = vm.createContext({ document: { getElementById: (id) => elements[id] } });
+  for (const [, script] of html.matchAll(/<script>([\s\S]*?)<\/script>/g))
+    vm.runInContext(script, browser);
+  for (let i = 0; i < 20 && !elements.out.innerHTML; i++) await setImmediate();
+  assert.match(elements.out.innerHTML, /ownership/);
+  assert.equal(vm.runInContext("ir.nodes.some(n=>n.t==='classify')", browser), false);
+  assert.equal(vm.runInContext("ir.nodes.some(n=>n.t==='limit')", browser), true);
+});

@@ -9,6 +9,7 @@ package gepp
 import (
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 
 	"github.com/go-go-golems/geppetto/pkg/steps/ai/providers/pi"
@@ -128,6 +129,16 @@ func (b *Backend) preferred(eligible map[string]pi.Model) (pi.Model, bool) {
 		ref := s.DefaultProvider + "/" + s.DefaultModel
 		if m, ok := eligible[ref]; ok && enabled(ref) {
 			return m, true
+		}
+	}
+	if len(s.EnabledModels) == 0 {
+		refs := make([]string, 0, len(eligible))
+		for ref := range eligible {
+			refs = append(refs, ref)
+		}
+		sort.Strings(refs)
+		if len(refs) > 0 {
+			return eligible[refs[0]], true
 		}
 	}
 	for _, ref := range s.EnabledModels {

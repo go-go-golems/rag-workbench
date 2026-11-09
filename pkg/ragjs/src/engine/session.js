@@ -110,7 +110,12 @@ class Session {
         try {
           w = isLambda(n.when)
             ? {
-                on: !!(await fnOf(n.when, `${n.id}.when`)(s, { decision, signals: s })),
+                on: !!(await fnOf(n.when, `${n.id}.when`)(s, {
+                  decisions: Object.fromEntries(
+                    Object.entries(n.when.bindings).map(([name, id]) => [name, decision(id)]),
+                  ),
+                  signals: s,
+                })),
                 why: 'when λ',
               }
             : whenHolds(n.when, decision);

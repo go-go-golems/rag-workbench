@@ -1,3 +1,4 @@
+import { references, rewriteReferences, outputReferences } from './references.ts';
 import { accepts, optArgs, portsOf, REG } from '../components/registry.js';
 import { RagError } from '../core/errors.ts';
 import { slug } from '../core/identity.ts';
@@ -332,7 +333,16 @@ class Fragment {
 const WHEN_KEYS = ['decision', 'in', 'not', 'min', 'max'];
 
 function normWhen(w, id) {
-  if (typeof w === 'function' || isLambda(w) || typeof w === 'string') return lam(w);
+  if (typeof w === 'function' || typeof w === 'string')
+    throw new RagError(
+      'compile',
+      `${id}: callback conditions require {$fn, bindings: {name: decisionNode}}`,
+    );
+  if (isLambda(w)) {
+    if (!isObj(w.bindings))
+      throw new RagError('compile', `${id}: callback conditions require named decision bindings`);
+    return { ...w, bindings: { ...w.bindings } };
+  }
   if (!isObj(w) || typeof w.decision !== 'string' || !/^[A-Za-z][\w-]*\.[\w.-]+$/.test(w.decision))
     throw new RagError(
       'compile',
@@ -350,16 +360,6 @@ function normWhen(w, id) {
   if (w.min != null) out.min = Number(w.min);
   if (w.max != null) out.max = Number(w.max);
   return out;
-}
-
-// the decision nodes a when-condition reads
-function whenRefs(w) {
-  if (!w) return [];
-  if (isLambda(w))
-    return uniq(
-      [...w.$fn.matchAll(/\.decision\(\s*['"`]([A-Za-z][\w-]*)['"`]\s*\)/g)].map((m) => m[1]),
-    );
-  return [w.decision.split('.')[0]];
 }
 
 // does a declarative condition hold for these answers? Fails open (runs) when the decision is missing.
@@ -404,7 +404,12 @@ const ID_RE = /^[A-Za-z][\w-]*$/;
 
 function finalize(raw) {
   const problems = [];
-  const nodes = raw.nodes.map((n) => ({ ...n, in: [...(n.in || [])], p: n.p || {} }));
+  const nodes = raw.nodes.map((n) => ({
+    ...n,
+    in: [...(n.in || [])],
+    p: n.p || {},
+    ...(n.when ? { when: normWhen(n.when, n.id) } : {}),
+  }));
   const signals = { ...(raw.signals || {}) };
   for (const k of Object.keys(signals))
     if (!nodes.find((n) => n.id === k))
@@ -451,7 +456,8 @@ function finalize(raw) {
         problems.push(`${n.id}: a build node cannot read live node '${src}'`);
       edges.push([src, n.id, from.t === 'signal' ? 'signal' : 'data']);
     });
-    n.uses = uniq([...(def.uses ? def.uses(n.p) : [])]);
+    const refs = references(n, def);
+    n.uses = uniq(refs.filter((r) => r.kind === 'artifact').map((r) => r.target));
     if (n.t === 'retrieve' && byId.has('synonyms')) n.uses.push('synonyms');
     for (const u of n.uses) {
       if (!byId.has(u))
@@ -475,7 +481,7 @@ function finalize(raw) {
         const err = checkLambda(n.when, `${n.id}.when`);
         if (err) problems.push(err);
       }
-      for (const r of whenRefs(n.when)) {
+      for (const r of refs.filter((r) => r.kind === 'decision').map((r) => r.target)) {
         const from = byId.get(r);
         if (!from) problems.push(`${n.id}: when reads decision '${r}', which does not exist`);
         else if (from.t === 'signal' || portsOf(from).out !== 'decision')
@@ -556,7 +562,7 @@ function finalize(raw) {
     );
   const ir = {
     kind: 'rag',
-    version: 1,
+    version: 2,
     id: raw.id,
     corpus: raw.corpus || null,
     signals,
@@ -680,7 +686,11 @@ function rawOf(target) {
 }
 
 function compile(target) {
-  if (target && target.kind === 'rag') return withMethods(clone(target));
+  if (target && target.kind === 'rag') {
+    if (target.version !== 2)
+      throw new RagError('compile', 'unsupported IR version; rebuild the plan');
+    return finalize(clone(target));
+  }
   if (target && target.ir && target.ir.kind === 'rag') return target.ir;
   const t0 = now();
   const raw = rawOf(target);
@@ -747,7 +757,7 @@ function specOf(nodeSpec) {
 function applyOp(raw, op) {
   raw = {
     ...raw,
-    nodes: raw.nodes.map((n) => ({ ...n, in: [...n.in], p: clone(n.p) })),
+    nodes: clone(raw.nodes),
     signals: { ...raw.signals },
     outputs: { ...raw.outputs },
     pinned: [...raw.pinned],
@@ -838,7 +848,9 @@ function applyOp(raw, op) {
     }
     case 'remove': {
       const n = nodeOf(raw, op.node);
-      const users = raw.nodes.filter((x) => (REG.get(x.t)?.uses?.(x.p) || []).includes(n.id));
+      const users = raw.nodes.filter((x) =>
+        references(x, REG.get(x.t)).some((r) => r.target === n.id && r.kind !== 'data'),
+      );
       if (users.length)
         throw new Error(
           `'${n.id}' is used by ${users.map((u) => u.id).join(', ')}; remove those first`,
@@ -877,8 +889,13 @@ function applyOp(raw, op) {
     case 'rename': {
       const n = nodeOf(raw, op.node);
       if (!ID_RE.test(op.to)) throw new Error('invalid id ' + op.to);
-      for (const x of raw.nodes) x.in = x.in.map((y) => (y === n.id ? op.to : y));
-      for (const [k, v] of Object.entries(raw.outputs)) if (v === n.id) raw.outputs[k] = op.to;
+      if (
+        raw.nodes.some((x) => x.id === op.to) ||
+        Object.prototype.hasOwnProperty.call(raw.signals, op.to)
+      )
+        throw new Error(`node '${op.to}' already exists`);
+      for (const x of raw.nodes) rewriteReferences(references(x, REG.get(x.t)), n.id, op.to);
+      rewriteReferences(outputReferences(raw.outputs), n.id, op.to);
       n.id = op.to;
       return raw;
     }
@@ -889,7 +906,46 @@ function applyOp(raw, op) {
   }
 }
 
+// Lexical browser projection is one transaction: remove external-model work,
+// bypass compatible stages, and remove gates before validating the result.
+function projectLexical(ir) {
+  const raw = clone(ir);
+  const removed = new Set(
+    raw.nodes
+      .filter(
+        (n) =>
+          (REG.get(n.t)?.capabilities || []).includes('model') ||
+          n.out === 'answer' ||
+          n.out === 'context',
+      )
+      .map((n) => n.id),
+  );
+  const byId = new Map(raw.nodes.map((n) => [n.id, n]));
+  const bypass = (id, seen = new Set()) => {
+    if (!removed.has(id)) return [id];
+    if (seen.has(id)) throw new RagError('export', 'cyclic projection');
+    const n = byId.get(id);
+    const next = new Set([...seen, id]);
+    return n.in.flatMap((input) => bypass(input, next));
+  };
+  raw.nodes = raw.nodes.filter((n) => !removed.has(n.id));
+  for (const n of raw.nodes) {
+    n.in = uniq(n.in.flatMap((id) => bypass(id)));
+    if (references(n, REG.get(n.t)).some((r) => r.kind === 'decision' && removed.has(r.target)))
+      delete n.when;
+    const dangling = references(n, REG.get(n.t)).find((r) => removed.has(r.target));
+    if (dangling)
+      throw new RagError('export', `${n.id}: unsupported dependency ${dangling.target}`);
+  }
+  raw.outputs = Object.fromEntries(
+    Object.entries(raw.outputs).filter(([, id]) => !removed.has(id)),
+  );
+  raw.pinned = raw.pinned.filter((name) => raw.outputs[name]);
+  return finalize(raw);
+}
+
 export {
+  projectLexical,
   applyOps,
   CorpusSpec,
   compile,

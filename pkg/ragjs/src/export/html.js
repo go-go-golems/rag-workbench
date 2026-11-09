@@ -1,21 +1,9 @@
 import { resolveTarget } from '../api/target.js';
-import { applyOps, triggerOf } from '../graph/graph.js';
+import { projectLexical } from '../graph/graph.js';
 
 async function exportHtml(target, opts = {}) {
   const { ir, engine } = resolveTarget(target);
-  const lexical = applyOps(
-    ir,
-    ir.nodes
-      .filter((n) => n.phase === 'live' && triggerOf(n) === 'submit' && n.out !== 'answer')
-      .map((n) => ({ op: 'remove', node: n.id })),
-  );
-  const pruned = applyOps(
-    lexical,
-    lexical.nodes
-      .filter((n) => n.out === 'answer' || n.out === 'context')
-      .reverse()
-      .map((n) => ({ op: 'remove', node: n.id })),
-  );
+  const pruned = projectLexical(ir);
   const src = engine.env.librarySource ? await engine.env.librarySource() : '';
   const files = engine.files().map((f) => ({ name: f.name, text: f.text }));
   const title = opts.title || ir.id;

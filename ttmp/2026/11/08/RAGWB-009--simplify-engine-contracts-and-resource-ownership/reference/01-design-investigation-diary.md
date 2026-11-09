@@ -614,3 +614,54 @@ The user preferred the Claude guides and requested a skill specifically for revi
 - Skill name: `revise-document-for-understandability`.
 - No fixed word count, model dependency or mandatory four-artifact experiment directory.
 - The bundled writing-style reference matches the promoted ticket-research baseline at creation.
+
+## Step 13: Begin the direct architecture cutover
+
+Implementation now replaces the ambiguous contracts identified by RAGWB-009. The first milestone centralizes structural references and makes lexical projection a single transformation before validation. Runtime generation and type checking are lightweight integration checks; broad validation will run after the architecture is assembled, as requested.
+
+### Prompt Context
+**User prompt (verbatim):** "Ok, let's implement it. Build it all, don't test everything at each step, it's easier to do it once everything is pulled together and cleaned up. No backwards compatibility, goal is elegance, simplicity, composability, robustness, clear architecture.
+
+commit at appropriate intervals and keep a detailed diary as you work (using the diary format from the skill)"
+**Assistant interpretation:** Implement RAGWB-009, replacing obsolete mechanisms and migrating consumers directly.
+**Inferred user intent:** Complete the architectural simplification rather than another document-only iteration.
+
+### What I did
+- Read the selected guide and inspected graph compilation/editing/export, engine build ownership, session packaging and provider fallback.
+- Added a strict TypeScript reference visitor shared by compiler artifact/decision dependencies and rename operations. Index parameters declare setters; undeclared opaque dependencies cannot be silently rewritten.
+- Replaced inferred callback condition dependencies with explicit named bindings; migrated the existing callback-condition fixture.
+- Added model capabilities and a single lexical projection transaction, removing model gates before validation and retaining local submit-triggered computation.
+- Bumped IR version to 2 and reject old serialized IR instead of adding an adapter.
+- Added rename/export regressions for final integration, and deterministic sorted eligible Pi fallback when no enabled-model restriction exists.
+
+### Why
+- Rename, compile and export must operate on the same dependencies; separate knowledge of references caused valid transforms to fail.
+- Trigger timing does not indicate whether an operation requires an external model.
+
+### What worked
+- Type checking passed and the runtime bundle regenerated after the initial reference changes.
+
+### What didn't work
+- No repository-local AGENTS.md exists at the checkout root; the user's supplied instructions remain applicable.
+- Initial combined guide output was truncated; subsequent reads covered the missing ownership/publication sections.
+- Broad tests are deliberately deferred; this checkpoint is not a claim that the cutover is complete.
+
+### What I learned
+- Component artifact dependencies already had a declarative reader hook, but no rewrite hook. A reference with an optional setter distinguishes validation from supported edits without source rewriting.
+
+### What was tricky to build
+- Graph projection must repair removed decision gates before invoking final validation. Performing separate validated removals creates an invalid intermediate state.
+- Cloning condition bindings is necessary for failed edits to leave the original graph intact.
+
+### What warrants a second pair of eyes
+- Custom components with opaque dependencies are rejected on affected rename, rather than guessed. All external-model component registrations must declare capabilities.
+
+### What should be done in the future
+- Continue dataset/provenance and snapshot/resource cutover, then store ownership, operation lifecycle and shared HTTP execution. Run integrated validation after caller migration.
+
+### Code review instructions
+- Start with graph/references.ts, graph.js and export/html.js; inspect the new runtime tests and route fixture migration.
+
+### Technical details
+- Existing source baseline is unchanged before this implementation turn; previous documentation commit is 806d862.
+- Checks so far: pnpm typecheck and pnpm build; broad Go/browser/race checks remain pending.
