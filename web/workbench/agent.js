@@ -122,7 +122,7 @@ rag.plan(id).over(corpus).signals({ q: '', k: 8, filters: {} })
 Any param may be a live lambda \`s => value\`. Options on every step: \`{ id, trigger: 'change' | 'submit' }\`.
 Triggers: typing runs only \`change\` nodes; Enter runs everything. Skipped transforms pass their input through.
 Graph form: \`rag.graph(id, g => { g.over(c); const q = g.signal('q', ''); const a = g.node('a', rag.retrieve('text'), { from: q }); g.output('hits', a); })\`.
-Variants: \`plan.variant('lex', [{ op: 'remove', node: 'rerank' }])\`. Fragments: \`rag.fragment(id, (spec, p) => spec…)\`, \`plan.use(fragment, p)\`.
+Variants: \`plan.variant('lex', [{ op: 'remove', bypass: true, node: 'rerank' }])\`. Fragments: \`rag.fragment(id, (spec, p) => spec…)\`, \`plan.use(fragment, p)\`.
 Custom components: \`rag.define('boost.recent', { phase: 'live', in: 'hits', out: 'hits', params: {…}, run: (s, ctx, hits, p) => hits })\` then \`plan.boost.recent({…})\`.
 
 ## Compile, build, run
@@ -136,7 +136,7 @@ Custom components: \`rag.define('boost.recent', { phase: 'live', in: 'hits', out
 await ws.apply([
   { op: 'set', node: 'ix-text', path: 'fields.title', value: 4 },
   { op: 'insert', after: 'fuse', id: 'links', node: { t: 'expand.links', p: { decay: 0.5 } } },
-  { op: 'remove', node: 'rerank' },
+  { op: 'remove', bypass: true, node: 'rerank' },
   { op: 'replace', node: 'filter', with: { t: 'filter', p: { fn: '(s, ctx, hit) => hit.tokens > 40' } } },
   { op: 'wire', node: 'fuse', in: ['text', 'meta'] },
   { op: 'signal', key: 'k', value: 6 },

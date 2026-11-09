@@ -642,7 +642,7 @@ export function installBuiltins() {
   });
 
   // RAGWB-007 §3.3: ask a question set about the query; the answers are this
-  // node's 'decision' output, read by when-conditions and ctx.decision(id).
+  // node's 'decision' output, read by when-conditions and ctx.decisions through named bindings.
   live('classify', {
     capabilities: ['model'],
     in: [],

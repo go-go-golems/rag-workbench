@@ -1,0 +1,4 @@
+ok  	github.com/go-go-golems/rag-workbench/pkg/artifacts	0.309s
+ok  	github.com/go-go-golems/rag-workbench/pkg/rtenv	0.013s
+ok  	github.com/go-go-golems/rag-workbench/pkg/server	0.122s
+ok  	github.com/go-go-golems/rag-workbench/pkg/runner	10.203s

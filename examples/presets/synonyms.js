@@ -23,8 +23,8 @@ const plan = rag.plan('synonyms').over(corpus)
   .retrieve('text', { k: 30, perQuery: true })
   .limit(s => s.k);
 
-const noRewrite = plan.variant('no-rewrite', [{ op: 'remove', node: 'rewrite' }]);
-const noSynonyms = plan.variant('no-synonyms', [{ op: 'remove', node: 'synonyms' }]);
+const noRewrite = plan.variant('no-rewrite', [{ op: 'remove', bypass: true, node: 'rewrite' }]);
+const noSynonyms = plan.variant('no-synonyms', [{ op: 'remove', bypass: true, node: 'synonyms' }]);
 
 const ops = []; // end ops
 return { plan: plan.patch(ops), variants: [noRewrite, noSynonyms], evals: kit.goldens(), app: kit.searchApp(plan, { title: 'Query expansion', answer: false, facets: false }) };

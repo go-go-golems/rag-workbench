@@ -1,0 +1,21 @@
+?   	github.com/go-go-golems/rag-workbench/cmd/ragwb	[no test files]
+ok  	github.com/go-go-golems/rag-workbench/cmd/ragwb/cmds	3.256s
+ok  	github.com/go-go-golems/rag-workbench/pkg/artifacts	0.845s
+?   	github.com/go-go-golems/rag-workbench/pkg/decide	[no test files]
+ok  	github.com/go-go-golems/rag-workbench/pkg/llm	(cached)
+ok  	github.com/go-go-golems/rag-workbench/pkg/llm/gepp	(cached)
+?   	github.com/go-go-golems/rag-workbench/pkg/llm/gepp/gepptest	[no test files]
+ok  	github.com/go-go-golems/rag-workbench/pkg/natives	4.865s
+ok  	github.com/go-go-golems/rag-workbench/pkg/ragjs	101.313s
+ok  	github.com/go-go-golems/rag-workbench/pkg/rtenv	0.024s
+ok  	github.com/go-go-golems/rag-workbench/pkg/runner	140.384s
+ok  	github.com/go-go-golems/rag-workbench/pkg/server	6.126s
+ok  	github.com/go-go-golems/rag-workbench/pkg/store	(cached)
+ok  	github.com/go-go-golems/rag-workbench/pkg/timing	(cached)
+ok  	github.com/go-go-golems/rag-workbench/pkg/vaultignore	(cached)
+?   	github.com/go-go-golems/rag-workbench/ttmp/2026/11/02/RAGWB-001--import-rag-workbench-prototype-and-design-go-backed-script-runner/scripts/04-ln-class-diff	[no test files]
+?   	github.com/go-go-golems/rag-workbench/ttmp/2026/11/02/RAGWB-001--import-rag-workbench-prototype-and-design-go-backed-script-runner/scripts/06-serve-heap	[no test files]
+?   	github.com/go-go-golems/rag-workbench/ttmp/2026/11/03/RAGWB-002--disk-backed-retrieval-bleve-as-the-default-bm25-backend-and-lazy-record-stores/scripts/02-vault-quality	[no test files]
+?   	github.com/go-go-golems/rag-workbench/ttmp/2026/11/03/RAGWB-003--incremental-re-indexing-delta-builds-over-immutable-artifacts/scripts/02-bleve-delta-spike	[no test files]
+?   	github.com/go-go-golems/rag-workbench/ttmp/2026/11/04/RAGWB-006--geppetto-llm-backend-with-pi-credentials-and-token-streaming/scripts/01-geppetto-pi-spike	[no test files]
+ok  	github.com/go-go-golems/rag-workbench/web	0.006s

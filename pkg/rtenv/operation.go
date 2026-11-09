@@ -12,6 +12,7 @@ import (
 // Operation distinguishes accepting a terminal outcome, delivering it to the
 // VM owner, and actual worker exit. Cleanup can never reclassify an outcome.
 type Operation struct {
+	abort     func(string)
 	resources *Resources
 	ctx       context.Context
 	cancel    context.CancelFunc
@@ -29,7 +30,7 @@ type Operation struct {
 // by the worker before calling Complete.
 func NewOperation(vm *goja.Runtime, services runtimebridge.RuntimeServices, name string, signal goja.Value, abort func(string)) *Operation {
 	ctx, cancel := context.WithCancel(services.Lifetime())
-	op := &Operation{ctx: ctx, cancel: cancel, services: services, name: name, done: make(chan struct{})}
+	op := &Operation{abort: abort, ctx: ctx, cancel: cancel, services: services, name: name, done: make(chan struct{})}
 	var sig *goja.Object
 	var listener goja.Value
 	op.detach = func() {
@@ -64,6 +65,8 @@ func (o *Operation) Complete(deliver func(*goja.Runtime)) {
 // Start takes immutable Go input captured by work; all VM access stays in posted callbacks.
 func (o *Operation) Start(work func(context.Context)) {
 	if o.resources != nil && !o.resources.track(o) {
+		o.Complete(func(*goja.Runtime) { o.abort("shutdown") })
+		o.stop()
 		o.cancel()
 		close(o.done)
 		return

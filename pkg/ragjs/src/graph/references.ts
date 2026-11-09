@@ -48,6 +48,15 @@ export function references(node: Node, def: Definition = {}): Reference[] {
     } else for (const child of Object.values(object)) visit(child);
   };
   visit(node.p);
+  const decisions = node.p.decisions as Record<string, string> | undefined;
+  for (const [name, target] of Object.entries(decisions || {}))
+    refs.push({
+      kind: 'decision',
+      target,
+      set(value) {
+        if (decisions) decisions[name] = value;
+      },
+    });
   const when = node.when;
   if (when?.decision) {
     const split = when.decision.indexOf('.');

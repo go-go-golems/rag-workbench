@@ -1,0 +1,43 @@
+
+> rag-workbench-runtime@ check /home/manuel/workspaces/2026-11-02/rag-workbench/rag-workbench-resume
+> pnpm typecheck && pnpm lint && pnpm check:generated && pnpm test
+
+
+> rag-workbench-runtime@ typecheck /home/manuel/workspaces/2026-11-02/rag-workbench/rag-workbench-resume
+> tsc --noEmit
+
+
+> rag-workbench-runtime@ lint /home/manuel/workspaces/2026-11-02/rag-workbench/rag-workbench-resume
+> biome check .
+
+Checked 38 files in 26ms. No fixes applied.
+
+> rag-workbench-runtime@ check:generated /home/manuel/workspaces/2026-11-02/rag-workbench/rag-workbench-resume
+> node scripts/build-runtime.mjs --check
+
+Generated rag.js is current.
+
+> rag-workbench-runtime@ test /home/manuel/workspaces/2026-11-02/rag-workbench/rag-workbench-resume
+> node --test scripts/runtime.test.mjs
+
+✔ bundle publishes only rag in a browser and uses CommonJS when supplied (9.707142ms)
+✔ separate evaluations isolate registration, default engine and request scopes (2.656246ms)
+✔ closed stored lambdas and dynamically registered components execute after bundling (12.308311ms)
+✔ scope capture restores nesting, keeps independent listeners, and aborts once (1.938305ms)
+✔ standalone export contains an executable bundle and searches with its embedded corpus (24.147735ms)
+✔ runtime source modules have explicit local imports and no dependency cycles (273.052711ms)
+✔ graph rename rewrites declared decision and index references atomically (3.32211ms)
+✔ lexical export removes model gates in one transaction and retains local submit work (12.885941ms)
+✔ dataset identities preserve duplicate local records through fusion and result detachment (8.392244ms)
+✔ named bake datasets are immutable and changed equal-sized content invalidates the value (5.531228ms)
+✔ shared build cancellation detaches one waiter and not the remaining owner (3.168723ms)
+✔ detached results survive multiple refreshes and reverting a source selects the earlier generation (10.341649ms)
+✔ an awaiting query keeps its original snapshot across three refreshes (8.495942ms)
+ℹ tests 13
+ℹ suites 0
+ℹ pass 13
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 427.715609

@@ -52,8 +52,8 @@ func TestSnapshotsInventoryAndPins(t *testing.T) {
 		t.Fatal("store closed with active reader")
 	}
 	release()
-	if _, err := s.GC(3); err != nil {
-		t.Fatal(err)
+	if result, err := s.GC(3); err != nil || result.Removed != 1 {
+		t.Fatalf("released generation: %+v, %v", result, err)
 	}
 }
 
@@ -77,5 +77,40 @@ func TestCorruptManifestPreventsCollection(t *testing.T) {
 	}
 	if m, _ := s.Has("a"); m == nil {
 		t.Fatal("collection deleted authoritative payload")
+	}
+}
+
+func TestBuildLeaseAndTransitiveDependencies(t *testing.T) {
+	s, err := Open(t.TempDir(), "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	release, err := s.BeginBuild()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"base", "derived", "orphan"} {
+		if err := s.Save(key, "chunks", "json", 1, []byte(`[]`)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := s.GC(1); err == nil {
+		t.Fatal("collector ran during build")
+	}
+	if err := s.Describe("derived", "", []string{"base"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Publish(Snapshot{ID: "snapshot", Slot: "slot", Roots: []string{"derived"}}); err != nil {
+		t.Fatal(err)
+	}
+	release()
+	release()
+	result, err := s.GC(1)
+	if err != nil || result.Removed != 1 {
+		t.Fatalf("collection: %+v %v", result, err)
+	}
+	if meta, _ := s.Has("base"); meta == nil {
+		t.Fatal("transitive dependency deleted")
 	}
 }

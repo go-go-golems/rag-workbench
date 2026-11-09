@@ -268,8 +268,7 @@ func (s *RagServer) handleVerb(w http.ResponseWriter, r *http.Request, a *RagApp
 			writeErr(w, http.StatusInternalServerError, "verb_failed", "result is not JSON-serializable: "+err.Error())
 			return
 		}
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write(b)
+		_ = writeOperationJSON(w, b)
 		return
 	}
 

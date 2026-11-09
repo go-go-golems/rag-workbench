@@ -1,0 +1,130 @@
+?   	github.com/go-go-golems/rag-workbench/cmd/ragwb	[no test files]
+--- FAIL: TestReportsAppVerbs (2.04s)
+    --- FAIL: TestReportsAppVerbs/memory (1.04s)
+        verbs_test.go:47: top row = map[doc:PBUI Workbench Core: A Headless Engine, a Pure Planner, and the Hard Cutover of the React Shell heading:5. The core's modules › 5.9 The rebalance law id:["a64156cd3720c6","project-report-pbui-workbench-core-a-headless-engine-a-pure-planner-and-the-hard-cutover-of-the-react-shell#5-9-the-rebalance-law"] rank:1 score:12.6758]
+    --- FAIL: TestReportsAppVerbs/bleve (1.00s)
+        verbs_test.go:47: top row = map[doc:PBUI Workbench Core: A Headless Engine, a Pure Planner, and the Hard Cutover of the React Shell heading:5. The core's modules › 5.9 The rebalance law id:["a64156cd3720c6","project-report-pbui-workbench-core-a-headless-engine-a-pure-planner-and-the-hard-cutover-of-the-react-shell#5-9-the-rebalance-law"] rank:1 score:1.7644]
+FAIL
+FAIL	github.com/go-go-golems/rag-workbench/cmd/ragwb/cmds	2.073s
+--- FAIL: TestListAndPrune (0.00s)
+    store_test.go:83: Prune = 0, artifact namespace is already owned: resource temporarily unavailable
+--- FAIL: TestLineage (0.03s)
+    store_test.go:222: gc = {Lineages:0 Removed:0 Freed:0 Temps:0}, missing or corrupt authoritative artifact k4; collection aborted
+FAIL
+FAIL	github.com/go-go-golems/rag-workbench/pkg/artifacts	0.584s
+?   	github.com/go-go-golems/rag-workbench/pkg/decide	[no test files]
+ok  	github.com/go-go-golems/rag-workbench/pkg/llm	(cached)
+ok  	github.com/go-go-golems/rag-workbench/pkg/llm/gepp	0.054s
+?   	github.com/go-go-golems/rag-workbench/pkg/llm/gepp/gepptest	[no test files]
+ok  	github.com/go-go-golems/rag-workbench/pkg/natives	2.923s
+--- FAIL: TestEnrichDecide (0.07s)
+    enrich_decide_test.go:58: RagBuild_pendingError: required build work is deferred; enable its provider calls
+        	at ragwb/rag.js:131:12(3)
+        	at run (ragwb/rag.js:3040:17(76))
+        
+--- FAIL: TestComponentSourceChangeInvalidatesDownstream (0.04s)
+    invalidation_test.go:17: RagBuildError: chunks: Object has no member 'map'
+        	at ragwb/rag.js:131:12(3)
+        	at run (ragwb/rag.js:3037:28(63))
+        
+--- FAIL: TestSessionMemoFollowsArtifacts (0.05s)
+    invalidation_test.go:72: test setup: a fresh session should find no apples after the change, got [["d1d5278d41d11e","fruit#intro"]]
+FAIL
+FAIL	github.com/go-go-golems/rag-workbench/pkg/ragjs	102.934s
+?   	github.com/go-go-golems/rag-workbench/pkg/rtenv	[no test files]
+--- FAIL: TestArtifactsPersistAcrossRuntimes (13.26s)
+    artifacts_test.go:115: warm run read the source files; loaded=[files parse chunks ix-text] nodes=map[chunks:{ID:chunks Reused:true Stored:true Saved:false Count:462} files:{ID:files Reused:true Stored:true Saved:false Count:11} ix-text:{ID:ix-text Reused:true Stored:true Saved:false Count:462} parse:{ID:parse Reused:true Stored:true Saved:false Count:11}]
+--- FAIL: TestArtifactsKeyIncludesComponentSource (0.10s)
+    artifacts_test.go:164: Error: chunks: Object has no member 'slice'
+        	at <eval>:10:24(109)
+        
+--- FAIL: TestBm25Parity (16.91s)
+    --- FAIL: TestBm25Parity/0 (5.63s)
+        bm25_parity_test.go:84: bm25 differs at byte 154:
+              js: …2,"terms":4682,"avgLen":160.6,"fields":{"title":2,"headingPath":3,"text":1}},"N":462,"res":[["rebalance law",[{"id":"[\"fea7347768b911\",\"project-report-pbui-workbench-core-a-headless-engine-a-pure-planner-and-the-hard-cutover-of-the-react…
+              go: …2,"terms":4682,"avgLen":160.6,"fields":{"title":2,"headingPath":3,"text":1}},"N":462,"res":[["rebalance law",[{"id":"[\"09f88345525ed8\",\"project-report-pbui-workbench-core-a-headless-engine-a-pure-planner-and-the-hard-cutover-of-the-react…
+    --- FAIL: TestBm25Parity/1 (5.99s)
+        bm25_parity_test.go:84: bm25 differs at byte 164:
+              js: …4682,"avgLen":168,"fields":{"callout":2,"headingPath":3,"text":1,"title":2}},"N":462,"res":[["rebalance law",[{"id":"[\"fea7347768b911\",\"project-report-pbui-workbench-core-a-headless-engine-a-pure-planner-and-the-hard-cutover-of-the-react…
+              go: …4682,"avgLen":168,"fields":{"callout":2,"headingPath":3,"text":1,"title":2}},"N":462,"res":[["rebalance law",[{"id":"[\"09f88345525ed8\",\"project-report-pbui-workbench-core-a-headless-engine-a-pure-planner-and-the-hard-cutover-of-the-react…
+    --- FAIL: TestBm25Parity/2 (5.29s)
+        bm25_parity_test.go:84: bm25 differs at byte 162:
+              js: …":6233,"avgLen":148.1,"fields":{"headingPath":0.5,"meta.tags":2.5,"text":1}},"N":462,"res":[["rebalance law",[{"id":"[\"fea7347768b911\",\"project-report-pbui-workbench-core-a-headless-engine-a-pure-planner-and-the-hard-cutover-of-the-react…
+              go: …":6233,"avgLen":148.1,"fields":{"headingPath":0.5,"meta.tags":2.5,"text":1}},"N":462,"res":[["rebalance law",[{"id":"[\"09f88345525ed8\",\"project-report-pbui-workbench-core-a-headless-engine-a-pure-planner-and-the-hard-cutover-of-the-react…
+--- FAIL: TestDeltaBuildEqualsFullBuild (21.64s)
+    delta_test.go:183: step 1 (edit n10.md, append n03.md): 583 chunks; chunks inc=true map[docs:2 removes:6 upserts:7]; files inc=true map[removes:0 unchanged:49 upserts:2]; ix-meta inc=true map[removes:6 upserts:7]; ix-text inc=true map[removes:6 upserts:7]; parse inc=true map[removes:0 upserts:2]
+    delta_test.go:183: step 2 (add added-2.md, remove n39.md): 583 chunks; chunks inc=true map[docs:1 removes:3 upserts:3]; files inc=true map[removes:1 unchanged:50 upserts:1]; ix-meta inc=true map[removes:3 upserts:3]; ix-text inc=true map[removes:3 upserts:3]; parse inc=true map[removes:1 upserts:1]
+    delta_test.go:183: step 3 (rename PROJ - TTC Customer Clustering - Order-Grain Segmentation and the Shiny Explorer.md, touch n23.md): 583 chunks; chunks inc=true map[docs:1 removes:22 upserts:22]; files inc=true map[removes:1 unchanged:50 upserts:1]; ix-meta inc=true map[removes:22 upserts:22]; ix-text inc=true map[removes:22 upserts:22]; parse inc=true map[removes:1 upserts:1]
+    delta_test.go:183: step 4 (empty n32.md, add deep 4.md): 583 chunks; chunks inc=true map[docs:2 removes:3 upserts:3]; files inc=true map[removes:0 unchanged:50 upserts:2]; ix-meta inc=true map[removes:3 upserts:3]; ix-text inc=true map[removes:3 upserts:3]; parse inc=true map[removes:0 upserts:2]
+    delta_test.go:183: step 5 (edit n38.md, append PROJECT REPORT - PBUI Workbench Identity - Local Revisions  Opaque Server Tokens  and Idempotent Sync Operations.md): 584 chunks; chunks inc=true map[docs:2 removes:45 upserts:46]; files inc=true map[removes:0 unchanged:50 upserts:2]; ix-meta inc=true map[removes:45 upserts:46]; ix-text inc=true map[removes:45 upserts:46]; parse inc=true map[removes:0 upserts:2]
+    delta_test.go:183: step 6 (add added-6.md, remove n25.md): 584 chunks; chunks inc=true map[docs:1 removes:3 upserts:3]; files inc=true map[removes:1 unchanged:51 upserts:1]; ix-meta inc=true map[removes:3 upserts:3]; ix-text inc=true map[removes:3 upserts:3]; parse inc=true map[removes:1 upserts:1]
+    delta_test.go:183: step 7 (rename n22.md, touch n37.md): 584 chunks; chunks inc=true map[docs:1 removes:3 upserts:3]; files inc=true map[removes:1 unchanged:51 upserts:1]; ix-meta inc=true map[removes:3 upserts:3]; ix-text inc=true map[removes:3 upserts:3]; parse inc=true map[removes:1 upserts:1]
+    delta_test.go:183: step 8 (empty PROJ - TTC Customer Clustering - Tier B Customer Segmentation.md, add deep 8.md): 570 chunks; chunks inc=true map[docs:2 removes:17 upserts:3]; files inc=true map[removes:0 unchanged:51 upserts:2]; ix-meta inc=true map[removes:17 upserts:3]; ix-text inc=true map[removes:17 upserts:3]; parse inc=true map[removes:0 upserts:2]
+    delta_test.go:196: stored file current/d7fd7ff7a6329e.json changed after delta builds
+--- FAIL: TestEmptyResultsAreArrays (4.33s)
+    --- FAIL: TestEmptyResultsAreArrays/jsComponents=true (3.96s)
+        empty_results_test.go:65: RagReferenceError: record ID must include its dataset identity
+            	at ragwb/rag.js:131:12(3)
+            	at unqualify (ragwb/rag.js:2628:13(14))
+            	at ragwb/rag.js:4123:63(15)
+            	at <eval>:18:40(64)
+            
+    --- FAIL: TestEmptyResultsAreArrays/jsComponents=false (0.37s)
+        empty_results_test.go:65: RagReferenceError: record ID must include its dataset identity
+            	at ragwb/rag.js:131:12(3)
+            	at unqualify (ragwb/rag.js:2628:13(14))
+            	at ragwb/rag.js:4123:63(15)
+            	at <eval>:18:40(64)
+            
+--- FAIL: TestMarkdownParityReports (14.75s)
+    --- FAIL: TestMarkdownParityReports/0 (4.05s)
+        markdown_parity_test.go:99: docs differ at byte 86:
+              js: …[{"h1":"Agent runtime spec: a portable chat agent with a single eval() tool","id":"[\"cf5f1804297e9b\",\"agent-runtime-spec-portable-eval-agent\"]","links":["Downloads"],"meta":{"created":"2026-10-14","deri…
+              go: …[{"h1":"Agent runtime spec: a portable chat agent with a single eval() tool","id":"[\"0588400faf9351\",\"agent-runtime-spec-portable-eval-agent\"]","links":["Downloads"],"meta":{"created":"2026-10-14","deri…
+    --- FAIL: TestMarkdownParityReports/1 (4.96s)
+        markdown_parity_test.go:99: docs differ at byte 86:
+              js: …[{"h1":"Agent runtime spec: a portable chat agent with a single eval() tool","id":"[\"cf5f1804297e9b\",\"agent-runtime-spec-portable-eval-agent\"]","links":["Downloads"],"meta":{"created":"2026-10-14","deri…
+              go: …[{"h1":"Agent runtime spec: a portable chat agent with a single eval() tool","id":"[\"0588400faf9351\",\"agent-runtime-spec-portable-eval-agent\"]","links":["Downloads"],"meta":{"created":"2026-10-14","deri…
+    --- FAIL: TestMarkdownParityReports/2 (5.73s)
+        markdown_parity_test.go:99: docs differ at byte 86:
+              js: …[{"h1":"Agent runtime spec: a portable chat agent with a single eval() tool","id":"[\"cf5f1804297e9b\",\"agent-runtime-spec-portable-eval-agent\"]","links":["Downloads"],"meta":{"created":"2026-10-14","deri…
+              go: …[{"h1":"Agent runtime spec: a portable chat agent with a single eval() tool","id":"[\"0588400faf9351\",\"agent-runtime-spec-portable-eval-agent\"]","links":["Downloads"],"meta":{"created":"2026-10-14","deri…
+--- FAIL: TestMarkdownParityVault (45.90s)
+    --- FAIL: TestMarkdownParityVault/0 (17.08s)
+        markdown_parity_test.go:99: docs differ at byte 79:
+              js: …[{"h1":"PARC Project Index: Repos, Concepts, and Knowledge Base Gaps","id":"[\"49cd8c7af64d40\",\"logs-2026-05-11-00-project-index-repos-and-concepts\"]","links":["building-knowledge-base","KB-PLAYBO…
+              go: …[{"h1":"PARC Project Index: Repos, Concepts, and Knowledge Base Gaps","id":"[\"f9ca849c0270d9\",\"logs-2026-05-11-00-project-index-repos-and-concepts\"]","links":["building-knowledge-base","KB-PLAYBO…
+    --- FAIL: TestMarkdownParityVault/1 (15.55s)
+        markdown_parity_test.go:99: docs differ at byte 79:
+              js: …[{"h1":"PARC Project Index: Repos, Concepts, and Knowledge Base Gaps","id":"[\"49cd8c7af64d40\",\"logs-2026-05-11-00-project-index-repos-and-concepts\"]","links":["building-knowledge-base","KB-PLAYBO…
+              go: …[{"h1":"PARC Project Index: Repos, Concepts, and Knowledge Base Gaps","id":"[\"f9ca849c0270d9\",\"logs-2026-05-11-00-project-index-repos-and-concepts\"]","links":["building-knowledge-base","KB-PLAYBO…
+    --- FAIL: TestMarkdownParityVault/2 (13.27s)
+        markdown_parity_test.go:99: docs differ at byte 79:
+              js: …[{"h1":"PARC Project Index: Repos, Concepts, and Knowledge Base Gaps","id":"[\"49cd8c7af64d40\",\"logs-2026-05-11-00-project-index-repos-and-concepts\"]","links":["building-knowledge-base","KB-PLAYBO…
+              go: …[{"h1":"PARC Project Index: Repos, Concepts, and Knowledge Base Gaps","id":"[\"f9ca849c0270d9\",\"logs-2026-05-11-00-project-index-repos-and-concepts\"]","links":["building-knowledge-base","KB-PLAYBO…
+--- FAIL: TestChunkRecordsReplaceTheChunksMap (3.52s)
+    records_test.go:97: warm run: art.chunks should be a record view
+--- FAIL: TestRerankModelCancelled (0.89s)
+    rerank_test.go:110: trace after abort: vec:ran rerank:error:the operation ended: cancelled
+--- FAIL: TestServeRefreshIsIncremental (0.89s)
+    serve_watch_test.go:95: no superseded handles were closed
+--- FAIL: TestServeRefreshAppliesVaultIgnore (0.22s)
+    serve_watch_test.go:161: excluded content remains searchable
+--- FAIL: TestTermsIndexParity (1.40s)
+    terms_parity_test.go:87: 153 of 158 queries differ (index map[keys:[type tags status aliases] kind:terms values:94]); first: [map[go:[{"id":"[\"2e9b6cc238c397\",\"agent-runtime-spec-portable-eval-agent#1-concepts\"]","score":0.8802,"why":{"type":"spec","tags":"spec"}},{"id":"[\"2e9b6cc238c397\",\"agent-runtime-spec-portable-eval-agent#1-concepts-2\"]","score":0.8802,"why":{"type":"spec","tags":"spec"}},{"id":"[\"2e9b6cc238c397\", js:[{"id":"[\"2e9b6cc238c397\",\"agent-runtime-spec-portable-eval-agent#1-concepts-2\"]","score":0.8802,"why":{"type":"spec","tags":"spec"}},{"id":"[\"2e9b6cc238c397\",\"agent-runtime-spec-portable-eval-agent#1-concepts\"]","score":0.8802,"why":{"type":"spec","tags":"spec"}},{"id":"[\"2e9b6cc238c397\", q:spec] map[go:[{"id":"[\"2e9b6cc238c397\",\"proj-ttc-customer-clustering-order-grain-segmentation-and-the-shiny-explorer#architecture\"]","score":0.8076,"why":{"type":"project","tags":"project"}},{"id":"[\"2e9b6cc238c397\",\"proj-ttc-customer-clustering-order-grain-segmentation-and-the-shiny-explorer#current-proj js:[{"id":"[\"2e9b6cc238c397\",\"proj-ttc-customer-clustering-order-grain-segmentation-and-the-shiny-explorer#architecture\"]","score":0.8076,"why":{"type":"project","tags":"project"}},{"id":"[\"2e9b6cc238c397\",\"proj-ttc-customer-clustering-order-grain-segmentation-and-the-shiny-explorer#current-proj q:project] map[go:[{"id":"[\"2e9b6cc238c397\",\"project-report-coinvault-mcp-from-local-conformance-to-chatgpt-2026-07-28#1-1-exact-deployed-identity\"]","score":1.2131,"why":{"type":"article","tags":"article"}},{"id":"[\"2e9b6cc238c397\",\"project-report-coinvault-mcp-from-local-conformance-to-chatgpt-2026-07-28#1-t js:[{"id":"[\"2e9b6cc238c397\",\"project-report-coinvault-mcp-from-local-conformance-to-chatgpt-2026-07-28#1-1-exact-deployed-identity\"]","score":1.2131,"why":{"type":"article","tags":"article"}},{"id":"[\"2e9b6cc238c397\",\"project-report-coinvault-mcp-from-local-conformance-to-chatgpt-2026-07-28#1-t q:article] map[go:[{"id":"[\"2e9b6cc238c397\",\"proj-ttc-customer-clustering-order-grain-segmentation-and-the-shiny-explorer#architecture\"]","score":0.8076,"why":{"type":"project","tags":"project"}},{"id":"[\"2e9b6cc238c397\",\"proj-ttc-customer-clustering-order-grain-segmentation-and-the-shiny-explorer#current-proj js:[{"id":"[\"2e9b6cc238c397\",\"proj-ttc-customer-clustering-order-grain-segmentation-and-the-shiny-explorer#architecture\"]","score":0.8076,"why":{"type":"project","tags":"project"}},{"id":"[\"2e9b6cc238c397\",\"proj-ttc-customer-clustering-order-grain-segmentation-and-the-shiny-explorer#current-proj q:project-report] map[go:[{"id":"[\"2e9b6cc238c397\",\"agent-runtime-spec-portable-eval-agent#1-concepts\"]","score":0.4401,"why":{"tags":"design"}},{"id":"[\"2e9b6cc238c397\",\"agent-runtime-spec-portable-eval-agent#1-concepts-2\"]","score":0.4401,"why":{"tags":"design"}},{"id":"[\"2e9b6cc238c397\",\"agent-runtime-spec-por js:[{"id":"[\"2e9b6cc238c397\",\"agent-runtime-spec-portable-eval-agent#1-concepts-2\"]","score":0.4401,"why":{"tags":"design"}},{"id":"[\"2e9b6cc238c397\",\"agent-runtime-spec-portable-eval-agent#1-concepts\"]","score":0.4401,"why":{"tags":"design"}},{"id":"[\"2e9b6cc238c397\",\"agent-runtime-spec-por q:design]]
+FAIL
+FAIL	github.com/go-go-golems/rag-workbench/pkg/runner	137.216s
+--- FAIL: TestRagServerRoutes (0.95s)
+    rag_test.go:124: chunk lookup: {map[] map[]}
+FAIL
+FAIL	github.com/go-go-golems/rag-workbench/pkg/server	3.956s
+ok  	github.com/go-go-golems/rag-workbench/pkg/store	(cached)
+ok  	github.com/go-go-golems/rag-workbench/pkg/timing	(cached)
+ok  	github.com/go-go-golems/rag-workbench/pkg/vaultignore	(cached)
+?   	github.com/go-go-golems/rag-workbench/ttmp/2026/11/02/RAGWB-001--import-rag-workbench-prototype-and-design-go-backed-script-runner/scripts/04-ln-class-diff	[no test files]
+?   	github.com/go-go-golems/rag-workbench/ttmp/2026/11/02/RAGWB-001--import-rag-workbench-prototype-and-design-go-backed-script-runner/scripts/06-serve-heap	[no test files]
+?   	github.com/go-go-golems/rag-workbench/ttmp/2026/11/03/RAGWB-002--disk-backed-retrieval-bleve-as-the-default-bm25-backend-and-lazy-record-stores/scripts/02-vault-quality	[no test files]
+?   	github.com/go-go-golems/rag-workbench/ttmp/2026/11/03/RAGWB-003--incremental-re-indexing-delta-builds-over-immutable-artifacts/scripts/02-bleve-delta-spike	[no test files]
+?   	github.com/go-go-golems/rag-workbench/ttmp/2026/11/04/RAGWB-006--geppetto-llm-backend-with-pi-credentials-and-token-streaming/scripts/01-geppetto-pi-spike	[no test files]
+ok  	github.com/go-go-golems/rag-workbench/web	0.005s
+FAIL

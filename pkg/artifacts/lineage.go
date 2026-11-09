@@ -159,6 +159,9 @@ func (s *Store) GC(keep int) (GCResult, error) {
 	if s.lock == nil {
 		return result, fmt.Errorf("store is closed")
 	}
+	if s.builds > 0 {
+		return result, fmt.Errorf("collection deferred while builds are active")
+	}
 	if keep < 1 {
 		keep = 1
 	}
@@ -187,8 +190,8 @@ func (s *Store) GC(keep int) (GCResult, error) {
 	if err != nil {
 		return result, err
 	}
-	// Validate the complete sweep before deleting anything. Fresh unpublished
-	// outputs belong to possible in-progress builds; recovery ages them out.
+	// Validate the complete sweep before deleting anything. Active build leases
+	// exclude collection, so unreferenced completed outputs can be removed immediately.
 	for _, meta := range inventory {
 		if meta.NS != s.NS {
 			continue
@@ -206,17 +209,6 @@ func (s *Store) GC(keep int) (GCResult, error) {
 	}
 	for _, meta := range inventory {
 		if meta.NS != s.NS || marked[meta.Key] {
-			continue
-		}
-		published := false
-		for _, snapshot := range snapshots {
-			for _, root := range snapshot.Roots {
-				if root == meta.Key {
-					published = true
-				}
-			}
-		}
-		if !published && time.Since(meta.Created) < time.Hour {
 			continue
 		}
 		result.Freed += unlinkedSize(s, meta.Key, &meta)

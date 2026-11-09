@@ -1,0 +1,21 @@
+✔ bundle publishes only rag in a browser and uses CommonJS when supplied (24.453573ms)
+✔ separate evaluations isolate registration, default engine and request scopes (5.67305ms)
+✔ closed stored lambdas and dynamically registered components execute after bundling (21.781839ms)
+✔ scope capture restores nesting, keeps independent listeners, and aborts once (3.700789ms)
+✔ standalone export contains an executable bundle and searches with its embedded corpus (47.654789ms)
+✔ runtime source modules have explicit local imports and no dependency cycles (585.375512ms)
+✔ graph rename rewrites declared decision and index references atomically (4.857255ms)
+✔ lexical export removes model gates in one transaction and retains local submit work (20.338269ms)
+✔ dataset identities preserve duplicate local records through fusion and result detachment (12.30335ms)
+✔ named bake datasets are immutable and changed equal-sized content invalidates the value (14.43708ms)
+✔ shared build cancellation detaches one waiter and not the remaining owner (7.993721ms)
+✔ detached results survive multiple refreshes and reverting a source selects the earlier generation (22.642926ms)
+✔ an awaiting query keeps its original snapshot across three refreshes (16.667423ms)
+ℹ tests 13
+ℹ suites 0
+ℹ pass 13
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 796.680627

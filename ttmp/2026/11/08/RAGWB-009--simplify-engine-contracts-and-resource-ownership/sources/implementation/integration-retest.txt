@@ -1,0 +1,63 @@
+ok  	github.com/go-go-golems/rag-workbench/pkg/ragjs	108.242s
+--- FAIL: TestMarkdownParityReports (10.62s)
+    --- FAIL: TestMarkdownParityReports/0 (3.45s)
+        markdown_parity_test.go:97: SyntaxError: invalid character 'i' looking for beginning of value
+            	at parse (native)
+            	at noRange (<eval>:12:85(23))
+            	at stringify (native)
+            	at clean (<eval>:14:48(7))
+            	at dump (<eval>:17:28(18))
+            	at <eval>:18:42(96)
+            
+    --- FAIL: TestMarkdownParityReports/1 (3.40s)
+        markdown_parity_test.go:97: SyntaxError: invalid character 'i' looking for beginning of value
+            	at parse (native)
+            	at noRange (<eval>:12:85(23))
+            	at stringify (native)
+            	at clean (<eval>:14:48(7))
+            	at dump (<eval>:17:28(18))
+            	at <eval>:18:42(96)
+            
+    --- FAIL: TestMarkdownParityReports/2 (3.77s)
+        markdown_parity_test.go:97: SyntaxError: invalid character 'i' looking for beginning of value
+            	at parse (native)
+            	at noRange (<eval>:12:85(23))
+            	at stringify (native)
+            	at clean (<eval>:14:48(7))
+            	at dump (<eval>:17:28(18))
+            	at <eval>:18:42(96)
+            
+--- FAIL: TestMarkdownParityVault (34.99s)
+    --- FAIL: TestMarkdownParityVault/0 (11.72s)
+        markdown_parity_test.go:97: SyntaxError: invalid character 'i' looking for beginning of value
+            	at parse (native)
+            	at noRange (<eval>:12:85(23))
+            	at stringify (native)
+            	at clean (<eval>:14:48(7))
+            	at dump (<eval>:17:28(18))
+            	at <eval>:18:42(96)
+            
+    --- FAIL: TestMarkdownParityVault/1 (11.80s)
+        markdown_parity_test.go:97: SyntaxError: invalid character 'i' looking for beginning of value
+            	at parse (native)
+            	at noRange (<eval>:12:85(23))
+            	at stringify (native)
+            	at clean (<eval>:14:48(7))
+            	at dump (<eval>:17:28(18))
+            	at <eval>:18:42(96)
+            
+    --- FAIL: TestMarkdownParityVault/2 (11.47s)
+        markdown_parity_test.go:97: SyntaxError: invalid character 'i' looking for beginning of value
+            	at parse (native)
+            	at noRange (<eval>:12:85(23))
+            	at stringify (native)
+            	at clean (<eval>:14:48(7))
+            	at dump (<eval>:17:28(18))
+            	at <eval>:18:42(96)
+            
+FAIL
+FAIL	github.com/go-go-golems/rag-workbench/pkg/runner	126.700s
+ok  	github.com/go-go-golems/rag-workbench/pkg/server	2.979s
+ok  	github.com/go-go-golems/rag-workbench/pkg/artifacts	0.408s
+ok  	github.com/go-go-golems/rag-workbench/cmd/ragwb/cmds	1.614s
+FAIL

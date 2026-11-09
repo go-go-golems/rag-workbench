@@ -1,0 +1,304 @@
+
+> rag-workbench-runtime@ check /home/manuel/workspaces/2026-11-02/rag-workbench/rag-workbench-resume
+> pnpm typecheck && pnpm lint && pnpm check:generated && pnpm test
+
+
+> rag-workbench-runtime@ typecheck /home/manuel/workspaces/2026-11-02/rag-workbench/rag-workbench-resume
+> tsc --noEmit
+
+
+> rag-workbench-runtime@ lint /home/manuel/workspaces/2026-11-02/rag-workbench/rag-workbench-resume
+> biome check .
+
+pkg/ragjs/src/components/builtins.js:1:1 assist/source/organizeImports  FIXABLE  ━━━━━━━━━━━━━━━━━━━
+
+  × Sort these imports.
+  
+  > 1 │ import { indexReferences } from '../graph/references.ts';
+      │ ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  > 2 │ import { RagError } from '../core/errors.ts';
+  > 3 │ import { fnOf, lam } from '../core/lambda.js';
+  > 4 │ import { arr, clip, getPath, isBake, isLambda, isObj, uniq } from '../core/util.js';
+  > 5 │ import { answerLine } from '../engine/decision.js';
+  > 6 │ import { rag_bake } from '../graph/graph.js';
+      │ ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    7 │ import { assignIds, chunkSections, makeChunk } from './chunking.js';
+    8 │ import { normHits, viewHit } from './hits.js';
+  
+  i Safe fix: Organize imports and exports (Biome)
+  
+      1     │ - import·{·indexReferences·}·from·'../graph/references.ts';
+      2     │ - import·{·RagError·}·from·'../core/errors.ts';
+      3     │ - import·{·fnOf,·lam·}·from·'../core/lambda.js';
+      4     │ - import·{·arr,·clip,·getPath,·isBake,·isLambda,·isObj,·uniq·}·from·'../core/util.js';
+      5     │ - import·{·answerLine·}·from·'../engine/decision.js';
+      6     │ - import·{·rag_bake·}·from·'../graph/graph.js';
+          1 │ + import·{·RagError·}·from·'../core/errors.ts';
+          2 │ + import·{·fnOf,·lam·}·from·'../core/lambda.js';
+          3 │ + import·{·arr,·clip,·getPath,·isBake,·isLambda,·isObj,·uniq·}·from·'../core/util.js';
+          4 │ + import·{·answerLine·}·from·'../engine/decision.js';
+          5 │ + import·{·rag_bake·}·from·'../graph/graph.js';
+          6 │ + import·{·indexReferences·}·from·'../graph/references.ts';
+      7   7 │   import { assignIds, chunkSections, makeChunk } from './chunking.js';
+      8   8 │   import { normHits, viewHit } from './hits.js';
+  
+
+pkg/ragjs/src/engine/engine.js:1:1 assist/source/organizeImports  FIXABLE  ━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  × Sort these imports.
+  
+   > 1 │ import { dataset, memoryDataset, RecordCatalog, qualify, unqualify } from './dataset.ts';
+       │ ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   > 2 │ import { ResourceRegistry, OwnershipScope } from './ownership.ts';
+   > 3 │ import { BuildJobs } from './jobs.ts';
+   > 4 │ import { REG } from '../components/registry.js';
+        ...
+  > 10 │ import { fromWireDecision, makeDecide, wireDecision } from './decision.js';
+  > 11 │ import { timed } from './environment.js';
+       │ ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    12 │ import { FULL_DELTA, isView, Lazy, Outputs, persistOf, storeKey } from './records.js';
+    13 │ import { safeEmit, scoped } from './scope.ts';
+  
+  i Safe fix: Organize imports and exports (Biome)
+  
+      1     │ - import·{·dataset,·memoryDataset,·RecordCatalog,·qualify,·unqualify·}·from·'./dataset.ts';
+      2     │ - import·{·ResourceRegistry,·OwnershipScope·}·from·'./ownership.ts';
+      3     │ - import·{·BuildJobs·}·from·'./jobs.ts';
+      4     │ - import·{·REG·}·from·'../components/registry.js';
+      5     │ - import·{·RagError·}·from·'../core/errors.ts';
+      6     │ - import·{·slug·}·from·'../core/identity.ts';
+      7     │ - import·{·fnOf·}·from·'../core/lambda.js';
+      8     │ - import·{·arr,·clip,·hash,·isBake,·isLambda,·isObj,·now,·tokens,·uniq·}·from·'../core/util.js';
+      9     │ - import·{·compile,·costsCalls·}·from·'../graph/graph.js';
+     10     │ - import·{·fromWireDecision,·makeDecide,·wireDecision·}·from·'./decision.js';
+     11     │ - import·{·timed·}·from·'./environment.js';
+          1 │ + import·{·REG·}·from·'../components/registry.js';
+          2 │ + import·{·RagError·}·from·'../core/errors.ts';
+          3 │ + import·{·slug·}·from·'../core/identity.ts';
+          4 │ + import·{·fnOf·}·from·'../core/lambda.js';
+          5 │ + import·{·arr,·clip,·hash,·isBake,·isLambda,·isObj,·now,·tokens,·uniq·}·from·'../core/util.js';
+          6 │ + import·{·compile,·costsCalls·}·from·'../graph/graph.js';
+          7 │ + import·{·dataset,·memoryDataset,·qualify,·RecordCatalog,·unqualify·}·from·'./dataset.ts';
+          8 │ + import·{·fromWireDecision,·makeDecide,·wireDecision·}·from·'./decision.js';
+          9 │ + import·{·timed·}·from·'./environment.js';
+         10 │ + import·{·BuildJobs·}·from·'./jobs.ts';
+         11 │ + import·{·OwnershipScope,·ResourceRegistry·}·from·'./ownership.ts';
+     12  12 │   import { FULL_DELTA, isView, Lazy, Outputs, persistOf, storeKey } from './records.js';
+     13  13 │   import { safeEmit, scoped } from './scope.ts';
+  
+
+pkg/ragjs/src/engine/jobs.ts:2:1 assist/source/organizeImports  FIXABLE  ━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  × Sort the imported names.
+  
+    1 │ import { RagError } from '../core/errors.ts';
+  > 2 │ import { newScope, type CancellationSignal, type RuntimeEvent } from './scope.ts';
+      │ ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    3 │ 
+    4 │ interface Waiter {
+  
+  i Safe fix: Organize imports and exports (Biome)
+  
+      1   1 │   import { RagError } from '../core/errors.ts';
+      2     │ - import·{·newScope,·type·CancellationSignal,·type·RuntimeEvent·}·from·'./scope.ts';
+          2 │ + import·{·type·CancellationSignal,·newScope,·type·RuntimeEvent·}·from·'./scope.ts';
+      3   3 │   
+      4   4 │   interface Waiter {
+  
+
+pkg/ragjs/src/engine/session.js:1:1 assist/source/organizeImports  FIXABLE  ━━━━━━━━━━━━━━━━━━━━━━━━
+
+  × Sort these imports.
+  
+   > 1 │ import { detach } from './result.ts';
+       │ ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   > 2 │ import { normHits } from '../components/hits.js';
+   > 3 │ import { portsOf, REG } from '../components/registry.js';
+   > 4 │ import { RagError } from '../core/errors.ts';
+        ...
+   > 9 │ import { timed } from './environment.js';
+  > 10 │ import { hitsEvent } from './events.js';
+       │ ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    11 │ import { safeEmit } from './scope.ts';
+    12 │ 
+  
+  i Safe fix: Organize imports and exports (Biome)
+  
+      1     │ - import·{·detach·}·from·'./result.ts';
+      2     │ - import·{·normHits·}·from·'../components/hits.js';
+      3     │ - import·{·portsOf,·REG·}·from·'../components/registry.js';
+      4     │ - import·{·RagError·}·from·'../core/errors.ts';
+      5     │ - import·{·fnOf·}·from·'../core/lambda.js';
+      6     │ - import·{·arr,·clip,·hash,·isLambda,·now,·stable,·tokens·}·from·'../core/util.js';
+      7     │ - import·{·triggerOf,·whenHolds,·whenSkipOutput·}·from·'../graph/graph.js';
+      8     │ - import·{·answerLine,·eventDecide,·eventSample,·makeDecide·}·from·'./decision.js';
+      9     │ - import·{·timed·}·from·'./environment.js';
+     10     │ - import·{·hitsEvent·}·from·'./events.js';
+          1 │ + import·{·normHits·}·from·'../components/hits.js';
+          2 │ + import·{·portsOf,·REG·}·from·'../components/registry.js';
+          3 │ + import·{·RagError·}·from·'../core/errors.ts';
+          4 │ + import·{·fnOf·}·from·'../core/lambda.js';
+          5 │ + import·{·arr,·clip,·hash,·isLambda,·now,·stable,·tokens·}·from·'../core/util.js';
+          6 │ + import·{·triggerOf,·whenHolds,·whenSkipOutput·}·from·'../graph/graph.js';
+          7 │ + import·{·answerLine,·eventDecide,·eventSample,·makeDecide·}·from·'./decision.js';
+          8 │ + import·{·timed·}·from·'./environment.js';
+          9 │ + import·{·hitsEvent·}·from·'./events.js';
+         10 │ + import·{·detach·}·from·'./result.ts';
+     11  11 │   import { safeEmit } from './scope.ts';
+     12  12 │   
+  
+
+pkg/ragjs/src/export/html.js:1:1 assist/source/organizeImports  FIXABLE  ━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  × Some imports or exports are not organized.
+  
+  > 1 │ import { REG, portsOf } from '../components/registry.js';
+      │ ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  > 2 │ import { RagError } from '../core/errors.ts';
+  > 3 │ import { resolveTarget } from '../api/target.js';
+  > 4 │ import { projectLexical, applyOps } from '../graph/graph.js';
+      │ ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    5 │ 
+    6 │ async function exportHtml(target, opts = {}) {
+  
+  i Sort the imported names.
+  
+    2 │ import { RagError } from '../core/errors.ts';
+    3 │ import { resolveTarget } from '../api/target.js';
+  > 4 │ import { projectLexical, applyOps } from '../graph/graph.js';
+      │ ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    5 │ 
+    6 │ async function exportHtml(target, opts = {}) {
+  
+  i Sort these imports.
+  
+  > 1 │ import { REG, portsOf } from '../components/registry.js';
+      │ ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  > 2 │ import { RagError } from '../core/errors.ts';
+  > 3 │ import { resolveTarget } from '../api/target.js';
+      │ ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    4 │ import { projectLexical, applyOps } from '../graph/graph.js';
+    5 │ 
+  
+  i Safe fix: Organize imports and exports (Biome)
+  
+     1    │ - import·{·REG,·portsOf·}·from·'../components/registry.js';
+     2    │ - import·{·RagError·}·from·'../core/errors.ts';
+     3    │ - import·{·resolveTarget·}·from·'../api/target.js';
+     4    │ - import·{·projectLexical,·applyOps·}·from·'../graph/graph.js';
+        1 │ + import·{·resolveTarget·}·from·'../api/target.js';
+        2 │ + import·{·portsOf,·REG·}·from·'../components/registry.js';
+        3 │ + import·{·RagError·}·from·'../core/errors.ts';
+        4 │ + import·{·applyOps,·projectLexical·}·from·'../graph/graph.js';
+     5  5 │   
+     6  6 │   async function exportHtml(target, opts = {}) {
+  
+
+pkg/ragjs/src/export/html.js:1:10 lint/correctness/noUnusedImports  FIXABLE  ━━━━━━━━━━━━━━━━━━━━━━━
+
+  × Several of these imports are unused.
+  
+  > 1 │ import { REG, portsOf } from '../components/registry.js';
+      │          ^^^
+    2 │ import { RagError } from '../core/errors.ts';
+    3 │ import { resolveTarget } from '../api/target.js';
+  
+  i Unused imports might be the result of an incomplete refactoring.
+  
+  i Unsafe fix: Remove the unused imports.
+  
+    1 │ import·{·REG,·portsOf·}·from·'../components/registry.js';
+      │          -----                                           
+
+pkg/ragjs/src/graph/graph.js:1:1 assist/source/organizeImports  FIXABLE  ━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  × Some imports or exports are not organized.
+  
+    > 1 │ import { references, rewriteReferences, outputReferences } from './references.ts';
+        │ ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    > 2 │ import { accepts, optArgs, portsOf, REG } from '../components/registry.js';
+    > 3 │ import { RagError } from '../core/errors.ts';
+    > 4 │ import { slug } from '../core/identity.ts';
+         ...
+  > 964 │   whenSkipOutput,
+  > 965 │   withMethods,
+  > 966 │ };
+        │ ^^
+    967 │ 
+  
+  i Sort these imports.
+  
+   > 1 │ import { references, rewriteReferences, outputReferences } from './references.ts';
+       │ ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+   > 2 │ import { accepts, optArgs, portsOf, REG } from '../components/registry.js';
+   > 3 │ import { RagError } from '../core/errors.ts';
+   > 4 │ import { slug } from '../core/identity.ts';
+   > 5 │ import { checkLambda, lam, signalReads } from '../core/lambda.js';
+   > 6 │ import { arr, clone, hash, isBake, isLambda, isObj, now, setPath, uniq } from '../core/util.js';
+   > 7 │ import { answerLine } from '../engine/decision.js';
+   > 8 │ import { timed } from '../engine/environment.js';
+       │ ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+     9 │ 
+    10 │ function rag_bake(bindings, f) {
+  
+  i Sort the exported names.
+  
+    947 │ }
+    948 │ 
+  > 949 │ export {
+        │ ^^^^^^^^
+  > 950 │   projectLexical,
+         ...
+  > 964 │   whenSkipOutput,
+  > 965 │   withMethods,
+  > 966 │ };
+        │ ^^
+    967 │ 
+  
+  i Safe fix: Organize imports and exports (Biome)
+  
+      1     │ - import·{·references,·rewriteReferences,·outputReferences·}·from·'./references.ts';
+      2     │ - import·{·accepts,·optArgs,·portsOf,·REG·}·from·'../components/registry.js';
+      3     │ - import·{·RagError·}·from·'../core/errors.ts';
+      4     │ - import·{·slug·}·from·'../core/identity.ts';
+      5     │ - import·{·checkLambda,·lam,·signalReads·}·from·'../core/lambda.js';
+      6     │ - import·{·arr,·clone,·hash,·isBake,·isLambda,·isObj,·now,·setPath,·uniq·}·from·'../core/util.js';
+      7     │ - import·{·answerLine·}·from·'../engine/decision.js';
+      8     │ - import·{·timed·}·from·'../engine/environment.js';
+          1 │ + import·{·accepts,·optArgs,·portsOf,·REG·}·from·'../components/registry.js';
+          2 │ + import·{·RagError·}·from·'../core/errors.ts';
+          3 │ + import·{·slug·}·from·'../core/identity.ts';
+          4 │ + import·{·checkLambda,·lam,·signalReads·}·from·'../core/lambda.js';
+          5 │ + import·{·arr,·clone,·hash,·isBake,·isLambda,·isObj,·now,·setPath,·uniq·}·from·'../core/util.js';
+          6 │ + import·{·answerLine·}·from·'../engine/decision.js';
+          7 │ + import·{·timed·}·from·'../engine/environment.js';
+          8 │ + import·{·outputReferences,·references,·rewriteReferences·}·from·'./references.ts';
+      9   9 │   
+     10  10 │   function rag_bake(bindings, f) {
+    ······· │ 
+    948 948 │   
+    949 949 │   export {
+    950     │ - ··projectLexical,
+    951     │ - ··applyOps,
+        950 │ + ··applyOps,
+    952 951 │     CorpusSpec,
+    953 952 │     compile,
+    ······· │ 
+    959 958 │     makePlan,
+    960 959 │     normalize,
+    961     │ - ··rag_bake,
+        960 │ + ··projectLexical,
+        961 │ + ··rag_bake,
+    962 962 │     triggerOf,
+    963 963 │     whenHolds,
+  
+
+Checked 38 files in 38ms. No fixes applied.
+Found 7 errors.
+check ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  × Some errors were emitted while running checks.
+  
+
+ ELIFECYCLE  Command failed with exit code 1.
+ ELIFECYCLE  Command failed with exit code 1.

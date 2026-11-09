@@ -818,3 +818,54 @@ Start with engine/dataset.ts, engine/engine.js and session.js; follow native own
 
 ### Technical details
 Public record IDs encode `[datasetDigest, localID]` as canonical JSON. Bare IDs are rejected. Two generations per graph slot are retained for subsequent HTTP lookup; active query leases extend resource lifetime independently. Runtime shutdown reports a timeout after five seconds if workers remain and retains their resources until actual exit.
+
+## Step 17: Close lifecycle gaps and validate the integrated architecture
+
+The consolidated Go suite passed after the dataset and publication fixes. Additional focused regressions exercised the architecture's lifetime boundaries, rather than checking only individual helper functions. The implementation now has migration examples and explicitly records where the final API differs from the original sketches.
+
+### Prompt Context
+See Step 13. Previous checkpoint: `ca771cb` — qualified records, retained snapshots and runtime resource integration.
+
+### What I did
+- Replaced the temporary unpublished-output grace period with explicit store build leases. GC refuses collection while a build assembles outputs; released generations become immediately collectable.
+- Added transitive-dependency and exact post-pin-release GC assertions, closed-store refusal, payload-tree synchronization and current-pointer slot validation.
+- Added named live decision bindings to graph visitation and memo dependencies, included artifact dependencies in build digests, and rejected undeclared build dataset reads.
+- Made ordinary referenced-node removal refuse implicit rewiring; migrated intentional removals to explicit `bypass: true`.
+- Added tests for shared waiter cancellation, suspended queries across three refreshes, detached result survival, source reversion, deterministic Pi fallback and provider failure surviving worker cleanup.
+- Added real TCP stalled-reader and unsupported-deadline tests, bounded final stream draining and JSON operation writes, and race checks for server/store/runtime ownership.
+- Wrote reference/08 with concrete migration examples and linked it from the original guide.
+
+### Why
+A grace interval is not an ownership rule. Cached data is not the selected publication. A callback dependency must affect scheduling, rename and memoization together. A terminal response must remain bounded even when queued events precede it.
+
+### What worked
+- `go test ./...` passed, including the vault parity fixtures; runner took 140.384s and ragjs 101.313s in the consolidated run.
+- `pnpm check` passed with TypeScript, Biome, generated-asset checking and the browser regressions. Thirteen browser cases now cover the integrated runtime contracts.
+- `go test -race ./pkg/server ./pkg/rtenv ./pkg/artifacts` passed (15.634s, 1.023s and 1.403s respectively).
+- `go build ./...` and `make lint` passed at the integration boundary. Final dependency/export edits receive focused boundary rechecks rather than another complete run.
+- The real stalled socket test returned from the response pump and admitted the next request. Delayed-worker shutdown retained its native resource until actual worker exit.
+
+### What didn't work
+- The first new source-reversion browser test returned zero hits instead of one. Checking only memo presence allowed a cached older version to remain unpublished. Freshness now compares against the selected snapshot's captured digests.
+- The migrated markdown parity normalizer initially attempted JSON parsing on nested metadata IDs (`invalid character 'i' looking for beginning of value`). It now decodes only qualified record IDs, leaving unrelated metadata intact.
+- Sandbox command startup temporarily stalled even for `pwd`; interrupted those sessions and used approved escalation to continue workspace work. No test failure was attributed to that environment behavior.
+
+### What I learned
+Ownership, identity and publication are independent dimensions. Keeping them explicit made the integration failures diagnosable without adding compatibility branches. The same dependency declaration must feed both graph structure and caching identity.
+
+### What was tricky to build
+The generation can legitimately move back to previously cached content. Publication must both promote that retained generation and invalidate session memo state against its identity. During HTTP transport, the terminal queue drain needs a fixed end deadline in addition to the timeout for each individual write.
+
+### What warrants a second pair of eyes
+Review cross-slot snapshot identity, store build-lease exclusion, shutdown-time native adoption/closure, and the distinction between local build record IDs and qualified query IDs. Power-loss fault injection and production load testing were not performed; corpus parity timings are not a production benchmark.
+
+### What should be done in the future
+Use the migration reference for application updates. No pre-refactor execution of every new regression is claimed: the preserved first consolidated run is an integration failure baseline. Review the implementation as a whole before deployment.
+
+### Code review instructions
+Read reference/08 first, then the regression cases in scripts/runtime.test.mjs, pkg/server/response_lifecycle_test.go, pkg/rtenv/resources_test.go and pkg/artifacts/snapshot_test.go. Original failing output and passing consolidated/focused results are retained in sources/implementation.
+
+### Technical details
+Two recent snapshots per graph slot are available for later lookups. Snapshot keys incorporate graph slot and captured node digests. SSE ordinary events are limited to 1 MiB, terminal/JSON responses to 32 MiB, coalesced text to 64 KiB, and socket writes/final draining to five seconds. There are no backward-compatibility adapters.
+
+Final verification addendum: the last focused Go checks passed for server, runtime resources, artifacts and Pi selection; the final frontend gate passed all 13 browser cases; `make lint` passed again. `docmgr doctor --ticket RAGWB-009 --stale-after 30` reports missing frontmatter in the pre-existing archived writing-experiment prompts, skill references and writer drafts under scripts/. Those are experiment artifacts, not newly authored ticket documents; their contents were preserved. The implementation reference is validated separately below.

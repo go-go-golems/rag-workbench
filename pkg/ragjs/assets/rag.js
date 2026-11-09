@@ -480,6 +480,15 @@ var __ragModule = (() => {
       } else for (const child of Object.values(object)) visit(child);
     }, "visit");
     visit(node.p);
+    const decisions = node.p.decisions;
+    for (const [name, target] of Object.entries(decisions || {}))
+      refs.push({
+        kind: "decision",
+        target,
+        set(value) {
+          if (decisions) decisions[name] = value;
+        }
+      });
     const when = node.when;
     if (when?.decision) {
       const split = when.decision.indexOf(".");
@@ -973,6 +982,8 @@ var __ragModule = (() => {
           problems.push(
             `${n.id}: uses '${u}', which does not exist${u.startsWith("ix-") ? ` (indexes: ${nodes.filter((x) => x.id.startsWith("ix-")).map((x) => x.id.slice(3)).join(", ") || "none"})` : ""}`
           );
+        else if (byId.get(u).phase !== "build")
+          problems.push(`${n.id}: artifact '${u}' must be a build output`);
         else edges.push([u, n.id, "artifact"]);
       }
       if (n.when) {
@@ -981,13 +992,14 @@ var __ragModule = (() => {
           const err = checkLambda(n.when, `${n.id}.when`);
           if (err) problems.push(err);
         }
-        for (const r of refs.filter((r2) => r2.kind === "decision").map((r2) => r2.target)) {
-          const from = byId.get(r);
-          if (!from) problems.push(`${n.id}: when reads decision '${r}', which does not exist`);
-          else if (from.t === "signal" || portsOf(from).out !== "decision")
-            problems.push(`${n.id}: when reads '${r}', which is not a decision node (classify)`);
-          else edges.push([r, n.id, "decision"]);
-        }
+      }
+      for (const r of refs.filter((r2) => r2.kind === "decision").map((r2) => r2.target)) {
+        if (def.phase !== "live") problems.push(`${n.id}: build nodes cannot read decisions`);
+        const from = byId.get(r);
+        if (!from) problems.push(`${n.id}: when reads decision '${r}', which does not exist`);
+        else if (from.t === "signal" || portsOf(from).out !== "decision")
+          problems.push(`${n.id}: when reads '${r}', which is not a decision node (classify)`);
+        else edges.push([r, n.id, "decision"]);
       }
       const reads = new Set(def.reads ? def.reads(n.p) : []);
       const walk = /* @__PURE__ */ __name((v, key) => {
@@ -1327,6 +1339,10 @@ var __ragModule = (() => {
         if (users.length)
           throw new Error(
             `'${n.id}' is used by ${users.map((u) => u.id).join(", ")}; remove those first`
+          );
+        if (!op.bypass && (consumers(n.id).length || Object.values(raw.outputs).includes(n.id)))
+          throw new Error(
+            `'${n.id}' is referenced; rewire consumers first or explicitly request bypass`
           );
         for (const c of consumers(n.id)) {
           const variadic = (portsOf(c).in[0] || "") === "hits*";
@@ -3144,7 +3160,13 @@ Question: ${s.q}`;
               continue;
             }
           }
-          const nd = hash([n.t, n.p, n.trigger, def.src || ""]);
+          const nd = hash([
+            n.t,
+            n.p,
+            n.trigger,
+            def.src || "",
+            Object.values(n.p.decisions || {}).map((id) => outputs[id])
+          ]);
           const wants = trigger === "submit" || triggerOf(n) === "change";
           const m = this.memo.get(n.id);
           const sameInputs = m && m.inputs.length === inputs.length && m.inputs.every((v, i) => v === inputs[i]);
@@ -3291,11 +3313,11 @@ Question: ${s.q}`;
         node: n,
         sample: emit ? eventSample(sample, n.id, emit) : sample,
         decide: decider ? emit ? eventDecide(decider, n.id, emit) : decider : makeDecide(null),
-        // a classify node's answers in this run (null if it did not run): RAGWB-007 §3.3
-        decision: /* @__PURE__ */ __name((id) => {
-          const v = outputs ? outputs[String(id)] : null;
-          return v && v.$decision ? v : null;
-        }, "decision"),
+        decisions: Object.freeze(
+          Object.fromEntries(
+            Object.entries(n.p.decisions || {}).map(([name, id]) => [name, outputs?.[id] || null])
+          )
+        ),
         signal: opts.signal,
         signals: Object.freeze({ ...s }),
         synonyms: art.synonyms,
@@ -3489,7 +3511,10 @@ Question: ${s.q}`;
           extra = this.files().map((f) => this.fileDigest(f)).join(",");
         else if (def && typeof def.digest === "function") extra = String(def.digest(n.p, this) || "");
         const src = def && def.src ? [def.src] : [];
-        out.set(n.id, hash([n.t, n.p, n.in.map((i) => out.get(i) || i), extra, ...src]));
+        out.set(
+          n.id,
+          hash([n.t, n.p, [...n.in, ...n.uses || []].map((i) => out.get(i) || i), extra, ...src])
+        );
       }
       return out;
     }
@@ -3506,7 +3531,7 @@ Question: ${s.q}`;
         if (n.t === "source.files") extra = null;
         else if (def && typeof def.lineage === "function") extra = String(def.lineage(n.p, this));
         else if (def && typeof def.digest === "function") extra = null;
-        const ins = n.in.map((i) => out.get(i));
+        const ins = [...n.in, ...n.uses || []].map((i) => out.get(i));
         out.set(
           n.id,
           extra === null || ins.some((x) => x === null) ? null : hash(["lineage", n.t, n.p, ins, extra, ...def && def.src ? [def.src] : []])
@@ -3516,7 +3541,8 @@ Question: ${s.q}`;
     }
     dirty(ir) {
       const d = this.digests(ir);
-      return [...d].filter(([, dg]) => !this.memo.has(dg)).map(([id]) => id);
+      const current = this.artifacts(ir)?.byId.digests;
+      return [...d].filter(([id, digest]) => !this.memo.has(digest) || current?.get(id) !== digest).map(([id]) => id);
     }
     // build nodes whose items still wait for Claude calls (deferred), with how many
     pending(ir) {
@@ -3571,7 +3597,15 @@ Question: ${s.q}`;
       const slot = this.slotKey(ir);
       const previous = this.publication.get(slot) || Promise.resolve();
       const next = previous.catch(() => {
-      }).then(() => this.buildCandidate(ir, opts));
+      }).then(async () => {
+        if (opts.signal?.aborted) throw new RagError("cancelled", "build cancelled");
+        const release = this.env.artifacts?.beginBuild?.();
+        try {
+          return await this.buildCandidate(ir, opts);
+        } finally {
+          release?.();
+        }
+      });
       this.publication.set(slot, next);
       try {
         return await next;
@@ -3835,6 +3869,10 @@ Question: ${s.q}`;
             }
           }
       }
+      if (opts.signal?.aborted) {
+        report.ok = false;
+        report.errors.push("build cancelled before publication");
+      }
       const complete = report.ok && [...dg.values()].every((digest) => this.memo.has(digest));
       if (complete) {
         const snapshot = this.makeArtifacts(ir, dg);
@@ -3842,7 +3880,7 @@ Question: ${s.q}`;
         const slot = this.slotKey(ir);
         try {
           if (this.env.artifacts?.publish)
-            this.env.artifacts.publish(slot, hash([...dg]), snapshot.storeKeys);
+            this.env.artifacts.publish(slot, snapshot.key, snapshot.storeKeys);
         } catch (error) {
           release();
           throw error;
@@ -3984,6 +4022,8 @@ Question: ${s.q}`;
     }
     buildCtx(n, ir, outputs, counter, signal) {
       const dataset2 = /* @__PURE__ */ __name((id) => {
+        if (![...n.in, ...n.uses || []].includes(id))
+          throw new RagError("dataset", `${n.id}: undeclared dataset dependency '${id}'`);
         const value = this.inputDataset(id, outputs, ir);
         if (!value?.materialize) throw new RagError("dataset", `${id} is not a dataset`);
         return value;
@@ -4065,7 +4105,7 @@ Question: ${s.q}`;
       const got = /* @__PURE__ */ __name((d) => this.memo.get(d) || this.partial.get(d), "got");
       const missing = [...dg].filter(([, d]) => !got(d)).map(([id]) => id);
       if (missing.length) return null;
-      const key = [...dg.values()].map((d) => d + (this.memo.has(d) ? "" : "~")).join(",");
+      const key = hash([this.slotKey(ir), [...dg]]);
       if (this._art && this._art.key === key) return this._art;
       const tArt = now();
       const byId = new Outputs();
@@ -4829,7 +4869,7 @@ ${clip(c.text, 1500)}`
   // pkg/ragjs/src/export/html.js
   async function exportHtml(target, opts = {}) {
     const { ir, engine } = resolveTarget(target);
-    if (!engine.artifacts(ir)) {
+    if (!engine.artifacts(ir) || engine.dirty(ir).length) {
       const report = await engine.buildShared(ir);
       if (!report.ok) throw new RagError("export", report.errors.join("; "));
     }
@@ -4854,7 +4894,6 @@ ${clip(c.text, 1500)}`
       release();
     }
     const src = engine.env.librarySource ? await engine.env.librarySource() : "";
-    const files = engine.files().map((f) => ({ name: f.name, text: f.text }));
     const title = opts.title || ir.id;
     const esc = /* @__PURE__ */ __name((s) => String(s).replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" })[c]), "esc");
     const json = /* @__PURE__ */ __name((s) => JSON.stringify(s).replace(/</g, "\\u003c"), "json");
@@ -4866,8 +4905,7 @@ h1{font-size:20px;margin:0 0 12px}input{width:100%;box-sizing:border-box;font:15
 <body><main><h1>${esc(title)}</h1><input id="q" placeholder="Search…" autofocus><div id="out"></div></main>
 <script>${src.replace(/<\/script/gi, "<\\/script")}</script>
 <script>
-const files=${json(files)}, ir=rag.ir(${json(pruned)});
-rag.configure({ files: () => files });
+const ir=rag.ir(${json(pruned)});
 const ws = rag.workspace(ir), out = document.getElementById('out'), q = document.getElementById('q');
 const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'})[c]);
 let t; q.addEventListener('input', () => { clearTimeout(t); t = setTimeout(go, 150); });

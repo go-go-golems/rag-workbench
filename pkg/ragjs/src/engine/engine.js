@@ -69,7 +69,10 @@ class Engine {
       // same params) invalidates the node and, through the input digests, everything downstream.
       // Built-in components have no src, so their digests are unchanged.
       const src = def && def.src ? [def.src] : [];
-      out.set(n.id, hash([n.t, n.p, n.in.map((i) => out.get(i) || i), extra, ...src]));
+      out.set(
+        n.id,
+        hash([n.t, n.p, [...n.in, ...(n.uses || [])].map((i) => out.get(i) || i), extra, ...src]),
+      );
     }
     return out;
   }
@@ -86,7 +89,7 @@ class Engine {
       if (n.t === 'source.files') extra = null;
       else if (def && typeof def.lineage === 'function') extra = String(def.lineage(n.p, this));
       else if (def && typeof def.digest === 'function') extra = null;
-      const ins = n.in.map((i) => out.get(i));
+      const ins = [...n.in, ...(n.uses || [])].map((i) => out.get(i));
       out.set(
         n.id,
         extra === null || ins.some((x) => x === null)
@@ -98,7 +101,10 @@ class Engine {
   }
   dirty(ir) {
     const d = this.digests(ir);
-    return [...d].filter(([, dg]) => !this.memo.has(dg)).map(([id]) => id);
+    const current = this.artifacts(ir)?.byId.digests;
+    return [...d]
+      .filter(([id, digest]) => !this.memo.has(digest) || current?.get(id) !== digest)
+      .map(([id]) => id);
   }
   // build nodes whose items still wait for Claude calls (deferred), with how many
   pending(ir) {
@@ -154,7 +160,17 @@ class Engine {
     ir = compile(ir);
     const slot = this.slotKey(ir);
     const previous = this.publication.get(slot) || Promise.resolve();
-    const next = previous.catch(() => {}).then(() => this.buildCandidate(ir, opts));
+    const next = previous
+      .catch(() => {})
+      .then(async () => {
+        if (opts.signal?.aborted) throw new RagError('cancelled', 'build cancelled');
+        const release = this.env.artifacts?.beginBuild?.();
+        try {
+          return await this.buildCandidate(ir, opts);
+        } finally {
+          release?.();
+        }
+      });
     this.publication.set(slot, next);
     try {
       return await next;
@@ -441,6 +457,10 @@ class Engine {
             report.errors.push(`${n.id}: ${e.message}`);
           }
         }
+    if (opts.signal?.aborted) {
+      report.ok = false;
+      report.errors.push('build cancelled before publication');
+    }
     const complete = report.ok && [...dg.values()].every((digest) => this.memo.has(digest));
     if (complete) {
       // Validate and retain the candidate before changing either publication pointer.
@@ -449,7 +469,7 @@ class Engine {
       const slot = this.slotKey(ir);
       try {
         if (this.env.artifacts?.publish)
-          this.env.artifacts.publish(slot, hash([...dg]), snapshot.storeKeys);
+          this.env.artifacts.publish(slot, snapshot.key, snapshot.storeKeys);
       } catch (error) {
         release();
         throw error;
@@ -602,6 +622,8 @@ class Engine {
   }
   buildCtx(n, ir, outputs, counter, signal) {
     const dataset = (id) => {
+      if (![...n.in, ...(n.uses || [])].includes(id))
+        throw new RagError('dataset', `${n.id}: undeclared dataset dependency '${id}'`);
       const value = this.inputDataset(id, outputs, ir);
       if (!value?.materialize) throw new RagError('dataset', `${id} is not a dataset`);
       return value;
@@ -685,7 +707,7 @@ class Engine {
     const got = (d) => this.memo.get(d) || this.partial.get(d);
     const missing = [...dg].filter(([, d]) => !got(d)).map(([id]) => id);
     if (missing.length) return null;
-    const key = [...dg.values()].map((d) => d + (this.memo.has(d) ? '' : '~')).join(',');
+    const key = hash([this.slotKey(ir), [...dg]]);
     if (this._art && this._art.key === key) return this._art;
     const tArt = now();
     const byId = new Outputs();

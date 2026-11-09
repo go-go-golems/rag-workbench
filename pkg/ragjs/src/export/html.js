@@ -5,7 +5,7 @@ import { applyOps, projectLexical } from '../graph/graph.js';
 
 async function exportHtml(target, opts = {}) {
   const { ir, engine } = resolveTarget(target);
-  if (!engine.artifacts(ir)) {
+  if (!engine.artifacts(ir) || engine.dirty(ir).length) {
     const report = await engine.buildShared(ir);
     if (!report.ok) throw new RagError('export', report.errors.join('; '));
   }
@@ -35,7 +35,6 @@ async function exportHtml(target, opts = {}) {
     release();
   }
   const src = engine.env.librarySource ? await engine.env.librarySource() : '';
-  const files = engine.files().map((f) => ({ name: f.name, text: f.text }));
   const title = opts.title || ir.id;
   const esc = (s) =>
     String(s).replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' })[c]);
@@ -48,8 +47,7 @@ h1{font-size:20px;margin:0 0 12px}input{width:100%;box-sizing:border-box;font:15
 <body><main><h1>${esc(title)}</h1><input id="q" placeholder="Search…" autofocus><div id="out"></div></main>
 <script>${src.replace(/<\/script/gi, '<\\/script')}<\/script>
 <script>
-const files=${json(files)}, ir=rag.ir(${json(pruned)});
-rag.configure({ files: () => files });
+const ir=rag.ir(${json(pruned)});
 const ws = rag.workspace(ir), out = document.getElementById('out'), q = document.getElementById('q');
 const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'})[c]);
 let t; q.addEventListener('input', () => { clearTimeout(t); t = setTimeout(go, 150); });

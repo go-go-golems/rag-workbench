@@ -2,6 +2,7 @@ package runner
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -121,4 +122,23 @@ func toStrings(v any) []string {
 		out = append(out, x.(string))
 	}
 	return out
+}
+
+type failingRanker struct{ bowEmbedder }
+
+func (*failingRanker) Rerank(context.Context, string, string, []string, int) ([]llm.RerankResult, error) {
+	return nil, errors.New("deliberate provider failure")
+}
+func TestRerankFailureSurvivesWorkerCleanup(t *testing.T) {
+	out := runVectorScript(t, &failingRanker{}, nil, `(async()=>{
+ const rag=require("ragwb");
+ const c=rag.corpus("failure").from(rag.source.dir({root:ROOT,include:["*.md"]})).parse().chunk(rag.sections()).index("text",rag.bm25());
+ const p=rag.plan("failure").over(c).signals({q:"rebalance law"}).retrieve("text").rerank.model();
+ const result=await rag.run(p);
+ return JSON.stringify({errors:result.errors});
+ })()`)
+	failures := strings.Join(toStrings(out["errors"]), " ")
+	if !strings.Contains(failures, "deliberate provider failure") || strings.Contains(failures, "cancelled") {
+		t.Fatalf("terminal outcome: %s", failures)
+	}
 }

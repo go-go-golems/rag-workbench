@@ -245,3 +245,26 @@ func TestSampleWithdrawsLeakedMarkup(t *testing.T) {
 		t.Fatalf("no correction: %q", log.texts)
 	}
 }
+
+func TestPreferredFallbackWithoutEnabledList(t *testing.T) {
+	b, _ := setup(t, Config{})
+	b.dir.Settings.EnabledModels = nil
+	b.dir.Settings.DefaultProvider = "missing"
+	b.dir.Settings.DefaultModel = "missing"
+	eligible := b.eligible()
+	if len(eligible) < 2 {
+		t.Fatal("fixture needs multiple authenticated models")
+	}
+	want := ""
+	for ref := range eligible {
+		if want == "" || ref < want {
+			want = ref
+		}
+	}
+	for i := 0; i < 30; i++ {
+		model, ok := b.preferred(eligible)
+		if !ok || model.Ref() != want {
+			t.Fatalf("fallback=%s %v, want %s", model.Ref(), ok, want)
+		}
+	}
+}

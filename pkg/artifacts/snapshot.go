@@ -139,7 +139,7 @@ func (s *Store) snapshots() ([]Snapshot, map[string]bool, error) {
 		if err = json.Unmarshal(b, &item); err != nil {
 			return nil, nil, err
 		}
-		if !keyRE.MatchString(item.ID) || filepath.Base(p) != item.ID+".json" {
+		if !keyRE.MatchString(item.ID) || !keyRE.MatchString(item.Slot) || filepath.Base(p) != item.ID+".json" {
 			return nil, nil, errors.New("invalid snapshot identity")
 		}
 		list = append(list, item)
@@ -161,7 +161,7 @@ func (s *Store) snapshots() ([]Snapshot, map[string]bool, error) {
 		}
 		found := false
 		for _, snap := range list {
-			if snap.ID == item.Snapshot {
+			if snap.ID == item.Snapshot && filepath.Base(p) == snap.Slot+".json" {
 				found = true
 			}
 		}
@@ -172,4 +172,24 @@ func (s *Store) snapshots() ([]Snapshot, map[string]bool, error) {
 	}
 	sort.Slice(list, func(i, j int) bool { return list[i].Created.After(list[j].Created) })
 	return list, current, nil
+}
+
+// BeginBuild excludes collection while unpublished outputs are being assembled.
+// The namespace owner is the only process allowed to build or collect.
+func (s *Store) BeginBuild() (func(), error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.lock == nil {
+		return nil, errors.New("store is closed")
+	}
+	s.builds++
+	released := false
+	return func() {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		if !released {
+			released = true
+			s.builds--
+		}
+	}, nil
 }

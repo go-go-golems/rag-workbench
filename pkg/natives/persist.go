@@ -63,6 +63,17 @@ func (p Persist) InstallEnv(vm *goja.Runtime, rag *goja.Object, env rtenv.Env) e
 		return fmt.Errorf("artifacts: JSON is not available")
 	}
 	a := vm.NewObject()
+	_ = a.Set("beginBuild", func() func() {
+		release, err := p.Store.BeginBuild()
+		if err != nil {
+			panic(vm.NewGoError(err))
+		}
+		managed, err := env.Resources.Lease(release)
+		if err != nil {
+			panic(vm.NewGoError(err))
+		}
+		return managed
+	})
 	_ = a.Set("describe", func(key, lineage string, deps []string) {
 		if err := p.Store.Describe(key, lineage, deps); err != nil {
 			panic(vm.NewGoError(err))

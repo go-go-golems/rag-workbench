@@ -162,7 +162,13 @@ class Session {
             continue;
           }
         }
-        const nd = hash([n.t, n.p, n.trigger, def.src || '']); // a redefined live component reruns
+        const nd = hash([
+          n.t,
+          n.p,
+          n.trigger,
+          def.src || '',
+          Object.values(n.p.decisions || {}).map((id) => outputs[id]),
+        ]); // a redefined live component reruns
         const wants = trigger === 'submit' || triggerOf(n) === 'change';
         const m = this.memo.get(n.id);
         const sameInputs =
@@ -316,11 +322,11 @@ class Session {
       node: n,
       sample: emit ? eventSample(sample, n.id, emit) : sample,
       decide: decider ? (emit ? eventDecide(decider, n.id, emit) : decider) : makeDecide(null),
-      // a classify node's answers in this run (null if it did not run): RAGWB-007 §3.3
-      decision: (id) => {
-        const v = outputs ? outputs[String(id)] : null;
-        return v && v.$decision ? v : null;
-      },
+      decisions: Object.freeze(
+        Object.fromEntries(
+          Object.entries(n.p.decisions || {}).map(([name, id]) => [name, outputs?.[id] || null]),
+        ),
+      ),
       signal: opts.signal,
       signals: Object.freeze({ ...s }),
       synonyms: art.synonyms,

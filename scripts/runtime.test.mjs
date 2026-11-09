@@ -258,3 +258,72 @@ test('named bake datasets are immutable and changed equal-sized content invalida
   assert.notEqual(got.first, got.second);
   assert.match(got.second, /BBBB/);
 });
+
+test('shared build cancellation detaches one waiter and not the remaining owner', async () => {
+  const context = runtime();
+  const result = await vm.runInContext(
+    `(async()=>{
+    let calls=0, finish;
+    rag.define('source.wait',{phase:'build',in:[],out:'files',persist:false,
+      all:async()=>{calls++;await new Promise(resolve=>{finish=resolve});return [{name:'x.md',text:'# X\\n\\nshared work'}]}});
+    const corpus=rag.corpus('shared').from(rag.source.wait()).parse().chunk(rag.sections());
+    const ir=rag.compile(corpus),engine=rag.engine();
+    const a=rag.newScope(()=>{}),b=rag.newScope(()=>{});
+    const first=engine.buildShared(ir,{signal:a.signal}).catch(e=>e.code);
+    const second=engine.buildShared(ir,{signal:b.signal});
+    while(!finish) await Promise.resolve();
+    a.abort(); finish();
+    return JSON.stringify({first:await first,second:(await second).ok,calls});
+  })()`,
+    context,
+  );
+  assert.deepEqual(JSON.parse(result), { first: 'cancelled', second: true, calls: 1 });
+});
+
+test('detached results survive multiple refreshes and reverting a source selects the earlier generation', async () => {
+  const context = runtime();
+  const output = await vm.runInContext(
+    `(async()=>{
+    let text='# Note\\n\\napples';
+    rag.configure({files:()=>[{name:'note.md',text}]});
+    const c=rag.corpus('refresh').from(rag.files()).parse().chunk(rag.sections()).index('text',rag.bm25());
+    const p=rag.plan('refresh').over(c).signals({q:'apples'}).retrieve('text');
+    const a=await rag.run(p), bytes=JSON.stringify(a.records);
+    for(const word of ['bananas','cherries','apples']){text='# Note\\n\\n'+word;await rag.run(p);}
+    const current=await rag.run(p);
+    return JSON.stringify({stable:bytes===JSON.stringify(a.records),oldText:a.chunk(a.hits[0].id).text,current:current.hits.length});
+  })()`,
+    context,
+  );
+  const got = JSON.parse(output);
+  assert.equal(got.stable, true);
+  assert.match(got.oldText, /apples/);
+  assert.equal(got.current, 1);
+});
+
+test('an awaiting query keeps its original snapshot across three refreshes', async () => {
+  const context = runtime();
+  const output = await vm.runInContext(
+    `(async()=>{
+    let text='# Note\\n\\napples original',resume,started;
+    const waiting=new Promise(resolve=>{started=resolve});
+    rag.configure({files:()=>[{name:'note.md',text}]});
+    rag.define('pause',{phase:'live',in:['hits'],out:'hits',run:async(s,ctx,hits)=>{
+      started();await new Promise(resolve=>{resume=resolve});
+      return hits.map(h=>({...h,reason:ctx.chunk(h.id).text}));
+    }});
+    const c=rag.corpus('lease').from(rag.files()).parse().chunk(rag.sections()).index('text',rag.bm25());
+    const p=rag.plan('lease').over(c).signals({q:'apples'}).retrieve('text').pause();
+    const pending=rag.run(p);await waiting;
+    const engine=rag.engine(),ir=rag.compile(p);
+    for(const word of ['bananas','cherries','dates']){text='# Note\\n\\n'+word;await engine.build(ir);engine.gc([ir]);}
+    resume();const result=await pending;
+    return JSON.stringify({reason:result.hits[0].reason,text:result.chunk(result.hits[0].id).text,active:engine.activeSnapshots.size});
+  })()`,
+    context,
+  );
+  const got = JSON.parse(output);
+  assert.match(got.reason, /apples original/);
+  assert.equal(got.reason, got.text);
+  assert.equal(got.active, 2); // retained generations; completed query released its lease
+});

@@ -730,7 +730,7 @@
           try { const r = await W.ws.apply(ops, { by: 'user' }); toast(`rev ${r.revision}: ${ops.length} op${ops.length > 1 ? 's' : ''}${r.dirty.length ? ' · rebuilding ' + r.dirty.join(', ') : ''}`, 'ok'); } catch (e) { toast(e.message, 'bad'); }
         } }, 'Apply'),
         n.phase === 'live' ? h('button', { type: 'button', class: 'btn tiny', onclick: () => W.ws.apply([{ op: 'trigger', node: n.id, value: rag.util.triggerOf(n) === 'submit' ? 'change' : 'submit' }]).catch(e => toast(e.message, 'bad')) }, rag.util.triggerOf(n) === 'submit' ? 'Run on every keystroke' : 'Run on Enter only') : null,
-        n.phase === 'live' ? h('button', { type: 'button', class: 'btn tiny bad', onclick: () => W.ws.apply([{ op: 'remove', node: n.id }]).then(() => { W.selectedNode = null; }).catch(e => toast(e.message, 'bad')) }, 'Remove') : null));
+        n.phase === 'live' ? h('button', { type: 'button', class: 'btn tiny bad', onclick: () => W.ws.apply([{ op: 'remove', bypass: true, node: n.id }]).then(() => { W.selectedNode = null; }).catch(e => toast(e.message, 'bad')) }, 'Remove') : null));
       for (const [k, v] of Object.entries(lams)) det.append(h('h5', { class: 'sec' }, `${k} · ${v.$bake ? 'bake' : n.phase === 'build' ? 'build λ' : 'live λ'}`), h('pre', { class: 'snip lam', text: v.$fn || v.$bake }));
     }
     if (b) det.append(h('h5', { class: 'sec' }, 'Last build'), h('div', { class: 'stats' },

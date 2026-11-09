@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/go-go-golems/rag-workbench/pkg/runner"
@@ -34,6 +35,7 @@ var (
 
 const sseQueue = 256
 const sseMaxEventBytes = 1 << 20
+const sseMaxResultBytes = 32 << 20
 const sseMaxTextBytes = 64 << 10
 
 // streamSink queues events for the pump. If the queue stays full (a client that
@@ -60,7 +62,11 @@ func (s *streamSink) Emit(e runner.Event) {
 	if s.observe != nil {
 		s.observe(e)
 	}
-	if len(e.Data) > sseMaxEventBytes {
+	limit := sseMaxEventBytes
+	if e.Type == "result" || e.Type == "error" {
+		limit = sseMaxResultBytes
+	}
+	if len(e.Data) > limit {
 		s.slow = true
 		s.cancel()
 		return
@@ -91,13 +97,14 @@ func (s *streamSink) close() {
 
 // sseWriter frames events on an http.ResponseWriter.
 type sseWriter struct {
-	w          http.ResponseWriter
-	controller *http.ResponseController
-	err        error
-	t0         time.Time
-	seq        int
-	filter     map[string]bool // nil = all; start/result/error always pass
-	count      int
+	drainDeadline atomic.Int64
+	w             http.ResponseWriter
+	controller    *http.ResponseController
+	err           error
+	t0            time.Time
+	seq           int
+	filter        map[string]bool // nil = all; start/result/error always pass
+	count         int
 }
 
 func newSSEWriter(w http.ResponseWriter, t0 time.Time, filter map[string]bool) (*sseWriter, error) {
@@ -116,7 +123,11 @@ func (s *sseWriter) send(frame string) error {
 	if s.err != nil {
 		return s.err
 	}
-	s.err = s.controller.SetWriteDeadline(time.Now().Add(sseWriteTimeout))
+	deadline := time.Now().Add(sseWriteTimeout)
+	if drain := s.drainDeadline.Load(); drain != 0 && time.Unix(0, drain).Before(deadline) {
+		deadline = time.Unix(0, drain)
+	}
+	s.err = s.controller.SetWriteDeadline(deadline)
 	if s.err == nil {
 		_, s.err = fmt.Fprint(s.w, frame)
 	}

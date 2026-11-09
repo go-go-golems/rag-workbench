@@ -10,7 +10,7 @@ const plan = rag.plan('llm').over(kit.reports())
   .filter.where()
   .rerank.llm({ top: 20, keep: s => s.k, tier: 'quick' });
 
-const lexical = plan.variant('lexical', [{ op: 'remove', node: 'rewrite' }, { op: 'remove', node: 'rerank' }]);
+const lexical = plan.variant('lexical', [{ op: 'remove', bypass: true, node: 'rewrite' }, { op: 'remove', bypass: true, node: 'rerank' }]);
 
 const ops = []; // end ops
 return { plan: plan.patch(ops), variants: [lexical], evals: kit.goldens(), app: kit.searchApp(plan, { title: 'Rewrite + rerank', answer: false }) };

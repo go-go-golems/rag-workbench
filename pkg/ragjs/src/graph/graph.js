@@ -475,6 +475,8 @@ function finalize(raw) {
               : ''
           }`,
         );
+      else if (byId.get(u).phase !== 'build')
+        problems.push(`${n.id}: artifact '${u}' must be a build output`);
       else edges.push([u, n.id, 'artifact']);
     }
     if (n.when) {
@@ -483,13 +485,14 @@ function finalize(raw) {
         const err = checkLambda(n.when, `${n.id}.when`);
         if (err) problems.push(err);
       }
-      for (const r of refs.filter((r) => r.kind === 'decision').map((r) => r.target)) {
-        const from = byId.get(r);
-        if (!from) problems.push(`${n.id}: when reads decision '${r}', which does not exist`);
-        else if (from.t === 'signal' || portsOf(from).out !== 'decision')
-          problems.push(`${n.id}: when reads '${r}', which is not a decision node (classify)`);
-        else edges.push([r, n.id, 'decision']);
-      }
+    }
+    for (const r of refs.filter((r) => r.kind === 'decision').map((r) => r.target)) {
+      if (def.phase !== 'live') problems.push(`${n.id}: build nodes cannot read decisions`);
+      const from = byId.get(r);
+      if (!from) problems.push(`${n.id}: when reads decision '${r}', which does not exist`);
+      else if (from.t === 'signal' || portsOf(from).out !== 'decision')
+        problems.push(`${n.id}: when reads '${r}', which is not a decision node (classify)`);
+      else edges.push([r, n.id, 'decision']);
     }
     const reads = new Set(def.reads ? def.reads(n.p) : []);
     const walk = (v, key) => {
@@ -856,6 +859,10 @@ function applyOp(raw, op) {
       if (users.length)
         throw new Error(
           `'${n.id}' is used by ${users.map((u) => u.id).join(', ')}; remove those first`,
+        );
+      if (!op.bypass && (consumers(n.id).length || Object.values(raw.outputs).includes(n.id)))
+        throw new Error(
+          `'${n.id}' is referenced; rewire consumers first or explicitly request bypass`,
         );
       for (const c of consumers(n.id)) {
         const variadic = (portsOf(c).in[0] || '') === 'hits*';

@@ -25,8 +25,8 @@ import (
 //	GET  /api/rag/{app}                 → {id, title, ir, app, build, stats}
 //	POST /api/rag/{app}/run             {signals, trigger} → {result, chunks, neighbors, packMs, timing}
 //	                                      Accept: text/event-stream: the run's events (sse.go), then event "result"
-//	GET  /api/rag/{app}/chunk?id=       → {chunks, neighbors}   (a cache miss in the shell)
-//	GET  /api/rag/{app}/doc?id=         → doc metadata | null
+//	GET  /api/rag/{app}/chunk?snapshotId=...&id= → {chunks, neighbors}   (a cache miss in the shell)
+//	GET  /api/rag/{app}/doc?snapshotId=...&id= → doc metadata | null
 //	GET  /api/rag/{app}/timings         → recorder entries since the app was opened
 //	GET  /api/rag/{app}/verbs           → the app's verbs and their parameters (RAGWB-004, verbs.go)
 //	POST /api/rag/{app}/verbs/{verb...} → run a verb: JSON, or SSE events (sse.go)
@@ -215,8 +215,7 @@ func (s *RagServer) handleLookup(kind string) func(http.ResponseWriter, *http.Re
 			writeErr(w, http.StatusInternalServerError, "lookup_failed", err.Error())
 			return
 		}
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = io.WriteString(w, out)
+		_ = writeOperationJSON(w, []byte(out))
 	}
 }
 
@@ -292,8 +291,7 @@ func (s *RagServer) handleRun(w http.ResponseWriter, r *http.Request, a *RagApp)
 	if stream {
 		_ = response.finish("result", []byte(`{"type":"result",`+strings.TrimPrefix(out, "{")))
 	} else {
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = io.WriteString(w, out)
+		_ = writeOperationJSON(w, []byte(out))
 	}
 	if s.Log != nil {
 		errs := ""

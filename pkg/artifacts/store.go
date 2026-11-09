@@ -21,6 +21,7 @@ import (
 	"regexp"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -48,11 +49,13 @@ const (
 
 // Store is one namespace of an artifact directory.
 type Store struct {
-	mu   sync.Mutex
-	lock *os.File
-	pins map[string]int
-	Dir  string // root of all namespaces
-	NS   string
+	closed atomic.Bool
+	builds int
+	mu     sync.Mutex
+	lock   *os.File
+	pins   map[string]int
+	Dir    string // root of all namespaces
+	NS     string
 }
 
 var keyRE = regexp.MustCompile(`^[0-9a-z]{1,64}$`)
@@ -81,6 +84,9 @@ func Open(dir, ns string) (*Store, error) {
 }
 
 func (s *Store) path(key, ext string) (string, error) {
+	if s.closed.Load() {
+		return "", fmt.Errorf("store is closed")
+	}
 	if !keyRE.MatchString(key) {
 		return "", fmt.Errorf("artifacts: invalid key %q", key)
 	}
@@ -178,6 +184,9 @@ func (s *Store) savePath(key, typ, codec string, count int, src, kind string) er
 			return err
 		}
 		_ = os.RemoveAll(src)
+	}
+	if err := syncPayload(dst); err != nil {
+		return err
 	}
 	size, err := pathSize(dst)
 	if err != nil {
@@ -352,9 +361,13 @@ func (s *Store) Close() error {
 	if s.lock == nil {
 		return nil
 	}
+	if s.builds > 0 {
+		return fmt.Errorf("cannot close store with active builds")
+	}
 	if len(s.pins) > 0 {
 		return fmt.Errorf("cannot close store with %d pinned artifacts", len(s.pins))
 	}
+	s.closed.Store(true)
 	err := unlockNamespace(s.lock)
 	s.lock = nil
 	return err
@@ -407,4 +420,46 @@ func copyTree(src, dst string) error {
 		}
 		return os.WriteFile(out, b, 0o644)
 	})
+}
+
+// Persist payload bytes and directory entries before publishing their descriptor.
+func syncPayload(root string) error {
+	var dirs []string
+	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() {
+			dirs = append(dirs, path)
+			return nil
+		}
+		file, err := os.Open(path)
+		if err != nil {
+			return err
+		}
+		syncErr := file.Sync()
+		closeErr := file.Close()
+		if syncErr != nil {
+			return syncErr
+		}
+		return closeErr
+	})
+	if err != nil {
+		return err
+	}
+	for i := len(dirs) - 1; i >= 0; i-- {
+		dir, err := os.Open(dirs[i])
+		if err != nil {
+			return err
+		}
+		syncErr := dir.Sync()
+		closeErr := dir.Close()
+		if syncErr != nil {
+			return syncErr
+		}
+		if closeErr != nil {
+			return closeErr
+		}
+	}
+	return nil
 }

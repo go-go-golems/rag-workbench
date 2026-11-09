@@ -38,7 +38,7 @@ const ask = rag.plan('ask').over(reports)
   .answer();
 
 // Variants are the plan with ops applied: the same edit language the agent uses.
-const lexical = ask.variant('lexical', [{ op: 'remove', node: 'rewrite' }, { op: 'remove', node: 'rerank' }]);
+const lexical = ask.variant('lexical', [{ op: 'remove', bypass: true, node: 'rewrite' }, { op: 'remove', bypass: true, node: 'rerank' }]);
 const agentic = rag.plan('agentic').over(reports).signals({ q: '', k: 8 }).agentic({ maxReads: 8 });
 
 // ── Goldens · hand-written cases with the section that should come back ────
