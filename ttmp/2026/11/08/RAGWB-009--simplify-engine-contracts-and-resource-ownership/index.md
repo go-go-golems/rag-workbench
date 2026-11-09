@@ -31,6 +31,14 @@ The design is based on commit `0854c6a` and maps twelve PR review findings to sy
 - [Implementation tasks](tasks.md)
 - [Changelog](changelog.md)
 
+## Writing experiment
+
+- [Comparison and recommendation](reference/02-intern-guide-writing-experiment-comparison.md)
+- [Fresh reading notes](reference/03-fresh-reading-notes-before-independent-code-inspection.md)
+- [Independent technical review](reference/04-independent-code-review-of-original-and-candidate-design-guides.md)
+- [Candidate A](design-doc/02-v2-intern-guide-candidate-a.md), [candidate B](design-doc/03-v2-intern-guide-candidate-b.md), [candidate C](design-doc/04-v2-intern-guide-candidate-c.md)
+- [Uninstalled candidate skill](scripts/01-intern-guide-experiment/candidate-skill/SKILL.md)
+
 ## Scope
 
 Unify dataset access and provenance, resource ownership and query snapshot lifetime, artifact inventory and collection, async operation cancellation, HTTP streaming, and graph transformations. Migrate JavaScript callbacks and result references directly. Delete superseded mechanisms instead of preserving parallel paths.

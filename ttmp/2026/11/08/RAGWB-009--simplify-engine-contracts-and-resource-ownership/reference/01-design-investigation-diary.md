@@ -180,3 +180,93 @@ Start with the candidate writing-style diff, shared context packet and evaluatio
 ### Technical details
 
 Requested writer configuration: `gpt-6.1-sol`, reasoning `medium`, `fork_turns=none`; identical instructions with only output path differing. Planned outputs: design-doc candidates A/B/C and reference comparison report. The original guide and installed skills are read-only inputs.
+
+## Step 5: Compare complete drafts, then independently inspect the code
+
+All three Sol-medium writers completed their independent guides. Preserved their bytes and recorded hashes rather than editing their outputs to improve the experiment's result. After compaction, the user requested a fresh full reread, an initial set of review notes, and independent code inspection. Read the original and all three drafts again in full, saved the first notes, then inspected the implementation and ran bounded local probes.
+
+The comparison favors B for continuous explanatory prose, A for implementation navigation and C for concision. All three improve causal explanation, but the code review found shared specification ambiguities and an inaccurate success claim in C's rename explanation. The result is a comparison plus separate technical review, not an installed skill or a replacement design.
+
+### Prompt Context
+
+**Earlier authorization:** see Step 4.
+
+**User prompts (verbatim):**
+
+> after you copmared the 3 resulting documents, stop and let me know
+
+> yes, compare writing quality across the entire doc
+
+> after compaction, read the docs again (design doc, subagent docs, then read them (fresh, since we compacteed) and understand what they are about. Write your first set of review notes. Then do your own analysis of the codebase to not just validate how well the docs explained the setup, but if they are correct or not, and what needs addressing in terms of clarity or so.
+
+**Assistant interpretation:** Compare every section, preserve first reading judgments before independent source review, distinguish readability from correctness, then report and stop.
+
+**Inferred user intent:** Establish whether the candidate guidance produces an understandable and technically trustworthy implementation guide, rather than just a polished restatement of inherited claims.
+
+**Commits:** `1928e49` — setup, frozen skill/context/evaluation protocol; `fe227fc` — unchanged writer outputs, draft hashes and fresh pre-inspection reading notes. Final comparison, source review and diary are committed together after validation.
+
+### What I did
+
+- Received A (7,561 words), B (7,126) and C (6,852), compared with the original (6,161), including frontmatter. Counts describe size, not quality.
+- Re-read all four complete documents after compaction. Recovered output-truncated ranges with narrower reads so the evaluation did not rely on summaries.
+- Saved `reference/03-fresh-reading-notes-before-independent-code-inspection.md` before source analysis, including a whole-document section matrix, strengths, weaknesses and questions to verify.
+- Inspected authored JS/TS sources, native persistence/delta creation, artifact metadata/GC, provider bridges, model fallback, runner packing, query/verb/SSE handlers, runtime tooling and the local go-go-goja shutdown bridge.
+- Added `scripts/01-intern-guide-experiment/02-code-probes.mjs` and its JSONL output. Six probes exercise duplicate precedence, the fluent example with memory input, shared-build options, synthetic resource closure, decision rename and classified export.
+- Wrote the independent technical review and completed the fixed-rubric comparison. Linked them and the preserved drafts from the ticket index.
+- Validated all six draft/review frontmatters, relative document links, immutable-input/draft hashes, original-guide preservation and whitespace. Only the writing-experiment task is completed; nine implementation tasks remain open.
+
+### Why
+
+A rewrite can preserve an original design's mistakes while making them easier to read. Independent inspection separates that outcome from actual improvement in technical understanding. Preserving pre-inspection notes makes the effect of source evidence visible: B was provisionally strongest prose, but no draft was thereby approved as an implementable specification.
+
+### What worked
+
+- The final Node probe run exited 0. Cold duplicate selection was `new`, two-view selection was `old`; shared calls returned the same promise with the first signal; a synthetic resource closed on the second GC; rename and export both failed final validation with a missing `route` decision.
+- The fluent retrieval/filter/limit example returned one hit and no errors when supplied a memory source. This checks the builder chain, not native directory authorization.
+- Source inspection confirms current descriptor metadata already exists, lineage keeps 32 entries but searches eight, only verb handlers hold the explicit admission cap, and sample/decide classify errors before deferred cleanup while rerank classifies later.
+- All three rewrites preserve the fixed fidelity gates and provide useful causal explanations beyond the supplied conversation examples.
+- Hash checks confirm the candidate inputs, installed skill files and writer drafts remain unchanged; the original design matches its setup revision.
+
+### What didn't work
+
+- Whole-ticket validation encountered raw skill/reference fixtures under `scripts/`: `docmgr doctor --ticket RAGWB-009 --stale-after 30` reported seven `frontmatter delimiters '---' not found` errors. Retrying with `--ignore-dir 01-intern-guide-experiment --fail-on error` did not suppress those parse errors. Preserved frozen skill files and validated the actual ticket documents individually instead; the broad doctor result is not reported as passing.
+- The first probe incorrectly invoked the internal function name as a public API: `rag.exportHtml is not a function`. The assertion expecting `/route/` failed. Inspected `pkg/ragjs/src/api/index.js:98`, changed the probe to `rag.export(routed)`, and reran successfully. This was a probe error, not a product defect.
+- One broad source-location lookup included absent `../../go.work`; `rg` reported `No such file or directory`. The existing `../go.work` identifies the local dependency used for inspection. Another optional standard-library path `/opt/go/src/net/http/responsecontroller.go` was absent; the file exists under `/usr/local/go/src/net/http/` and was read there.
+- Long tool outputs were occasionally truncated; narrower reads recovered the relevant text. No source or draft was changed to work around output limits.
+
+### What I learned
+
+The biggest writing improvement is explicit sequence and consequence, not simply replacing technical vocabulary. B's provider-error and export examples and C's queue-byte example teach mechanisms. However, every candidate still compresses the supporting storage model. Every candidate also inherits ambiguity about resource ownership on failed adoption and about covering plan-level outputs with a node visitor. A self-check saying “implementation remains future work” does not expose these concrete gaps.
+
+The original architecture is broadly supported by current source. Precision is needed at its transitions: cancellation acceptance, callback delivery failure, unfinished-worker ownership, resource handoff and interrupted publication. More framework layers would not resolve an unclear contract.
+
+### What was tricky to build
+
+The comparison must keep three evidence levels separate: reader judgments, directly inspected source behavior, and demonstrated probe behavior. The resource probe uses fake handles and the shared-build probe substitutes build work; they confirm mechanisms without proving a full provider/refresh race. The read-only review does not claim real-socket deadline behavior or crash recovery. Historical PR labels are carried forward, not freshly verified.
+
+There is also a real design tension to explain: a handler can return after a bounded join while a worker still owns resources. The future operation owner must retain that work and bound its admission; blindly releasing the only cap or force-closing handles would contradict other requirements. The technical report names this unresolved policy without implementing it.
+
+### What warrants a second pair of eyes
+
+- Review the adoption success/error contract and the boundary between graph-level and node-level references.
+- Check that timeout/cancellation proposals protect native handles even when JS settlement never runs.
+- Review interrupted-publication cleanup separately from atomic selection of the current snapshot.
+- Ask whether an actual new reader agrees with the whole-document prose ranking. The evaluator authored the candidate guidance, knows the documents and has project context; this is not a blinded or controlled comprehension trial.
+
+### What should be done in the future
+
+If authorized, use B as the base, borrow A's reference/resource diagrams and C's concise sequences/checklist, and correct technical gaps before creating final v2. Refine the skill to require supporting data examples, explicit handoff/error ownership and independent code checks. These are recommendations only. Stop here as requested; do not install skills, merge drafts, upload or begin 009 implementation.
+
+### Code review instructions
+
+Start with the comparison report, then its linked fresh reading notes and independent technical review. Inspect the unmodified drafts against their hashes. Reproduce local probes from repository root:
+
+```sh
+node ttmp/2026/11/08/RAGWB-009--simplify-engine-contracts-and-resource-ownership/scripts/01-intern-guide-experiment/02-code-probes.mjs
+```
+
+The JSONL receipt records observed behavior, including expected product failures. No runtime code or existing tests changed. Review `git diff --check` and focused docmgr frontmatter validation; do not infer all-ticket doctor success from those narrower checks.
+
+### Technical details
+
+Writer configuration stayed `gpt-6.1-sol`, medium reasoning, separate context with identical packet. Candidate inputs were frozen in `1928e49`; all writers used the same instructions and were prohibited from reading sibling drafts. No old-skill control arm or real-intern test exists. Local source review includes go-go-goja at `e9bc7891a7b4435ec659577dc346647daa548050`. The final reports distinguish preserved requirements from tested implementation. The three drafts and installed skill hashes are recorded under `scripts/01-intern-guide-experiment/`.
