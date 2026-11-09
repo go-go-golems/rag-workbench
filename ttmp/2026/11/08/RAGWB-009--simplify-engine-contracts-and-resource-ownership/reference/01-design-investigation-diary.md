@@ -115,3 +115,68 @@ RAGWB-010 implementation commit `cac9262` establishes modular authored sources a
 - The user confirmed compatibility can break to improve simplicity, readability and robustness. Do not preserve object insertion order or source spelling as contracts.
 - 009's semantic tasks remain open. Implement datasets, snapshots, operation outcomes and graph references in TypeScript while changing their runtime representations and consumers directly.
 - Validation/delivery evidence for the foundation belongs to the [010 diary](../../RAGWB-010--modular-runtime-sources-and-typescript-tooling-foundation/reference/01-implementation-diary.md).
+
+## Step 4: Prepare a three-writer experiment for the intern-guide skill
+
+Created a ticket-local copy of the writing skill and changed its concept-level guidance before asking any writers to draft. The experiment will compare three independent complete rewrites with the original guide. The installed skills and authoritative guide remain unchanged.
+
+The user specifically wants to test whether the writing instructions help, rather than install a speculative edit. The evaluation plan therefore fixes both familiar topics and topics not explained in the conversation, and requires checking technical fidelity as well as readability.
+
+### Prompt Context
+
+**User prompt (verbatim):**
+
+> ok, in order to make sure we do the best edits, let's try this: create an updated version of the skill in the scripts/ directory of the ticket, and then start 3 subagents (starting with your current context window) and give each the new skill refs). Let them write their own design doc each, and when they come back, compare and see if the updates you did actually helped properly. The subagents can be sol medium for starters). Before yous tart, repeat back to me what you understood in yur own words and how you will do it.
+
+**User authorization (verbatim):**
+
+> go ahead, commit at appropriate intervals and keep a detailed diary as you work (using the diary format from the skill)
+
+**Assistant interpretation:** Prepare an uninstalled candidate skill; commission three independent full v2 drafts using Sol medium; compare their actual writing and technical fidelity; record evidence and recommendations.
+
+**Inferred user intent:** Improve the reusable instructions based on observed draft quality, keeping the existing technical intern guidance while avoiding compressed, cryptic design statements.
+
+### What I did
+
+- Created branch `task/ragwb-009-writing-experiment` from `c267f91`, isolating this documentation experiment from the open 010 PR.
+- Used docmgr to create three separate candidate documents and a comparison report; added one experiment task without changing 009 implementation tasks.
+- Copied `ticket-research-docmgr-remarkable` under `scripts/01-intern-guide-experiment/candidate-skill/`, including its existing supporting references and tools.
+- Updated the candidate entry point, writing-style reference and deliverable checklist. Added concept-level explanation progression, concrete consequences, caller responsibilities and a middle/end-of-document comprehension check.
+- Recorded original/candidate SHA-256 hashes for the three changed skill files.
+- Wrote one shared context packet and a fixed evaluation plan, including source/current-state facts, the user's feedback and the successful explanatory examples.
+
+### Why
+
+The original skill already requests good orientation and concrete examples. The missing emphasis is applying that teaching discipline throughout the document. Testing full drafts also reveals whether clearer explanations dilute technical details or become repetitive.
+
+### What worked
+
+The baseline guide, current code map and prior successful explanations are available locally. Separate output files prevent shared-workspace collisions and preserve independent evidence.
+
+### What didn't work
+
+The subagent tool cannot combine a model/reasoning override with an automatic history fork. As explained to the user before authorization, each Sol-medium agent will receive the same explicit context packet instead. It is a curated reconstruction, not a literal copy of the entire context window.
+
+### What I learned
+
+The evaluation must sample topics beyond the examples provided in conversation. Repeating those examples alone would not show whether the candidate guidance transfers to other mechanisms.
+
+### What was tricky to build
+
+This is not a controlled old-skill/new-skill experiment: all three writers receive the updated skill and conversation examples, and the skill author is the evaluator. The plan limits conclusions to observed qualitative improvements and failures on this document.
+
+### What warrants a second pair of eyes
+
+Review whether the rubric rewards actual understanding rather than longer prose, whether technical edge cases survive, and whether a real new reader agrees with the evaluator's judgments.
+
+### What should be done in the future
+
+Launch the three writers after committing this checkpoint; preserve their drafts unchanged; compare all drafts with the original and recommend only evidence-backed skill changes. Do not install a skill or replace the original guide as an unreported side effect.
+
+### Code review instructions
+
+Start with the candidate writing-style diff, shared context packet and evaluation plan under `scripts/01-intern-guide-experiment/`. The three candidate docs are placeholders until the writers complete. No runtime code changes or tests are required for this setup.
+
+### Technical details
+
+Requested writer configuration: `gpt-6.1-sol`, reasoning `medium`, `fork_turns=none`; identical instructions with only output path differing. Planned outputs: design-doc candidates A/B/C and reference comparison report. The original guide and installed skills are read-only inputs.

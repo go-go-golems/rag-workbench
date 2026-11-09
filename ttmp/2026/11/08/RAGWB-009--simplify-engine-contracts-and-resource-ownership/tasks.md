@@ -11,3 +11,4 @@
 - [ ] Canonicalize graph references and capability-based export transformations <!-- t:npxi -->
 - [ ] Correct dotted store root and deterministic Pi model fallback <!-- t:51b3 -->
 - [ ] Delete replaced mechanisms, migrate examples and verify behavior and performance <!-- t:lj62 -->
+- [ ] Test candidate intern-guide skill with three independent Sol-medium drafts and compare clarity and technical fidelity <!-- t:detn -->
