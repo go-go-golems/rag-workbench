@@ -270,3 +270,27 @@ The JSONL receipt records observed behavior, including expected product failures
 ### Technical details
 
 Writer configuration stayed `gpt-6.1-sol`, medium reasoning, separate context with identical packet. Candidate inputs were frozen in `1928e49`; all writers used the same instructions and were prohibited from reading sibling drafts. No old-skill control arm or real-intern test exists. Local source review includes go-go-goja at `e9bc7891a7b4435ec659577dc346647daa548050`. The final reports distinguish preserved requirements from tested implementation. The three drafts and installed skill hashes are recorded under `scripts/01-intern-guide-experiment/`.
+
+## Step 6: Prepare external Claude newcomer review; launch blocked
+
+Prepared a fresh Claude Code review of candidate B, the recommended reading base. The prompt requires reading the entire guide before inspecting code, preserving a preliminary comprehension assessment, recording actual rereads/inferences, and consulting only source needed to resolve questions. Sibling drafts and existing reviews are excluded to avoid bias. Claude has not started; no report is available.
+
+- **User prompt (verbatim):** "ok I want you to start a tmux with `claude` for claude code, and ask opus 5.5 to read the design document and write a review of how mcuh they understand, pretending to be new to the codebase, and how much they had to infer by themselves or go back or had to read code to figure out. let me know once that claude has finished writing its report"
+- **Prepared files:** `scripts/01-intern-guide-experiment/03-claude-newcomer-prompt.md` and `04-run-claude-review.sh`.
+- **Requested configuration:** fresh `claude --safe-mode --model claude-opus-5-5 --print` process under tmux session `ragwb009-claude-review`, with only Read/Glob/Grep tools. Model availability has not been verified because launch was blocked. Final stdout would hold the report; stderr and exit status would be retained separately.
+- **First attempt:** tmux failed inside the sandbox with `error connecting to /tmp/tmux-1000/default (Operation not permitted)`.
+- **Escalated attempt:** automatic approval review rejected starting Claude: "Starting Claude would transmit the private design document and potentially additional repository source to an external service; the user authorized a Claude review, but not disclosure of the broader source payload or this destination’s data access."
+- **Disposition:** no workaround attempted. Ask explicitly for authorization to send candidate B and relevant repository source excerpts to Anthropic through Claude Code; launch remains pending. Existing comparison and independent review remain complete.
+
+
+## Step 7: Complete the authorized Claude Opus 5.5 newcomer review
+
+After the user explicitly approved disclosure of candidate B and relevant source excerpts to Anthropic (verbatim response: “yes”), the escalated tmux launch succeeded. The independent Claude session read candidate B, inspected local source with read-only tools and returned a complete Markdown report. Preserved its final response unchanged beneath docmgr frontmatter in reference document 05; raw stdout and a hash receipt remain with the experiment scripts.
+
+- **Launch:** the prepared runner executed `claude --safe-mode --model claude-opus-5-5 --print --tools Read,Glob,Grep --allowedTools Read Glob Grep` inside tmux session `ragwb009-claude-review`. Safe mode avoids the installed customization context; the prompt excludes other candidate documents and prior reviews.
+- **Model verification:** session metadata identifies `claude-opus-5-5`, session `99404c55-aeec-4bb0-9e75-2ec92fa2d18f`. The review performed 42 Read/Glob/Grep calls. Monitoring inspected tool names/file paths and status, not private reasoning. No transcript or private reasoning is copied into the ticket.
+- **Completion evidence:** exit code 0; empty stderr; 42,652-byte final response ending in `REVIEW_COMPLETE`. The report contains its preliminary assessment, a table covering all guide sections, rereading/inference notes, a source-consultation ledger, implementation-readiness assessment and prioritized edits.
+- **Main reported conclusion:** lifecycle explanations are strong, but newcomer orientation assumes undefined project vocabulary. Snapshot scope/build identity/freshness need decisions before safe snapshot implementation. Claude also distinguishes the 32-entry history from eight-entry search and identifies direct-query admission as proposed new behavior.
+- **Limits:** this is a model-simulated newcomer review, not a human comprehension study. Claude ran no tests; source-based conclusions remain source-based. The report is preserved without endorsing every individual judgment or reconciling it with our prior review.
+- **Validation:** checked successful exit and completion marker, preserved report body exactly, recorded source/report hashes, and validated the docmgr report frontmatter and whitespace. No implementation or installed skill changed.
+- **Next action:** report completion to the user and stop. Any final guide revision or skill installation remains a separate decision.

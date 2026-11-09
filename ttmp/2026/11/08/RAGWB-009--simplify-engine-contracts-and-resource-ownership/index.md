@@ -33,6 +33,8 @@ The design is based on commit `0854c6a` and maps twelve PR review findings to sy
 
 ## Writing experiment
 
+- [Claude Opus 5.5 newcomer review of candidate B](reference/05-claude-opus-5-5-newcomer-comprehension-review-of-candidate-b.md)
+
 - [Comparison and recommendation](reference/02-intern-guide-writing-experiment-comparison.md)
 - [Fresh reading notes](reference/03-fresh-reading-notes-before-independent-code-inspection.md)
 - [Independent technical review](reference/04-independent-code-review-of-original-and-candidate-design-guides.md)

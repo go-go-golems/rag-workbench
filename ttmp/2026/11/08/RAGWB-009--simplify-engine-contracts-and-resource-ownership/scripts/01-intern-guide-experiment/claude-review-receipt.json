@@ -1,0 +1,12 @@
+{
+  "session_id": "99404c55-aeec-4bb0-9e75-2ec92fa2d18f",
+  "tmux_session": "ragwb009-claude-review",
+  "model_observed_in_session": "claude-opus-5-5",
+  "mode": "safe-mode; print; Read/Glob/Grep only",
+  "exit_code": 0,
+  "completion_marker": "REVIEW_COMPLETE",
+  "stderr_bytes": 0,
+  "raw_report_sha256": "0f2e4f55a138e7ee53f193a047c8e0d5778084a559d501ae6a71131362094791",
+  "candidate_b_sha256": "24fcafa910ab2408586acde350a98156b0053852e10c19a8928a0d0eca930883",
+  "report_body_preserved": true
+}
