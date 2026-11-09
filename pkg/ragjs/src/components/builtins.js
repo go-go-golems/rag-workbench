@@ -163,7 +163,7 @@ export function installBuiltins() {
   build('bake', {
     in: ['docs'],
     out: 'value',
-    args: (f) => ({ value: rag_bake(f) }),
+    args: (bindings, f) => ({ value: rag_bake(bindings, f) }),
     describe: () => 'baked value',
     all: (inputs, ctx, p) => p.value,
   });

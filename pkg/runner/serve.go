@@ -123,7 +123,7 @@ const serveHarness = `(async (__mode, __path, __src, __opts) => {
     // refresh: rebuild now if the sources changed (serve --watch), so the next query doesn't wait
     refresh: async () => {
       if (eng.artifacts(ir)) return 'null';
-      const rep = await eng.build(ir);
+      const rep = await eng.buildShared(ir);
       if (!rep.ok) return JSON.stringify({ ok: false, errors: rep.errors });
       const gc = collect();
       const nodes = Object.values(rep.nodes).filter(n => !n.reused).map(n => ({ id: n.id, ms: n.ms, incremental: !!n.incremental, delta: n.delta || null }));
@@ -141,17 +141,9 @@ const serveHarness = `(async (__mode, __path, __src, __opts) => {
       sc.close();
       collect();
       const t1 = now();
-      const a = art();
-      const ids = new Set();
-      const add = x => { if (x && typeof x.id === 'string' && a.chunks.has(x.id)) ids.add(x.id); };
-      for (const v of Object.values(r.outputs)) {
-        if (Array.isArray(v)) v.forEach(add);
-        else if (v && Array.isArray(v.evidence)) v.evidence.forEach(add);
-      }
-      if (r.answer && Array.isArray(r.answer.evidence)) r.answer.evidence.forEach(add);
-      const p = pack(a, ids, r.hits.slice(0, NB_HITS).map(h => h.id));
+      const p = {chunks:r.records, neighbors:r.neighborRefs};
       // the plain fields only: result.toJSON is the compact log form
-      const result = { runId: r.runId, trigger: r.trigger, signals: r.signals, hits: r.hits, context: r.context, answer: r.answer,
+      const result = { snapshotId:r.snapshotId, runId: r.runId, trigger: r.trigger, signals: r.signals, hits: r.hits, context: r.context, answer: r.answer,
         outputs: r.outputs, trace: r.trace, errors: r.errors, ms: r.ms, calls: r.calls };
       return JSON.stringify({ result, chunks: p.chunks, neighbors: p.neighbors, packMs: +(now() - t1).toFixed(2) });
     },

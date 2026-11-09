@@ -7,8 +7,10 @@ import { arr, clone, hash, isBake, isLambda, isObj, now, setPath, uniq } from '.
 import { answerLine } from '../engine/decision.js';
 import { timed } from '../engine/environment.js';
 
-function rag_bake(f) {
-  return { $bake: lam(f).$fn };
+function rag_bake(bindings, f) {
+  if (!isObj(bindings) || !isObj(bindings.datasets) || typeof f !== 'function')
+    throw new RagError('compile', 'bake requires ({datasets: {name: nodeId}}, callback)');
+  return { $bake: lam(f).$fn, datasets: { ...bindings.datasets } };
 }
 
 // ────────────────────────────────────────────────────────────── specs

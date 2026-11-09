@@ -665,3 +665,59 @@ commit at appropriate intervals and keep a detailed diary as you work (using the
 ### Technical details
 - Existing source baseline is unchanged before this implementation turn; previous documentation commit is 806d862.
 - Checks so far: pnpm typecheck and pnpm build; broad Go/browser/race checks remain pending.
+
+## Step 14: Connect ownership, shared jobs, explicit bake inputs and response streaming
+
+This checkpoint replaces first-waiter build ownership and rebuild-count retirement with actual ownership scopes. Queries retain loaded outputs until result decoration copies their records; server packaging consumes those copies. Work continues on the full dataset/provenance cutover and durable store ownership, so the implementation is not yet integrated or qualified.
+
+### Prompt Context
+See Step 13 for the implementation request and validation preference.
+**Previous commit:** `2c1e19e` — graph reference and lexical projection cutover.
+
+### What I did
+- Added TypeScript BuildJobs with engine-owned cancellation, detachable waiters, callback fanout and late-waiter handling for cancelling jobs.
+- Added ResourceRegistry and OwnershipScope, connected memo ownership and active query retention, and removed delayed-retirement GC. Temporary delta bases now release in finally.
+- Detached result records and immediate neighbors during the query lease; changed served query packaging to use those records rather than current engine artifacts.
+- Introduced the immutable dataset contract at the bake boundary. Bake callbacks require named dataset bindings, and cache identities include bound output versions. Migrated the two preset callers and workbench authoring guidance.
+- Added one shared SSE response lifecycle for query and verb endpoints, socket write deadlines, event/text byte bounds, error propagation and direct-query admission control.
+- Added a Go operation arbiter shared by sample, decide and rerank, separating accepted outcome from callback delivery and worker cleanup. Signal listeners detach on the VM owner.
+
+### Why
+- A rebuild count cannot establish whether a query still uses a resource. A reference count can.
+- First-caller cancellation and first-caller event delivery are inappropriate owners of shared work.
+- Array shape and equal record counts cannot establish bake cache identity.
+- A bounded event queue alone does not bound a blocked socket write.
+
+### What worked
+- TypeScript checking passed after jobs and initial ownership integration. Runtime asset generation remains part of checkpoint preparation.
+- Both endpoints now send their terminal frame through the same single writer as ordinary events.
+
+### What didn't work
+- Targeted Go build initially failed because the default cache was outside writable roots: `open /home/manuel/.cache/go-build/bd/bdcc374aa2700a1a11b01c697d983a6097270146884697cb5b2d3022033c34d8-a: read-only file system`. Retried with approved escalation.
+- Broad test suites are still deferred until migration and cleanup are integrated; these checkpoints do not certify complete behavior.
+
+### What I learned
+- Serve repackaging was a separate lifetime boundary even after query execution completed. Detached result data must be the source for HTTP packaging.
+- Summary accumulation must be independent of the response pump; otherwise building an envelope races queued event observation. Observation now happens at enqueue.
+
+### What was tricky to build
+- A cancelled final waiter can leave a task finishing asynchronously; its rejection must be observed and a new waiter must not start an overlapping successor until cleanup ends.
+- The operation arbiter accepts one delivery closure before cleanup cancels the context, so deferred cleanup cannot rewrite a provider failure as cancellation.
+
+### What warrants a second pair of eyes
+- Complete dataset-qualified provenance, generation-aware later lookups and immutable snapshot publication are still required; the current ownership checkpoint does not replace those obligations.
+- Runtime shutdown must retain resources until worker exit, not merely accepted cancellation. Integrate operation tracking into host shutdown before closing this phase.
+- Real-socket stalled-reader verification is pending the final integration test phase.
+
+### What should be done in the future
+- Finish dataset migration, store manifests/locking/GC authority, operation shutdown tracking and remaining consumer migrations.
+- Add and run discriminating regressions together at the integration boundary, then fix failures without repeating the entire suite after every edit.
+
+### Code review instructions
+- Begin with engine/jobs.ts, ownership.ts, dataset.ts and rtenv/operation.go.
+- Trace Session.run through serve.go packaging; inspect server/response.go and sse.go for single-writer ownership.
+
+### Technical details
+- Result record detachment currently bounds copied record text to 16 MiB; richer custom-output validation belongs to the remaining result boundary cutover.
+- SSE limits: 256 queued events, 1 MiB per event, 64 KiB coalesced text, 5-second per-write deadline.
+- All APIs/IR changes are direct cutovers with no legacy fallback.

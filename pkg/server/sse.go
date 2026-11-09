@@ -26,21 +26,25 @@ import (
 // heartbeat. Every stream ends with exactly one "result" or "error" event.
 
 var (
-	sseHeartbeat = 15 * time.Second
-	sseCoalesce  = 30 * time.Millisecond
-	sseSlow      = 100 * time.Millisecond // how long Emit waits on a full queue before giving up on the client
+	sseHeartbeat    = 15 * time.Second
+	sseCoalesce     = 30 * time.Millisecond
+	sseWriteTimeout = 5 * time.Second
+	sseSlow         = 100 * time.Millisecond // how long Emit waits on a full queue before giving up on the client
 )
 
 const sseQueue = 256
+const sseMaxEventBytes = 1 << 20
+const sseMaxTextBytes = 64 << 10
 
 // streamSink queues events for the pump. If the queue stays full (a client that
 // doesn't read), it cancels the request instead of blocking the runtime.
 type streamSink struct {
-	ch     chan runner.Event
-	cancel context.CancelFunc
-	mu     sync.Mutex
-	closed bool
-	slow   bool
+	observe func(runner.Event)
+	ch      chan runner.Event
+	cancel  context.CancelFunc
+	mu      sync.Mutex
+	closed  bool
+	slow    bool
 }
 
 func newStreamSink(cancel context.CancelFunc) *streamSink {
@@ -51,6 +55,14 @@ func (s *streamSink) Emit(e runner.Event) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.closed || s.slow {
+		return
+	}
+	if s.observe != nil {
+		s.observe(e)
+	}
+	if len(e.Data) > sseMaxEventBytes {
+		s.slow = true
+		s.cancel()
 		return
 	}
 	select {
@@ -79,22 +91,39 @@ func (s *streamSink) close() {
 
 // sseWriter frames events on an http.ResponseWriter.
 type sseWriter struct {
-	w      http.ResponseWriter
-	fl     http.Flusher
-	t0     time.Time
-	seq    int
-	filter map[string]bool // nil = all; start/result/error always pass
-	count  int
+	w          http.ResponseWriter
+	controller *http.ResponseController
+	err        error
+	t0         time.Time
+	seq        int
+	filter     map[string]bool // nil = all; start/result/error always pass
+	count      int
 }
 
-func newSSEWriter(w http.ResponseWriter, t0 time.Time, filter map[string]bool) *sseWriter {
+func newSSEWriter(w http.ResponseWriter, t0 time.Time, filter map[string]bool) (*sseWriter, error) {
+	controller := http.NewResponseController(w)
+	if err := controller.SetWriteDeadline(time.Now().Add(sseWriteTimeout)); err != nil {
+		return nil, err
+	}
 	h := w.Header()
 	h.Set("Content-Type", "text/event-stream")
 	h.Set("Cache-Control", "no-store")
 	h.Set("X-Accel-Buffering", "no")
-	w.WriteHeader(http.StatusOK)
-	fl, _ := w.(http.Flusher)
-	return &sseWriter{w: w, fl: fl, t0: t0, filter: filter}
+	return &sseWriter{w: w, controller: controller, t0: t0, filter: filter}, nil
+}
+
+func (s *sseWriter) send(frame string) error {
+	if s.err != nil {
+		return s.err
+	}
+	s.err = s.controller.SetWriteDeadline(time.Now().Add(sseWriteTimeout))
+	if s.err == nil {
+		_, s.err = fmt.Fprint(s.w, frame)
+	}
+	if s.err == nil {
+		s.err = s.controller.Flush()
+	}
+	return s.err
 }
 
 // write sends one event; data must be a JSON object (seq and t are prepended).
@@ -112,24 +141,10 @@ func (s *sseWriter) write(typ string, data []byte) error {
 	} else {
 		body = head + "," + strings.TrimPrefix(body, "{")
 	}
-	if _, err := fmt.Fprintf(s.w, "event: %s\nid: %d\ndata: %s\n\n", typ, s.seq, body); err != nil {
-		return err
-	}
-	if s.fl != nil {
-		s.fl.Flush()
-	}
-	return nil
+	return s.send(fmt.Sprintf("event: %s\nid: %d\ndata: %s\n\n", typ, s.seq, body))
 }
 
-func (s *sseWriter) ping() error {
-	if _, err := fmt.Fprint(s.w, ": ping\n\n"); err != nil {
-		return err
-	}
-	if s.fl != nil {
-		s.fl.Flush()
-	}
-	return nil
-}
+func (s *sseWriter) ping() error { return s.send(": ping\n\n") }
 
 type textEvent struct {
 	Type  string `json:"type"`
@@ -142,6 +157,11 @@ type textEvent struct {
 // pump writes the sink's events until it is closed, merging text deltas and
 // sending heartbeats. observe sees every event (before filtering), for summaries.
 func (s *sseWriter) pump(sink *streamSink, observe func(runner.Event)) {
+	defer func() {
+		if s.err != nil {
+			sink.cancel()
+		}
+	}()
 	hb := time.NewTicker(sseHeartbeat)
 	defer hb.Stop()
 	var pending *textEvent
@@ -156,6 +176,9 @@ func (s *sseWriter) pump(sink *streamSink, observe func(runner.Event)) {
 		flushAt = nil
 	}
 	for {
+		if s.err != nil {
+			return
+		}
 		select {
 		case e, ok := <-sink.ch:
 			if !ok {
@@ -168,7 +191,7 @@ func (s *sseWriter) pump(sink *streamSink, observe func(runner.Event)) {
 			if e.Type == "text" {
 				var te textEvent
 				if json.Unmarshal(e.Data, &te) == nil && !te.Reset {
-					if pending != nil && pending.Node == te.Node && pending.Run == te.Run {
+					if pending != nil && pending.Node == te.Node && pending.Run == te.Run && len(pending.Delta)+len(te.Delta) <= sseMaxTextBytes {
 						pending.Delta += te.Delta
 						continue
 					}
@@ -207,3 +230,5 @@ func eventFilter(r *http.Request) map[string]bool {
 	}
 	return m
 }
+
+func (s *streamSink) isSlow() bool { s.mu.Lock(); defer s.mu.Unlock(); return s.slow }

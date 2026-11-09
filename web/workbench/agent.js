@@ -78,7 +78,7 @@ Everything is reachable from code. The agent's eval code and the pipeline script
 |---|---|---|
 | build callback \`b => b.x()\` | once, while building | a builder |
 | build slot, e.g. \`.chunk((doc, ctx) => …)\` | at build, per item, cached by digest | item, build ctx |
-| \`rag.bake(ctx => value)\` | at build, once | \`{ docs, chunks }\` |
+| \`rag.bake({datasets:{docs:'parse'}}, ctx => value)\` | at build, once | \`{ datasets }\` |
 | live slot, e.g. \`.filter((s, ctx, hit) => …)\` | per query | signals \`s\`, ctx, input |
 
 Lambdas are stored as source and run **closed**: a free identifier throws. Pass values through signals, \`rag.bake\`, or params:
@@ -92,7 +92,7 @@ rag.corpus(id).from(rag.files('*.md')).parse(rag.markdown())
   .chunk('name', (doc, ctx) => [{ headingPath, text }])        // extra chunk stream
   .enrich('sem', (chunk, ctx) => value, { concurrency: 3, budget: { calls: 100 } })
   .enrich('sem', rag.enrich.llm(), { from: 'cards' })         // summary, questions, keywords; 1 quick call per chunk; from = a named stream
-  .synonyms(rag.bake(ctx => ({ phrase: ['expansion'] })))
+  .synonyms(rag.bake({datasets:{docs:'parse'}}, ctx => ({ phrase: ['expansion'] })))
   .index('text', rag.bm25({ fields: { title: 2, headingPath: 3, text: 1, 'sem.questions': 3 } }), { from: 'chunks' })
   .index('meta', rag.terms({ keys: ['type', 'tags'] }))
 \`\`\`

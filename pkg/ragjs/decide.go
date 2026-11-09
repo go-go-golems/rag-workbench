@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/go-go-golems/rag-workbench/pkg/rtenv"
 
 	"github.com/dop251/goja"
 	"github.com/go-go-golems/geppetto/pkg/decision"
@@ -38,17 +39,9 @@ func newDecide(vm *goja.Runtime, provider decision.Provider) goja.Value {
 			rejectWith("decide_unavailable", "runtime has no event-loop bridge", nil)
 			return vm.ToValue(promise)
 		}
-		callCtx, cancel := context.WithCancel(services.Lifetime())
-		if sig, ok := call.Argument(1).(*goja.Object); ok {
-			if add, ok := goja.AssertFunction(sig.Get("addEventListener")); ok {
-				_, _ = add(sig, vm.ToValue("abort"), vm.ToValue(func() { cancel() }))
-			}
-			if a := sig.Get("aborted"); a != nil && a.ToBoolean() {
-				cancel()
-			}
-		}
-		go func() {
-			defer cancel()
+		op := rtenv.NewOperation(vm, services, "ragwb.decide", call.Argument(1), func(kind string) { rejectWith(kind, "the operation ended: "+kind, nil) })
+		callCtx := op.Context()
+		op.Start(func(context.Context) {
 			resp, err := provider.Decide(callCtx, req)
 			var payload string
 			if err == nil {
@@ -63,14 +56,14 @@ func newDecide(vm *goja.Runtime, provider decision.Provider) goja.Value {
 			if err != nil {
 				code, msg, extra = classifyDecideError(err, callCtx, services.Lifetime())
 			}
-			_ = services.PostWithLifetimeContext("ragwb.decide.settle", func(context.Context, *goja.Runtime) {
+			op.Complete(func(*goja.Runtime) {
 				if err != nil {
 					rejectWith(code, msg, extra)
 					return
 				}
 				_ = resolve(payload)
 			})
-		}()
+		})
 		return vm.ToValue(promise)
 	})
 }

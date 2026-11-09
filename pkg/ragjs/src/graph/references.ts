@@ -32,6 +32,22 @@ export function references(node: Node, def: Definition = {}): Reference[] {
       refs.push({ kind: 'artifact', target });
   }
   for (const target of def.reads?.(node.p) || []) refs.push({ kind: 'signal', target });
+  const visit = (value: unknown) => {
+    if (!value || typeof value !== 'object') return;
+    const object = value as Record<string, unknown>;
+    if (typeof object.$bake === 'string') {
+      const bindings = object.datasets as Record<string, string> | undefined;
+      for (const [name, target] of Object.entries(bindings || {}))
+        refs.push({
+          kind: 'artifact',
+          target,
+          set: (value) => {
+            if (bindings) bindings[name] = value;
+          },
+        });
+    } else for (const child of Object.values(object)) visit(child);
+  };
+  visit(node.p);
   const when = node.when;
   if (when?.decision) {
     const split = when.decision.indexOf('.');

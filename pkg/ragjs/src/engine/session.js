@@ -49,91 +49,143 @@ class Session {
       if (!rep.ok) throw new RagError('build', rep.errors.join('\n'));
       art = engine.artifacts(ir);
     }
-    // live outputs memoized against other artifacts (a rebuilt corpus) are stale
-    if (this.artKey !== art.key) {
-      this.memo.clear();
-      this.artKey = art.key;
-    }
-    const t0 = now();
-    const trigger = opts.trigger || 'submit';
-    const s = { ...ir.signals, ...signals };
-    const outputs = {},
-      trace = [],
-      errors = [];
-    const counter = { calls: 0 };
-    const sample = engine.sampler(counter, opts.signal);
-    const decider = engine.decider(counter, opts.signal);
-    const runId = ++this.runs;
-    const detail = opts.detail || {};
-    emit({ type: 'run', plan: ir.id, trigger, signals: s });
-    // a step's output in the trace entry (top hits) and the event stream (hits, context)
-    const describe = (n, out, entry) => {
-      if (n.out === 'hits' && Array.isArray(out)) {
-        entry.top = out
-          .slice(0, 50)
-          .map((h) => ({ id: h.id, score: h.score, why: h.why, parts: h.parts, reason: h.reason }));
-        if (opts.onEvent) emit(hitsEvent(n.id, out, art, detail));
+    const release = engine.acquire(art);
+    try {
+      // live outputs memoized against other artifacts (a rebuilt corpus) are stale
+      if (this.artKey !== art.key) {
+        this.memo.clear();
+        this.artKey = art.key;
       }
-      if (n.out === 'decision' && out)
-        entry.decision = Object.fromEntries(
-          Object.entries(out).map(([id, a]) => [id, answerLine(a)]),
-        );
-      if (n.out === 'context' && out && opts.onEvent)
-        emit({
-          type: 'context',
-          node: n.id,
-          evidence: arr(out.evidence).map((e) => ({ label: e.label, id: e.id })),
-          bytes: out.bytes,
-        });
-    };
-    for (const n of ir.nodes) {
-      if (n.phase === 'build') continue;
-      if (n.phase === 'signal') {
-        outputs[n.id] = s[n.id];
-        continue;
-      }
-      const def = REG.get(n.t);
-      const inputs = n.in.map((id) => {
-        const v = outputs[id];
-        const src = ir.node(id);
-        return src.t === 'signal' && (portsOf(n).in[0] || '').startsWith('queries')
-          ? this.queries(v)
-          : v;
-      });
-      const input = (portsOf(n).in[0] || '') === 'hits*' ? inputs : inputs[0];
-      if (n.when) {
-        const decision = (id) => {
-          const v = outputs[id];
-          return v && v.$decision ? v : null;
-        };
-        let w;
-        try {
-          w = isLambda(n.when)
-            ? {
-                on: !!(await fnOf(n.when, `${n.id}.when`)(s, {
-                  decisions: Object.fromEntries(
-                    Object.entries(n.when.bindings).map(([name, id]) => [name, decision(id)]),
-                  ),
-                  signals: s,
-                })),
-                why: 'when λ',
-              }
-            : whenHolds(n.when, decision);
-        } catch (e) {
-          w = { on: true, why: `when failed (${e.message || e}) → run` };
+      const t0 = now();
+      const trigger = opts.trigger || 'submit';
+      const s = { ...ir.signals, ...signals };
+      const outputs = {},
+        trace = [],
+        errors = [];
+      const counter = { calls: 0 };
+      const sample = engine.sampler(counter, opts.signal);
+      const decider = engine.decider(counter, opts.signal);
+      const runId = ++this.runs;
+      const detail = opts.detail || {};
+      emit({ type: 'run', plan: ir.id, trigger, signals: s });
+      // a step's output in the trace entry (top hits) and the event stream (hits, context)
+      const describe = (n, out, entry) => {
+        if (n.out === 'hits' && Array.isArray(out)) {
+          entry.top = out.slice(0, 50).map((h) => ({
+            id: h.id,
+            score: h.score,
+            why: h.why,
+            parts: h.parts,
+            reason: h.reason,
+          }));
+          if (opts.onEvent) emit(hitsEvent(n.id, out, art, detail));
         }
-        if (!w.on) {
-          outputs[n.id] = whenSkipOutput(n, input);
-          const entry = {
+        if (n.out === 'decision' && out)
+          entry.decision = Object.fromEntries(
+            Object.entries(out).map(([id, a]) => [id, answerLine(a)]),
+          );
+        if (n.out === 'context' && out && opts.onEvent)
+          emit({
+            type: 'context',
             node: n.id,
-            t: n.t,
-            ms: 0,
-            in: countOf(input),
-            out: countOf(outputs[n.id]),
-            status: 'skipped',
-            skippedBy: 'when',
-            notes: [`when: ${w.why}`],
+            evidence: arr(out.evidence).map((e) => ({ label: e.label, id: e.id })),
+            bytes: out.bytes,
+          });
+      };
+      for (const n of ir.nodes) {
+        if (n.phase === 'build') continue;
+        if (n.phase === 'signal') {
+          outputs[n.id] = s[n.id];
+          continue;
+        }
+        const def = REG.get(n.t);
+        const inputs = n.in.map((id) => {
+          const v = outputs[id];
+          const src = ir.node(id);
+          return src.t === 'signal' && (portsOf(n).in[0] || '').startsWith('queries')
+            ? this.queries(v)
+            : v;
+        });
+        const input = (portsOf(n).in[0] || '') === 'hits*' ? inputs : inputs[0];
+        if (n.when) {
+          const decision = (id) => {
+            const v = outputs[id];
+            return v && v.$decision ? v : null;
           };
+          let w;
+          try {
+            w = isLambda(n.when)
+              ? {
+                  on: !!(await fnOf(n.when, `${n.id}.when`)(s, {
+                    decisions: Object.fromEntries(
+                      Object.entries(n.when.bindings).map(([name, id]) => [name, decision(id)]),
+                    ),
+                    signals: s,
+                  })),
+                  why: 'when λ',
+                }
+              : whenHolds(n.when, decision);
+          } catch (e) {
+            w = { on: true, why: `when failed (${e.message || e}) → run` };
+          }
+          if (!w.on) {
+            outputs[n.id] = whenSkipOutput(n, input);
+            const entry = {
+              node: n.id,
+              t: n.t,
+              ms: 0,
+              in: countOf(input),
+              out: countOf(outputs[n.id]),
+              status: 'skipped',
+              skippedBy: 'when',
+              notes: [`when: ${w.why}`],
+            };
+            trace.push(entry);
+            emit({
+              type: 'node',
+              node: n.id,
+              component: n.t,
+              phase: 'end',
+              status: 'skipped',
+              skippedBy: 'when',
+              ms: 0,
+              in: entry.in,
+              out: entry.out,
+              notes: entry.notes,
+            });
+            continue;
+          }
+        }
+        const nd = hash([n.t, n.p, n.trigger, def.src || '']); // a redefined live component reruns
+        const wants = trigger === 'submit' || triggerOf(n) === 'change';
+        const m = this.memo.get(n.id);
+        const sameInputs =
+          m && m.inputs.length === inputs.length && m.inputs.every((v, i) => v === inputs[i]);
+        const sameReads = m && Object.entries(m.reads).every(([k, v]) => stable(s[k]) === v);
+        const entry = { node: n.id, t: n.t, ms: 0, in: countOf(input), out: 0, status: 'ran' };
+        if (m && m.digest === nd && sameInputs && sameReads && (m.full || !wants)) {
+          outputs[n.id] = m.out;
+          entry.status = m.full ? 'cached' : 'skipped';
+          entry.out = countOf(m.out);
+          if (m.notes) entry.notes = m.notes;
+          if (m.full) describe(n, m.out, entry); // a cached step reports its output like one that ran
+          trace.push(entry);
+          emit({
+            type: 'node',
+            node: n.id,
+            component: n.t,
+            phase: 'end',
+            status: entry.status,
+            ms: 0,
+            in: entry.in,
+            out: entry.out,
+          });
+          continue;
+        }
+        if (!wants) {
+          outputs[n.id] = def.skip === 'null' ? null : input;
+          entry.status = 'skipped';
+          entry.out = countOf(outputs[n.id]);
           trace.push(entry);
           emit({
             type: 'node',
@@ -141,145 +193,102 @@ class Session {
             component: n.t,
             phase: 'end',
             status: 'skipped',
-            skippedBy: 'when',
             ms: 0,
             in: entry.in,
             out: entry.out,
-            notes: entry.notes,
           });
+          this.memo.set(n.id, { digest: nd, inputs, reads: {}, out: outputs[n.id], full: false });
           continue;
         }
-      }
-      const nd = hash([n.t, n.p, n.trigger, def.src || '']); // a redefined live component reruns
-      const wants = trigger === 'submit' || triggerOf(n) === 'change';
-      const m = this.memo.get(n.id);
-      const sameInputs =
-        m && m.inputs.length === inputs.length && m.inputs.every((v, i) => v === inputs[i]);
-      const sameReads = m && Object.entries(m.reads).every(([k, v]) => stable(s[k]) === v);
-      const entry = { node: n.id, t: n.t, ms: 0, in: countOf(input), out: 0, status: 'ran' };
-      if (m && m.digest === nd && sameInputs && sameReads && (m.full || !wants)) {
-        outputs[n.id] = m.out;
-        entry.status = m.full ? 'cached' : 'skipped';
-        entry.out = countOf(m.out);
-        if (m.notes) entry.notes = m.notes;
-        if (m.full) describe(n, m.out, entry); // a cached step reports its output like one that ran
+        const reads = {};
+        const sp = new Proxy(s, {
+          get: (t, k) => {
+            if (typeof k === 'string') reads[k] = stable(t[k]);
+            return t[k];
+          },
+        });
+        const notes = [];
+        const c0 = counter.calls;
+        const ctx = this.ctx(
+          n,
+          ir,
+          art,
+          sample,
+          s,
+          notes,
+          opts,
+          opts.onEvent ? emit : null,
+          decider,
+          outputs,
+        );
+        const t1 = now();
+        emit({ type: 'node', node: n.id, component: n.t, phase: 'start' });
+        try {
+          const p = await this.params(n, sp, ctx, art, ir);
+          let out = await def.run(sp, ctx, input, p);
+          if (n.out === 'hits') out = normHits(out, n.id);
+          outputs[n.id] = out;
+          entry.out = countOf(out);
+          describe(n, out, entry);
+          this.memo.set(n.id, { digest: nd, inputs, reads, out, full: true, notes });
+        } catch (e) {
+          const msg =
+            e && (e.message || e.code) ? `${e.code && !e.message ? e.code : e.message}` : String(e);
+          entry.status = 'error';
+          entry.error = msg;
+          errors.push(`${n.id}: ${msg}`);
+          outputs[n.id] =
+            def.skip === 'null' || n.out === 'answer'
+              ? null
+              : n.out === 'hits' || n.out === 'queries'
+                ? input || []
+                : null;
+          if (e && e.code === 'cancelled') {
+            trace.push(entry);
+            break;
+          }
+        }
+        entry.ms = +(now() - t1).toFixed(1);
+        timed('run', n.id, entry.ms, `${n.t} · ${entry.status} · ${entry.in}→${entry.out}`);
+        entry.calls = counter.calls - c0;
+        if (notes.length) entry.notes = notes;
         trace.push(entry);
+        if (opts.onNode) opts.onNode(entry);
         emit({
           type: 'node',
           node: n.id,
           component: n.t,
           phase: 'end',
           status: entry.status,
-          ms: 0,
+          ms: entry.ms,
           in: entry.in,
           out: entry.out,
+          calls: entry.calls,
+          ...(entry.notes ? { notes: entry.notes } : {}),
+          ...(entry.error ? { error: entry.error } : {}),
         });
-        continue;
       }
-      if (!wants) {
-        outputs[n.id] = def.skip === 'null' ? null : input;
-        entry.status = 'skipped';
-        entry.out = countOf(outputs[n.id]);
-        trace.push(entry);
-        emit({
-          type: 'node',
-          node: n.id,
-          component: n.t,
-          phase: 'end',
-          status: 'skipped',
-          ms: 0,
-          in: entry.in,
-          out: entry.out,
-        });
-        this.memo.set(n.id, { digest: nd, inputs, reads: {}, out: outputs[n.id], full: false });
-        continue;
-      }
-      const reads = {};
-      const sp = new Proxy(s, {
-        get: (t, k) => {
-          if (typeof k === 'string') reads[k] = stable(t[k]);
-          return t[k];
-        },
-      });
-      const notes = [];
-      const c0 = counter.calls;
-      const ctx = this.ctx(
-        n,
-        ir,
-        art,
-        sample,
-        s,
-        notes,
-        opts,
-        opts.onEvent ? emit : null,
-        decider,
+      const o = ir.outputs;
+      const result = {
+        runId,
+        trigger,
+        signals: s,
+        hits: o.hits ? outputs[o.hits] || [] : [],
+        context: o.context ? outputs[o.context] : null,
+        answer: o.answer ? outputs[o.answer] : null,
         outputs,
-      );
-      const t1 = now();
-      emit({ type: 'node', node: n.id, component: n.t, phase: 'start' });
-      try {
-        const p = await this.params(n, sp, ctx, art, ir);
-        let out = await def.run(sp, ctx, input, p);
-        if (n.out === 'hits') out = normHits(out, n.id);
-        outputs[n.id] = out;
-        entry.out = countOf(out);
-        describe(n, out, entry);
-        this.memo.set(n.id, { digest: nd, inputs, reads, out, full: true, notes });
-      } catch (e) {
-        const msg =
-          e && (e.message || e.code) ? `${e.code && !e.message ? e.code : e.message}` : String(e);
-        entry.status = 'error';
-        entry.error = msg;
-        errors.push(`${n.id}: ${msg}`);
-        outputs[n.id] =
-          def.skip === 'null' || n.out === 'answer'
-            ? null
-            : n.out === 'hits' || n.out === 'queries'
-              ? input || []
-              : null;
-        if (e && e.code === 'cancelled') {
-          trace.push(entry);
-          break;
-        }
-      }
-      entry.ms = +(now() - t1).toFixed(1);
-      timed('run', n.id, entry.ms, `${n.t} · ${entry.status} · ${entry.in}→${entry.out}`);
-      entry.calls = counter.calls - c0;
-      if (notes.length) entry.notes = notes;
-      trace.push(entry);
-      if (opts.onNode) opts.onNode(entry);
-      emit({
-        type: 'node',
-        node: n.id,
-        component: n.t,
-        phase: 'end',
-        status: entry.status,
-        ms: entry.ms,
-        in: entry.in,
-        out: entry.out,
-        calls: entry.calls,
-        ...(entry.notes ? { notes: entry.notes } : {}),
-        ...(entry.error ? { error: entry.error } : {}),
-      });
+        trace,
+        errors,
+        ms: +(now() - t0).toFixed(1),
+        calls: counter.calls,
+      };
+      decorateResult(result, art);
+      emit({ type: 'runEnd', ms: result.ms, calls: result.calls, errors });
+      this.last = result;
+      return result;
+    } finally {
+      release();
     }
-    const o = ir.outputs;
-    const result = {
-      runId,
-      trigger,
-      signals: s,
-      hits: o.hits ? outputs[o.hits] || [] : [],
-      context: o.context ? outputs[o.context] : null,
-      answer: o.answer ? outputs[o.answer] : null,
-      outputs,
-      trace,
-      errors,
-      ms: +(now() - t0).toFixed(1),
-      calls: counter.calls,
-    };
-    decorateResult(result, art);
-    emit({ type: 'runEnd', ms: result.ms, calls: result.calls, errors });
-    this.last = result;
-    return result;
   }
   async params(n, sp, ctx, art, ir) {
     const p = await this.engine.resolveBakes(n, n.p, art.byId, ir);
@@ -365,13 +374,50 @@ class Session {
 
 function decorateResult(result, art) {
   const def = (k, v) => Object.defineProperty(result, k, { value: v, enumerable: false });
-  def('chunk', (id) => art.chunks.get(id) || null);
+  const records = new Map();
+  let bytes = 0;
+  const remember = (id) => {
+    if (records.has(id)) return;
+    const chunk = art.chunks.get(id);
+    if (!chunk) return;
+    const wire = JSON.stringify(chunk);
+    bytes += wire.length * 2;
+    if (bytes > 16 * 1024 * 1024)
+      throw new RagError('result_limit', 'detached records exceed 16 MiB');
+    records.set(id, JSON.parse(wire));
+  };
+  const scan = (value) => {
+    if (!value || typeof value !== 'object') return;
+    if (typeof value.id === 'string') remember(value.id);
+    if (Array.isArray(value)) value.forEach(scan);
+    else Object.values(value).forEach(scan);
+  };
+  scan(result);
+  for (const record of [...records.values()]) {
+    const order = art.order.get(record.docId) || [];
+    const i = order.indexOf(record.id);
+    for (const id of order.slice(Math.max(0, i - 1), i + 2)) remember(id);
+  }
+  result.snapshotId = art.key;
+  result.records = Object.fromEntries(records);
+  result.neighborRefs = {};
+  for (const hit of result.hits) {
+    const record = records.get(hit.id);
+    if (!record) continue;
+    const order = art.order.get(record.docId) || [];
+    const i = order.indexOf(record.id);
+    result.neighborRefs[hit.id] = {
+      prev: i > 0 ? order[i - 1] : null,
+      next: i >= 0 && i + 1 < order.length ? order[i + 1] : null,
+    };
+  }
+  def('chunk', (id) => records.get(id) || null);
   def('top', (n = 5, from) => {
     const list = from ? result.outputs[from] || [] : result.hits;
     return arr(list)
       .slice(0, n)
       .map((h) => {
-        const c = art.chunks.get(h.id) || {};
+        const c = records.get(h.id) || {};
         return {
           id: h.id,
           score: h.score,

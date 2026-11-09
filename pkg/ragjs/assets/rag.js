@@ -42,6 +42,22 @@ var __ragModule = (() => {
         refs.push({ kind: "artifact", target });
     }
     for (const target of def.reads?.(node.p) || []) refs.push({ kind: "signal", target });
+    const visit = /* @__PURE__ */ __name((value) => {
+      if (!value || typeof value !== "object") return;
+      const object = value;
+      if (typeof object.$bake === "string") {
+        const bindings = object.datasets;
+        for (const [name, target] of Object.entries(bindings || {}))
+          refs.push({
+            kind: "artifact",
+            target,
+            set: /* @__PURE__ */ __name((value2) => {
+              if (bindings) bindings[name] = value2;
+            }, "set")
+          });
+      } else for (const child of Object.values(object)) visit(child);
+    }, "visit");
+    visit(node.p);
     const when = node.when;
     if (when?.decision) {
       const split = when.decision.indexOf(".");
@@ -531,8 +547,10 @@ var __ragModule = (() => {
   var env0 = {};
 
   // pkg/ragjs/src/graph/graph.js
-  function rag_bake(f) {
-    return { $bake: lam(f).$fn };
+  function rag_bake(bindings, f) {
+    if (!isObj(bindings) || !isObj(bindings.datasets) || typeof f !== "function")
+      throw new RagError("compile", "bake requires ({datasets: {name: nodeId}}, callback)");
+    return { $bake: lam(f).$fn, datasets: { ...bindings.datasets } };
   }
   __name(rag_bake, "rag_bake");
   function splitOpts(p) {
@@ -1975,7 +1993,7 @@ var __ragModule = (() => {
     build("bake", {
       in: ["docs"],
       out: "value",
-      args: /* @__PURE__ */ __name((f) => ({ value: rag_bake(f) }), "args"),
+      args: /* @__PURE__ */ __name((bindings, f) => ({ value: rag_bake(bindings, f) }), "args"),
       describe: /* @__PURE__ */ __name(() => "baked value", "describe"),
       all: /* @__PURE__ */ __name((inputs, ctx, p) => p.value, "all")
     });
@@ -2544,74 +2562,104 @@ Question: ${s.q}`;
   }
   __name(installBuiltins, "installBuiltins");
 
-  // pkg/ragjs/src/engine/records.js
-  var _Lazy = class _Lazy {
-    constructor(load, onLoad) {
-      this.load = load;
-      this.onLoad = onLoad;
-      this.done = false;
-      this.v = void 0;
-    }
-    force() {
-      if (!this.done) {
-        const t0 = now();
-        this.v = this.load();
-        this.done = true;
-        this.load = null;
-        if (this.onLoad) this.onLoad(now() - t0);
-      }
-      return this.v;
-    }
-  };
-  __name(_Lazy, "Lazy");
-  var Lazy = _Lazy;
-  function unionChunks(map, views) {
-    const get = /* @__PURE__ */ __name((id) => map.get(id) ?? views.reduce((hit, v) => hit ?? v.get(id), void 0), "get");
-    return {
-      get,
-      has: /* @__PURE__ */ __name((id) => map.has(id) || views.some((v) => v.has(id)), "has"),
+  // pkg/ragjs/src/engine/dataset.ts
+  function immutable(value) {
+    if (value === null || typeof value !== "object") return value;
+    if (Array.isArray(value)) return Object.freeze(value.map(immutable));
+    const out = {};
+    for (const [key, item] of Object.entries(value)) out[key] = immutable(item);
+    return Object.freeze(out);
+  }
+  __name(immutable, "immutable");
+  function dataset(id, kind, reader) {
+    const result = {
+      id,
+      kind,
       get size() {
-        return (/* @__PURE__ */ new Set([...map.keys(), ...views.flatMap((v) => [...v.keys()])])).size;
+        return reader.size;
+      },
+      get(key) {
+        const value = reader.get(key);
+        return value == null ? null : immutable(value);
       },
       *values() {
-        const seen = new Set(map.keys());
-        for (const v of views)
-          for (const c of v.values())
-            if (!seen.has(c.id)) {
-              seen.add(c.id);
-              yield get(c.id);
-            }
-        yield* map.values();
+        for (const value of reader.values()) yield immutable(value);
       },
-      *keys() {
-        for (const c of this.values()) yield c.id;
-      },
-      *entries() {
-        for (const c of this.values()) yield [c.id, c];
-      },
-      forEach(f) {
-        for (const c of this.values()) f(c, c.id, this);
-      },
-      [Symbol.iterator]() {
-        return this.entries();
+      materialize() {
+        return Object.freeze([...result.values()]);
       }
     };
+    return Object.freeze(result);
   }
-  __name(unionChunks, "unionChunks");
-  var _Outputs = class _Outputs extends Map {
-    get(k) {
-      const v = super.get(k);
-      return v instanceof Lazy ? v.force() : v;
+  __name(dataset, "dataset");
+  function memoryDataset(id, kind, records) {
+    const entries = /* @__PURE__ */ new Map();
+    for (const record of records) {
+      if (entries.has(record.id))
+        throw new RagError("dataset", `duplicate record '${record.id}' in ${id}`);
+      entries.set(record.id, immutable(record));
+    }
+    return dataset(id, kind, entries);
+  }
+  __name(memoryDataset, "memoryDataset");
+
+  // pkg/ragjs/src/engine/ownership.ts
+  var _ResourceRegistry = class _ResourceRegistry {
+    constructor() {
+      this.entries = /* @__PURE__ */ new Map();
+    }
+    retain(resource, close) {
+      let entry = this.entries.get(resource);
+      if (!entry) {
+        entry = { owners: 0, close };
+        this.entries.set(resource, entry);
+      }
+      entry.owners++;
+      let released = false;
+      return () => {
+        if (released) return;
+        released = true;
+        if (--entry.owners === 0) {
+          this.entries.delete(resource);
+          entry.close();
+        }
+      };
+    }
+    get size() {
+      return this.entries.size;
     }
   };
-  __name(_Outputs, "Outputs");
-  var Outputs = _Outputs;
-  var isView = /* @__PURE__ */ __name((v) => v != null && typeof v === "object" && v.__records !== void 0, "isView");
-  var asArray = /* @__PURE__ */ __name((v) => isView(v) ? v.toArray() : v, "asArray");
-  var JSON_PERSIST = { save: /* @__PURE__ */ __name((v) => v, "save"), load: /* @__PURE__ */ __name((x) => x, "load") };
-  var FULL_DELTA = Object.freeze({ full: true });
-  var persistOf = /* @__PURE__ */ __name((def) => !def || def.persist === false ? null : def.persist || (["docs", "chunks"].includes(def.out) ? JSON_PERSIST : null), "persistOf");
-  var storeKey = /* @__PURE__ */ __name((d, def) => hash([d, def.src || ""]), "storeKey");
+  __name(_ResourceRegistry, "ResourceRegistry");
+  var ResourceRegistry = _ResourceRegistry;
+  var _OwnershipScope = class _OwnershipScope {
+    constructor() {
+      this.releases = [];
+      this.closed = false;
+    }
+    own(release) {
+      if (this.closed) {
+        release();
+        throw new Error("ownership scope is closed");
+      }
+      this.releases.push(release);
+    }
+    close() {
+      if (this.closed) return;
+      this.closed = true;
+      let failure;
+      for (const release of this.releases.reverse()) {
+        try {
+          release();
+        } catch (error) {
+          failure ?? (failure = error);
+        }
+      }
+      this.releases = [];
+      if (failure) throw failure;
+    }
+  };
+  __name(_OwnershipScope, "OwnershipScope");
+  var OwnershipScope = _OwnershipScope;
 
   // pkg/ragjs/src/engine/scope.ts
   var currentScope = null;
@@ -2702,6 +2750,168 @@ Question: ${s.q}`;
   }
   __name(safeEmit, "safeEmit");
 
+  // pkg/ragjs/src/engine/jobs.ts
+  var _BuildJobs = class _BuildJobs {
+    constructor() {
+      this.jobs = /* @__PURE__ */ new Map();
+      this.closed = false;
+    }
+    async run(key, options, start) {
+      if (this.closed) throw new RagError("shutdown", "engine is closed");
+      if (options.signal?.aborted) throw new RagError("cancelled", "build waiter cancelled");
+      let job = this.jobs.get(key);
+      if (job?.cancelling) {
+        await this.wait(job, options, false).catch((error) => {
+          if (options.signal?.aborted) throw error;
+        });
+        return this.run(key, options, start);
+      }
+      if (!job) {
+        const scope = newScope(() => {
+        });
+        const waiters = /* @__PURE__ */ new Set();
+        const created = {
+          scope,
+          waiters,
+          cancelling: false,
+          promise: Promise.resolve(void 0)
+        };
+        this.jobs.set(key, created);
+        const notify = /* @__PURE__ */ __name((kind, value) => {
+          for (const waiter of [...waiters]) {
+            try {
+              if (kind === "event") waiter.event?.(value);
+              else waiter.progress?.(value);
+            } catch {
+            }
+          }
+        }, "notify");
+        created.promise = Promise.resolve().then(
+          () => start({
+            signal: scope.signal,
+            onEvent: /* @__PURE__ */ __name((event) => notify("event", event), "onEvent"),
+            onProgress: /* @__PURE__ */ __name((progress) => notify("progress", progress), "onProgress")
+          })
+        ).finally(() => {
+          scope.close();
+          if (this.jobs.get(key) === created) this.jobs.delete(key);
+        });
+        void created.promise.catch(() => {
+        });
+        job = created;
+      }
+      return this.wait(job, options, true);
+    }
+    wait(job, options, interested) {
+      return new Promise((resolve, reject) => {
+        const waiter = { event: options.onEvent, progress: options.onProgress };
+        let done = false;
+        const finish = /* @__PURE__ */ __name((error, value) => {
+          if (done) return;
+          done = true;
+          options.signal?.removeEventListener("abort", abort);
+          if (interested) job.waiters.delete(waiter);
+          if (error !== null) reject(error);
+          else resolve(value);
+        }, "finish");
+        const abort = /* @__PURE__ */ __name(() => {
+          finish(new RagError("cancelled", "build waiter cancelled"));
+          if (interested && job.waiters.size === 0) {
+            job.cancelling = true;
+            job.scope.abort("no build waiters");
+          }
+        }, "abort");
+        if (interested) job.waiters.add(waiter);
+        options.signal?.addEventListener("abort", abort);
+        if (options.signal?.aborted) abort();
+        job.promise.then(
+          (value) => finish(null, value),
+          (error) => finish(error)
+        );
+      });
+    }
+    async close() {
+      this.closed = true;
+      const active = [...this.jobs.values()];
+      for (const job of active) {
+        job.cancelling = true;
+        job.scope.abort("engine shutdown");
+      }
+      await Promise.allSettled(active.map((job) => job.promise));
+    }
+  };
+  __name(_BuildJobs, "BuildJobs");
+  var BuildJobs = _BuildJobs;
+
+  // pkg/ragjs/src/engine/records.js
+  var _Lazy = class _Lazy {
+    constructor(load, onLoad) {
+      this.load = load;
+      this.onLoad = onLoad;
+      this.done = false;
+      this.v = void 0;
+    }
+    force() {
+      if (!this.done) {
+        const t0 = now();
+        this.v = this.load();
+        this.done = true;
+        this.load = null;
+        if (this.onLoad) this.onLoad(now() - t0);
+      }
+      return this.v;
+    }
+  };
+  __name(_Lazy, "Lazy");
+  var Lazy = _Lazy;
+  function unionChunks(map, views) {
+    const get = /* @__PURE__ */ __name((id) => map.get(id) ?? views.reduce((hit, v) => hit ?? v.get(id), void 0), "get");
+    return {
+      get,
+      has: /* @__PURE__ */ __name((id) => map.has(id) || views.some((v) => v.has(id)), "has"),
+      get size() {
+        return (/* @__PURE__ */ new Set([...map.keys(), ...views.flatMap((v) => [...v.keys()])])).size;
+      },
+      *values() {
+        const seen = new Set(map.keys());
+        for (const v of views)
+          for (const c of v.values())
+            if (!seen.has(c.id)) {
+              seen.add(c.id);
+              yield get(c.id);
+            }
+        yield* map.values();
+      },
+      *keys() {
+        for (const c of this.values()) yield c.id;
+      },
+      *entries() {
+        for (const c of this.values()) yield [c.id, c];
+      },
+      forEach(f) {
+        for (const c of this.values()) f(c, c.id, this);
+      },
+      [Symbol.iterator]() {
+        return this.entries();
+      }
+    };
+  }
+  __name(unionChunks, "unionChunks");
+  var _Outputs = class _Outputs extends Map {
+    get(k) {
+      const v = super.get(k);
+      return v instanceof Lazy ? v.force() : v;
+    }
+  };
+  __name(_Outputs, "Outputs");
+  var Outputs = _Outputs;
+  var isView = /* @__PURE__ */ __name((v) => v != null && typeof v === "object" && v.__records !== void 0, "isView");
+  var asArray = /* @__PURE__ */ __name((v) => isView(v) ? v.toArray() : v, "asArray");
+  var JSON_PERSIST = { save: /* @__PURE__ */ __name((v) => v, "save"), load: /* @__PURE__ */ __name((x) => x, "load") };
+  var FULL_DELTA = Object.freeze({ full: true });
+  var persistOf = /* @__PURE__ */ __name((def) => !def || def.persist === false ? null : def.persist || (["docs", "chunks"].includes(def.out) ? JSON_PERSIST : null), "persistOf");
+  var storeKey = /* @__PURE__ */ __name((d, def) => hash([d, def.src || ""]), "storeKey");
+
   // pkg/ragjs/src/engine/session.js
   var countOf = /* @__PURE__ */ __name((v) => v == null ? 0 : Array.isArray(v) ? v.length : v.evidence ? v.evidence.length : 1, "countOf");
   var _Session = class _Session {
@@ -2740,220 +2950,231 @@ Question: ${s.q}`;
         if (!rep.ok) throw new RagError("build", rep.errors.join("\n"));
         art = engine.artifacts(ir);
       }
-      if (this.artKey !== art.key) {
-        this.memo.clear();
-        this.artKey = art.key;
-      }
-      const t0 = now();
-      const trigger = opts.trigger || "submit";
-      const s = { ...ir.signals, ...signals };
-      const outputs = {}, trace = [], errors = [];
-      const counter = { calls: 0 };
-      const sample = engine.sampler(counter, opts.signal);
-      const decider = engine.decider(counter, opts.signal);
-      const runId = ++this.runs;
-      const detail = opts.detail || {};
-      emit({ type: "run", plan: ir.id, trigger, signals: s });
-      const describe = /* @__PURE__ */ __name((n, out, entry) => {
-        if (n.out === "hits" && Array.isArray(out)) {
-          entry.top = out.slice(0, 50).map((h) => ({ id: h.id, score: h.score, why: h.why, parts: h.parts, reason: h.reason }));
-          if (opts.onEvent) emit(hitsEvent(n.id, out, art, detail));
+      const release = engine.acquire(art);
+      try {
+        if (this.artKey !== art.key) {
+          this.memo.clear();
+          this.artKey = art.key;
         }
-        if (n.out === "decision" && out)
-          entry.decision = Object.fromEntries(
-            Object.entries(out).map(([id, a]) => [id, answerLine(a)])
-          );
-        if (n.out === "context" && out && opts.onEvent)
-          emit({
-            type: "context",
-            node: n.id,
-            evidence: arr(out.evidence).map((e) => ({ label: e.label, id: e.id })),
-            bytes: out.bytes
-          });
-      }, "describe");
-      for (const n of ir.nodes) {
-        if (n.phase === "build") continue;
-        if (n.phase === "signal") {
-          outputs[n.id] = s[n.id];
-          continue;
-        }
-        const def = REG.get(n.t);
-        const inputs = n.in.map((id) => {
-          const v = outputs[id];
-          const src = ir.node(id);
-          return src.t === "signal" && (portsOf(n).in[0] || "").startsWith("queries") ? this.queries(v) : v;
-        });
-        const input = (portsOf(n).in[0] || "") === "hits*" ? inputs : inputs[0];
-        if (n.when) {
-          const decision = /* @__PURE__ */ __name((id) => {
-            const v = outputs[id];
-            return v && v.$decision ? v : null;
-          }, "decision");
-          let w;
-          try {
-            w = isLambda(n.when) ? {
-              on: !!await fnOf(n.when, `${n.id}.when`)(s, {
-                decisions: Object.fromEntries(
-                  Object.entries(n.when.bindings).map(([name, id]) => [name, decision(id)])
-                ),
-                signals: s
-              }),
-              why: "when λ"
-            } : whenHolds(n.when, decision);
-          } catch (e) {
-            w = { on: true, why: `when failed (${e.message || e}) → run` };
+        const t0 = now();
+        const trigger = opts.trigger || "submit";
+        const s = { ...ir.signals, ...signals };
+        const outputs = {}, trace = [], errors = [];
+        const counter = { calls: 0 };
+        const sample = engine.sampler(counter, opts.signal);
+        const decider = engine.decider(counter, opts.signal);
+        const runId = ++this.runs;
+        const detail = opts.detail || {};
+        emit({ type: "run", plan: ir.id, trigger, signals: s });
+        const describe = /* @__PURE__ */ __name((n, out, entry) => {
+          if (n.out === "hits" && Array.isArray(out)) {
+            entry.top = out.slice(0, 50).map((h) => ({
+              id: h.id,
+              score: h.score,
+              why: h.why,
+              parts: h.parts,
+              reason: h.reason
+            }));
+            if (opts.onEvent) emit(hitsEvent(n.id, out, art, detail));
           }
-          if (!w.on) {
-            outputs[n.id] = whenSkipOutput(n, input);
-            const entry2 = {
+          if (n.out === "decision" && out)
+            entry.decision = Object.fromEntries(
+              Object.entries(out).map(([id, a]) => [id, answerLine(a)])
+            );
+          if (n.out === "context" && out && opts.onEvent)
+            emit({
+              type: "context",
               node: n.id,
-              t: n.t,
+              evidence: arr(out.evidence).map((e) => ({ label: e.label, id: e.id })),
+              bytes: out.bytes
+            });
+        }, "describe");
+        for (const n of ir.nodes) {
+          if (n.phase === "build") continue;
+          if (n.phase === "signal") {
+            outputs[n.id] = s[n.id];
+            continue;
+          }
+          const def = REG.get(n.t);
+          const inputs = n.in.map((id) => {
+            const v = outputs[id];
+            const src = ir.node(id);
+            return src.t === "signal" && (portsOf(n).in[0] || "").startsWith("queries") ? this.queries(v) : v;
+          });
+          const input = (portsOf(n).in[0] || "") === "hits*" ? inputs : inputs[0];
+          if (n.when) {
+            const decision = /* @__PURE__ */ __name((id) => {
+              const v = outputs[id];
+              return v && v.$decision ? v : null;
+            }, "decision");
+            let w;
+            try {
+              w = isLambda(n.when) ? {
+                on: !!await fnOf(n.when, `${n.id}.when`)(s, {
+                  decisions: Object.fromEntries(
+                    Object.entries(n.when.bindings).map(([name, id]) => [name, decision(id)])
+                  ),
+                  signals: s
+                }),
+                why: "when λ"
+              } : whenHolds(n.when, decision);
+            } catch (e) {
+              w = { on: true, why: `when failed (${e.message || e}) → run` };
+            }
+            if (!w.on) {
+              outputs[n.id] = whenSkipOutput(n, input);
+              const entry2 = {
+                node: n.id,
+                t: n.t,
+                ms: 0,
+                in: countOf(input),
+                out: countOf(outputs[n.id]),
+                status: "skipped",
+                skippedBy: "when",
+                notes: [`when: ${w.why}`]
+              };
+              trace.push(entry2);
+              emit({
+                type: "node",
+                node: n.id,
+                component: n.t,
+                phase: "end",
+                status: "skipped",
+                skippedBy: "when",
+                ms: 0,
+                in: entry2.in,
+                out: entry2.out,
+                notes: entry2.notes
+              });
+              continue;
+            }
+          }
+          const nd = hash([n.t, n.p, n.trigger, def.src || ""]);
+          const wants = trigger === "submit" || triggerOf(n) === "change";
+          const m = this.memo.get(n.id);
+          const sameInputs = m && m.inputs.length === inputs.length && m.inputs.every((v, i) => v === inputs[i]);
+          const sameReads = m && Object.entries(m.reads).every(([k, v]) => stable(s[k]) === v);
+          const entry = { node: n.id, t: n.t, ms: 0, in: countOf(input), out: 0, status: "ran" };
+          if (m && m.digest === nd && sameInputs && sameReads && (m.full || !wants)) {
+            outputs[n.id] = m.out;
+            entry.status = m.full ? "cached" : "skipped";
+            entry.out = countOf(m.out);
+            if (m.notes) entry.notes = m.notes;
+            if (m.full) describe(n, m.out, entry);
+            trace.push(entry);
+            emit({
+              type: "node",
+              node: n.id,
+              component: n.t,
+              phase: "end",
+              status: entry.status,
               ms: 0,
-              in: countOf(input),
-              out: countOf(outputs[n.id]),
-              status: "skipped",
-              skippedBy: "when",
-              notes: [`when: ${w.why}`]
-            };
-            trace.push(entry2);
+              in: entry.in,
+              out: entry.out
+            });
+            continue;
+          }
+          if (!wants) {
+            outputs[n.id] = def.skip === "null" ? null : input;
+            entry.status = "skipped";
+            entry.out = countOf(outputs[n.id]);
+            trace.push(entry);
             emit({
               type: "node",
               node: n.id,
               component: n.t,
               phase: "end",
               status: "skipped",
-              skippedBy: "when",
               ms: 0,
-              in: entry2.in,
-              out: entry2.out,
-              notes: entry2.notes
+              in: entry.in,
+              out: entry.out
             });
+            this.memo.set(n.id, { digest: nd, inputs, reads: {}, out: outputs[n.id], full: false });
             continue;
           }
-        }
-        const nd = hash([n.t, n.p, n.trigger, def.src || ""]);
-        const wants = trigger === "submit" || triggerOf(n) === "change";
-        const m = this.memo.get(n.id);
-        const sameInputs = m && m.inputs.length === inputs.length && m.inputs.every((v, i) => v === inputs[i]);
-        const sameReads = m && Object.entries(m.reads).every(([k, v]) => stable(s[k]) === v);
-        const entry = { node: n.id, t: n.t, ms: 0, in: countOf(input), out: 0, status: "ran" };
-        if (m && m.digest === nd && sameInputs && sameReads && (m.full || !wants)) {
-          outputs[n.id] = m.out;
-          entry.status = m.full ? "cached" : "skipped";
-          entry.out = countOf(m.out);
-          if (m.notes) entry.notes = m.notes;
-          if (m.full) describe(n, m.out, entry);
+          const reads = {};
+          const sp = new Proxy(s, {
+            get: /* @__PURE__ */ __name((t, k) => {
+              if (typeof k === "string") reads[k] = stable(t[k]);
+              return t[k];
+            }, "get")
+          });
+          const notes = [];
+          const c0 = counter.calls;
+          const ctx = this.ctx(
+            n,
+            ir,
+            art,
+            sample,
+            s,
+            notes,
+            opts,
+            opts.onEvent ? emit : null,
+            decider,
+            outputs
+          );
+          const t1 = now();
+          emit({ type: "node", node: n.id, component: n.t, phase: "start" });
+          try {
+            const p = await this.params(n, sp, ctx, art, ir);
+            let out = await def.run(sp, ctx, input, p);
+            if (n.out === "hits") out = normHits(out, n.id);
+            outputs[n.id] = out;
+            entry.out = countOf(out);
+            describe(n, out, entry);
+            this.memo.set(n.id, { digest: nd, inputs, reads, out, full: true, notes });
+          } catch (e) {
+            const msg = e && (e.message || e.code) ? `${e.code && !e.message ? e.code : e.message}` : String(e);
+            entry.status = "error";
+            entry.error = msg;
+            errors.push(`${n.id}: ${msg}`);
+            outputs[n.id] = def.skip === "null" || n.out === "answer" ? null : n.out === "hits" || n.out === "queries" ? input || [] : null;
+            if (e && e.code === "cancelled") {
+              trace.push(entry);
+              break;
+            }
+          }
+          entry.ms = +(now() - t1).toFixed(1);
+          timed("run", n.id, entry.ms, `${n.t} · ${entry.status} · ${entry.in}→${entry.out}`);
+          entry.calls = counter.calls - c0;
+          if (notes.length) entry.notes = notes;
           trace.push(entry);
+          if (opts.onNode) opts.onNode(entry);
           emit({
             type: "node",
             node: n.id,
             component: n.t,
             phase: "end",
             status: entry.status,
-            ms: 0,
+            ms: entry.ms,
             in: entry.in,
-            out: entry.out
+            out: entry.out,
+            calls: entry.calls,
+            ...entry.notes ? { notes: entry.notes } : {},
+            ...entry.error ? { error: entry.error } : {}
           });
-          continue;
         }
-        if (!wants) {
-          outputs[n.id] = def.skip === "null" ? null : input;
-          entry.status = "skipped";
-          entry.out = countOf(outputs[n.id]);
-          trace.push(entry);
-          emit({
-            type: "node",
-            node: n.id,
-            component: n.t,
-            phase: "end",
-            status: "skipped",
-            ms: 0,
-            in: entry.in,
-            out: entry.out
-          });
-          this.memo.set(n.id, { digest: nd, inputs, reads: {}, out: outputs[n.id], full: false });
-          continue;
-        }
-        const reads = {};
-        const sp = new Proxy(s, {
-          get: /* @__PURE__ */ __name((t, k) => {
-            if (typeof k === "string") reads[k] = stable(t[k]);
-            return t[k];
-          }, "get")
-        });
-        const notes = [];
-        const c0 = counter.calls;
-        const ctx = this.ctx(
-          n,
-          ir,
-          art,
-          sample,
-          s,
-          notes,
-          opts,
-          opts.onEvent ? emit : null,
-          decider,
-          outputs
-        );
-        const t1 = now();
-        emit({ type: "node", node: n.id, component: n.t, phase: "start" });
-        try {
-          const p = await this.params(n, sp, ctx, art, ir);
-          let out = await def.run(sp, ctx, input, p);
-          if (n.out === "hits") out = normHits(out, n.id);
-          outputs[n.id] = out;
-          entry.out = countOf(out);
-          describe(n, out, entry);
-          this.memo.set(n.id, { digest: nd, inputs, reads, out, full: true, notes });
-        } catch (e) {
-          const msg = e && (e.message || e.code) ? `${e.code && !e.message ? e.code : e.message}` : String(e);
-          entry.status = "error";
-          entry.error = msg;
-          errors.push(`${n.id}: ${msg}`);
-          outputs[n.id] = def.skip === "null" || n.out === "answer" ? null : n.out === "hits" || n.out === "queries" ? input || [] : null;
-          if (e && e.code === "cancelled") {
-            trace.push(entry);
-            break;
-          }
-        }
-        entry.ms = +(now() - t1).toFixed(1);
-        timed("run", n.id, entry.ms, `${n.t} · ${entry.status} · ${entry.in}→${entry.out}`);
-        entry.calls = counter.calls - c0;
-        if (notes.length) entry.notes = notes;
-        trace.push(entry);
-        if (opts.onNode) opts.onNode(entry);
-        emit({
-          type: "node",
-          node: n.id,
-          component: n.t,
-          phase: "end",
-          status: entry.status,
-          ms: entry.ms,
-          in: entry.in,
-          out: entry.out,
-          calls: entry.calls,
-          ...entry.notes ? { notes: entry.notes } : {},
-          ...entry.error ? { error: entry.error } : {}
-        });
+        const o = ir.outputs;
+        const result = {
+          runId,
+          trigger,
+          signals: s,
+          hits: o.hits ? outputs[o.hits] || [] : [],
+          context: o.context ? outputs[o.context] : null,
+          answer: o.answer ? outputs[o.answer] : null,
+          outputs,
+          trace,
+          errors,
+          ms: +(now() - t0).toFixed(1),
+          calls: counter.calls
+        };
+        decorateResult(result, art);
+        emit({ type: "runEnd", ms: result.ms, calls: result.calls, errors });
+        this.last = result;
+        return result;
+      } finally {
+        release();
       }
-      const o = ir.outputs;
-      const result = {
-        runId,
-        trigger,
-        signals: s,
-        hits: o.hits ? outputs[o.hits] || [] : [],
-        context: o.context ? outputs[o.context] : null,
-        answer: o.answer ? outputs[o.answer] : null,
-        outputs,
-        trace,
-        errors,
-        ms: +(now() - t0).toFixed(1),
-        calls: counter.calls
-      };
-      decorateResult(result, art);
-      emit({ type: "runEnd", ms: result.ms, calls: result.calls, errors });
-      this.last = result;
-      return result;
     }
     async params(n, sp, ctx, art, ir) {
       const p = await this.engine.resolveBakes(n, n.p, art.byId, ir);
@@ -3038,11 +3259,48 @@ Question: ${s.q}`;
   var Session = _Session;
   function decorateResult(result, art) {
     const def = /* @__PURE__ */ __name((k, v) => Object.defineProperty(result, k, { value: v, enumerable: false }), "def");
-    def("chunk", (id) => art.chunks.get(id) || null);
+    const records = /* @__PURE__ */ new Map();
+    let bytes = 0;
+    const remember = /* @__PURE__ */ __name((id) => {
+      if (records.has(id)) return;
+      const chunk = art.chunks.get(id);
+      if (!chunk) return;
+      const wire = JSON.stringify(chunk);
+      bytes += wire.length * 2;
+      if (bytes > 16 * 1024 * 1024)
+        throw new RagError("result_limit", "detached records exceed 16 MiB");
+      records.set(id, JSON.parse(wire));
+    }, "remember");
+    const scan = /* @__PURE__ */ __name((value) => {
+      if (!value || typeof value !== "object") return;
+      if (typeof value.id === "string") remember(value.id);
+      if (Array.isArray(value)) value.forEach(scan);
+      else Object.values(value).forEach(scan);
+    }, "scan");
+    scan(result);
+    for (const record of [...records.values()]) {
+      const order = art.order.get(record.docId) || [];
+      const i = order.indexOf(record.id);
+      for (const id of order.slice(Math.max(0, i - 1), i + 2)) remember(id);
+    }
+    result.snapshotId = art.key;
+    result.records = Object.fromEntries(records);
+    result.neighborRefs = {};
+    for (const hit of result.hits) {
+      const record = records.get(hit.id);
+      if (!record) continue;
+      const order = art.order.get(record.docId) || [];
+      const i = order.indexOf(record.id);
+      result.neighborRefs[hit.id] = {
+        prev: i > 0 ? order[i - 1] : null,
+        next: i >= 0 && i + 1 < order.length ? order[i + 1] : null
+      };
+    }
+    def("chunk", (id) => records.get(id) || null);
     def("top", (n = 5, from) => {
       const list = from ? result.outputs[from] || [] : result.hits;
       return arr(list).slice(0, n).map((h) => {
-        const c = art.chunks.get(h.id) || {};
+        const c = records.get(h.id) || {};
         return {
           id: h.id,
           score: h.score,
@@ -3097,9 +3355,11 @@ Question: ${s.q}`;
     constructor(env = {}) {
       this.env = env;
       this.memo = /* @__PURE__ */ new Map();
-      this.retired = [];
+      this.resources = new ResourceRegistry();
+      this.memoOwners = /* @__PURE__ */ new Map();
+      this.activeSnapshots = /* @__PURE__ */ new Map();
       this.recent = /* @__PURE__ */ new Map();
-      this.building = /* @__PURE__ */ new Map();
+      this.building = new BuildJobs();
       this.items = /* @__PURE__ */ new Map();
       this.bakes = /* @__PURE__ */ new Map();
       this.fileDigests = /* @__PURE__ */ new Map();
@@ -3248,7 +3508,11 @@ Question: ${s.q}`;
           const sk = storeKey(d, REG.get(n.t)), hit = store.has(sk);
           if (hit) {
             const lz = new Lazy(
-              () => codec.load(store.load(sk), n.p),
+              () => {
+                const value = codec.load(store.load(sk), n.p);
+                this.ownMemo(d, value);
+                return value;
+              },
               (ms) => timed("load", n.id, ms, n.t)
             );
             this.memo.set(d, {
@@ -3295,7 +3559,14 @@ Question: ${s.q}`;
           const inc = def.delta && !def.map && !(opts.full ?? this.env.fullBuild) && !opts.force && opts.persist !== false ? await this.tryDelta(n, def, d, lineages.get(n.id), deltas, outputs, ctx, p, opts) : null;
           if (inc) {
             if (inc.lazy) {
-              lazy = new Lazy(inc.lazy, (ms) => timed("load", n.id, ms, n.t));
+              lazy = new Lazy(
+                () => {
+                  const value2 = inc.lazy();
+                  this.ownMemo(d, value2);
+                  return value2;
+                },
+                (ms) => timed("load", n.id, ms, n.t)
+              );
               outputs.set(n.id, lazy);
             } else value = inc.value;
             deltas.set(n.id, { ...inc.delta, full: false, from: inc.base.digest });
@@ -3388,7 +3659,10 @@ Question: ${s.q}`;
                 count,
                 lazy: lz
               });
-            } else this.memo.set(d, { value, count: st.count });
+            } else {
+              this.memo.set(d, { value, count: st.count });
+              this.ownMemo(d, value);
+            }
             this.partial.delete(d);
             const store2 = this.env.artifacts, codec2 = store2 ? persistOf(def) : null;
             if (codec2 && opts.persist !== false) {
@@ -3448,39 +3722,59 @@ Question: ${s.q}`;
       this.emit({ type: "built", report });
       return report;
     }
-    // Release superseded build outputs (RAGWB-003 §6.7) for an engine that serves
-    // ir alone (serve): memo entries whose digest ir no longer has are dropped, and
-    // their Go handles (record views, bleve indexes) closed one gc later, so a
-    // query that started before the rebuild keeps working. Values still reachable
-    // from live entries are never closed.
+    retainValue(value, scope) {
+      if (!value || typeof value !== "object") return;
+      const handle = isView(value) ? value.__records : value.__ix;
+      if (handle && typeof handle.close === "function")
+        scope.own(this.resources.retain(handle, () => handle.close()));
+    }
+    ownMemo(digest, value) {
+      if (this.memoOwners.has(digest)) return;
+      const owner = new OwnershipScope();
+      this.retainValue(value, owner);
+      this.memoOwners.set(digest, owner);
+    }
+    acquire(art) {
+      const owner = new OwnershipScope();
+      try {
+        for (const [node, value] of art.byId) {
+          const resolved = art.byId.get(node);
+          this.retainValue(resolved, owner);
+        }
+      } catch (error) {
+        owner.close();
+        throw error;
+      }
+      this.activeSnapshots.set(art, (this.activeSnapshots.get(art) || 0) + 1);
+      let released = false;
+      return () => {
+        if (released) return;
+        released = true;
+        const remaining = this.activeSnapshots.get(art) - 1;
+        if (remaining) this.activeSnapshots.set(art, remaining);
+        else this.activeSnapshots.delete(art);
+        owner.close();
+      };
+    }
     gc(irs) {
       const liveDigests = /* @__PURE__ */ new Set();
       for (const ir of arr(irs))
         for (const d of this.digests(compile(ir)).values()) liveDigests.add(d);
-      const live2 = /* @__PURE__ */ new Set();
-      for (const [d, m] of this.memo)
-        if (liveDigests.has(d) && !(m.lazy && !m.lazy.done)) live2.add(m.value);
-      const closing = this.retired.filter((v) => !live2.has(v));
-      this.retired = [];
-      for (const [d, m] of [...this.memo]) {
-        if (liveDigests.has(d)) continue;
-        this.memo.delete(d);
-        if (!(m.lazy && !m.lazy.done) && !live2.has(m.value)) this.retired.push(m.value);
+      const before = this.resources.size;
+      for (const [digest] of this.memo) {
+        if (liveDigests.has(digest)) continue;
+        this.memo.delete(digest);
+        this.memoOwners.get(digest)?.close();
+        this.memoOwners.delete(digest);
       }
-      for (const d of [...this.partial.keys()]) if (!liveDigests.has(d)) this.partial.delete(d);
-      let closed = 0;
-      for (const v of closing) {
-        const h = isView(v) ? v.__records : v && v.__ix;
-        if (h && typeof h.close === "function") {
-          try {
-            h.close();
-            closed++;
-          } catch (e) {
-            this.env.log && this.env.log(`gc: ${e.message || e}`);
-          }
-        }
-      }
-      return { closed, retired: this.retired.length, memo: this.memo.size };
+      for (const digest of this.partial.keys())
+        if (!liveDigests.has(digest)) this.partial.delete(digest);
+      this._art = null;
+      return {
+        closed: before - this.resources.size,
+        active: this.activeSnapshots.size,
+        memo: this.memo.size
+      };
     }
     // Delta build of one node (RAGWB-003 §6.5): continue from the newest stored
     // version of this node's lineage that was computed from exactly the versions
@@ -3497,12 +3791,13 @@ Question: ${s.q}`;
       );
       if (!base) return null;
       const codec = persistOf(def);
+      const baseScope = new OwnershipScope();
       const loadBase = /* @__PURE__ */ __name(() => {
         const m = this.memo.get(base.digest);
         if (m && !(m.lazy && !m.lazy.done) && (isView(m.value) || m.value && m.value.__ix))
           return m.value;
         const v = codec.load(store.load(base.storeKey), n.p);
-        this.retired.push(v);
+        this.retainValue(v, baseScope);
         return v;
       }, "loadBase");
       const b = {
@@ -3523,10 +3818,13 @@ Question: ${s.q}`;
       });
       try {
         const r = await def.delta.apply(b, inputs, dctx, p);
+        if (r?.value) this.ownMemo(d, r.value);
         return r ? { ...r, base: b } : null;
       } catch (e) {
         ctx.log(`delta build failed, building fully: ${e.message || e}`);
         return null;
+      } finally {
+        baseScope.close();
       }
     }
     buildCtx(n, ir, outputs, counter, signal) {
@@ -3560,17 +3858,30 @@ Question: ${s.q}`;
       }, "scan");
       scan(p);
       if (!found) return p;
-      const docsNode = ir.nodes.find((x) => x.out === "docs" && outputs.has(x.id));
-      const chunksNode = ir.nodes.find((x) => x.out === "chunks" && outputs.has(x.id));
-      const docs = docsNode ? outputs.get(docsNode.id) : [], chunks = chunksNode ? outputs.get(chunksNode.id) : [];
-      const key0 = hash([docs.map((d) => d.id + d.sections.length), chunks.length]);
+      const digests = this.digests(ir);
       const walk = /* @__PURE__ */ __name(async (v) => {
         if (isBake(v)) {
-          const key = key0 + ":" + v.$bake;
+          if (!v.datasets) throw new RagError("bake", "bake requires explicit dataset bindings");
+          const bindings = {};
+          for (const [name, id] of Object.entries(v.datasets)) {
+            const node = ir.nodes.find((x) => x.id === id);
+            if (!node || !["docs", "chunks"].includes(node.out) || !outputs.has(id))
+              throw new RagError("bake", `${n.id}: dataset '${id}' is unavailable`);
+            const value = outputs.get(id);
+            const kind = node.out === "docs" ? "documents" : "chunks";
+            bindings[name] = isView(value) ? dataset(digests.get(id), kind, value) : memoryDataset(digests.get(id), kind, value);
+          }
+          const key = hash([
+            v.$bake,
+            Object.entries(bindings).map(([name, value]) => [name, value.id])
+          ]);
           if (!this.bakes.has(key))
             this.bakes.set(
               key,
-              await fnOf({ $fn: v.$bake }, `${n.id} bake`)({ docs, chunks, tokens, slug })
+              await fnOf(
+                { $fn: v.$bake },
+                `${n.id} bake`
+              )({ datasets: Object.freeze(bindings), tokens, slug })
             );
           return this.bakes.get(key);
         }
@@ -3712,21 +4023,15 @@ Question: ${s.q}`;
     recentIrs() {
       return [...this.recent.values()];
     }
-    // one build per digest set at a time: a second query for a plan being built waits for it
+    // Request identity and event subscriptions do not change build semantics.
     buildShared(ir, opts = {}) {
-      const key = [...this.digests(ir).values()].join(",");
-      const cur = this.building.get(key);
-      if (cur) {
-        if (opts.onEvent)
-          try {
-            opts.onEvent({ type: "build", waiting: true });
-          } catch (_) {
-          }
-        return cur;
-      }
-      const p = this.build(ir, opts).finally(() => this.building.delete(key));
-      this.building.set(key, p);
-      return p;
+      const { signal, onEvent, onProgress, scope, detail, ...semantics } = opts;
+      const key = hash([ir.digest, [...this.digests(ir)], semantics]);
+      return this.building.run(
+        key,
+        { signal, onEvent, onProgress },
+        (owned) => this.build(ir, { ...semantics, ...owned })
+      );
     }
   };
   __name(_Engine, "Engine");

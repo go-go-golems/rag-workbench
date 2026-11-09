@@ -3,6 +3,7 @@ package natives
 import (
 	"context"
 	"fmt"
+	"github.com/go-go-golems/rag-workbench/pkg/rtenv"
 	"sort"
 	"sync"
 
@@ -133,17 +134,9 @@ func (v *Vectors) rerankAsync(vm *goja.Runtime) func(goja.FunctionCall) goja.Val
 			conc = int(x.ToInteger())
 		}
 		onBatch, hasOnBatch := goja.AssertFunction(call.Argument(4))
-		callCtx, cancel := context.WithCancel(services.Lifetime())
-		if sig, ok := call.Argument(5).(*goja.Object); ok {
-			if add, ok := goja.AssertFunction(sig.Get("addEventListener")); ok {
-				_, _ = add(sig, vm.ToValue("abort"), vm.ToValue(func() { cancel() }))
-			}
-			if a := sig.Get("aborted"); a != nil && a.ToBoolean() {
-				cancel()
-			}
-		}
-		go func() {
-			defer cancel()
+		op := rtenv.NewOperation(vm, services, "ragwb.rerank", call.Argument(5), func(kind string) { fail(kind, "the operation ended: "+kind) })
+		callCtx := op.Context()
+		op.Start(func(context.Context) {
 			var cb func([]llm.RerankResult)
 			if hasOnBatch {
 				cb = func(part []llm.RerankResult) {
@@ -153,10 +146,11 @@ func (v *Vectors) rerankAsync(vm *goja.Runtime) func(goja.FunctionCall) goja.Val
 				}
 			}
 			res, err := RerankBatched(callCtx, v.Embedder, model, query, docs, size, conc, cb)
-			_ = services.PostWithLifetimeContext("ragwb.rerank.settle", func(_ context.Context, vm *goja.Runtime) {
+			cancelled := callCtx.Err() != nil && services.Lifetime().Err() == nil
+			op.Complete(func(vm *goja.Runtime) {
 				if err != nil {
 					o := vm.NewObject()
-					if callCtx.Err() != nil && services.Lifetime().Err() == nil {
+					if cancelled {
 						_ = o.Set("code", "cancelled")
 						_ = o.Set("message", "the request was cancelled")
 					} else {
@@ -168,7 +162,7 @@ func (v *Vectors) rerankAsync(vm *goja.Runtime) func(goja.FunctionCall) goja.Val
 				}
 				_ = resolve(rerankJS(vm, res))
 			})
-		}()
+		})
 		return vm.ToValue(promise)
 	}
 }

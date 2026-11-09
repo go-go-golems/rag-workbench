@@ -40,7 +40,7 @@ type RagServer struct {
 type RagApp struct {
 	*runner.ServedApp
 	Timing *timing.Recorder
-	// MaxInflight caps concurrent verb requests (0 = DefaultMaxInflight); more get 503 busy.
+	// MaxInflight caps concurrent query and verb requests (0 = DefaultMaxInflight); more get 503 busy.
 	MaxInflight int
 	once        sync.Once
 	inflight    chan struct{}
@@ -225,6 +225,11 @@ type runTiming struct {
 }
 
 func (s *RagServer) handleRun(w http.ResponseWriter, r *http.Request, a *RagApp) {
+	if !a.acquire() {
+		writeErr(w, http.StatusServiceUnavailable, "busy", "request capacity exhausted")
+		return
+	}
+	defer a.release()
 	t0 := time.Now()
 	var req struct {
 		Signals json.RawMessage `json:"signals"`
@@ -238,29 +243,24 @@ func (s *RagServer) handleRun(w http.ResponseWriter, r *http.Request, a *RagApp)
 		req.Signals = json.RawMessage("{}")
 	}
 	stream := wantsSSE(r)
-	var sw *sseWriter
-	var sink *streamSink
-	var pumped chan struct{}
+	var response *responseStream
 	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()
 	var sinkArg runner.EventSink
 	if stream {
-		// Server-Sent Events (RAGWB-004): the run's engine events, then "result"
-		sw = newSSEWriter(w, t0, eventFilter(r))
-		sink = newStreamSink(cancel)
-		sinkArg = sink
-		pumped = make(chan struct{})
-		go func() { sw.pump(sink, nil); close(pumped) }()
+		var err error
+		response, err = startResponseStream(w, r, cancel, t0, nil)
+		if err != nil {
+			writeErr(w, http.StatusInternalServerError, "stream_unavailable", err.Error())
+			return
+		}
+		sinkArg = response.sink
 	}
 	res, err := a.Run(ctx, req.Signals, req.Trigger, sinkArg)
-	if stream {
-		sink.close()
-		<-pumped
-	}
 	if err != nil {
 		if stream {
 			b, _ := json.Marshal(map[string]string{"type": "error", "code": "run_failed", "message": err.Error()})
-			_ = sw.write("error", b)
+			_ = response.finish("error", b)
 			return
 		}
 		writeErr(w, http.StatusInternalServerError, "run_failed", err.Error())
@@ -284,7 +284,7 @@ func (s *RagServer) handleRun(w http.ResponseWriter, r *http.Request, a *RagApp)
 	body := strings.TrimSuffix(strings.TrimSpace(res.JSON), "}")
 	out := body + `,"timing":` + string(tb) + "}"
 	if stream {
-		_ = sw.write("result", []byte(`{"type":"result",`+strings.TrimPrefix(out, "{")))
+		_ = response.finish("result", []byte(`{"type":"result",`+strings.TrimPrefix(out, "{")))
 	} else {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = io.WriteString(w, out)
