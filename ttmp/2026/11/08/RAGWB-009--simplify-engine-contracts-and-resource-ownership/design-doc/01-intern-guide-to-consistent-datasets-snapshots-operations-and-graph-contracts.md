@@ -519,3 +519,22 @@ RAGWB-010 is the implementation prerequisite for this refactor. It extracts the 
 Implement the new dataset, record-reference, snapshot and operation contracts in strict TypeScript as their runtime behavior changes. Use discriminated unions for terminal outcomes and explicit record provenance; keep declarations with the owning implementation. Do not add an unused declaration layer over the existing array/view forks. Transitional extracted JavaScript is allowed in 010; 009 must migrate and type the consumers it replaces.
 
 Biome handles formatting and linting; TypeScript handles static type checking. Neither proves runtime input validity or resource lifetime safety. Keep the lifecycle/conformance tests in section 14. The existing baseline file/line map is historical; a current module map will be added after 010 extraction.
+
+### 16.1 Implemented foundation and current navigation
+
+010 established `pkg/ragjs/src/` as the authoritative source and `pnpm build` as the generator for the embedded asset. Use these current locations when implementing this design:
+
+| 009 concern | Current module after 010 |
+|---|---|
+| Dataset/view unification and lazy persistence | `pkg/ragjs/src/engine/records.js` |
+| Build, shared jobs, artifact snapshots and GC | `pkg/ragjs/src/engine/engine.js` |
+| Query lifetime and detached results | `pkg/ragjs/src/engine/session.js` |
+| Request scope capture and cancellation contract | `pkg/ragjs/src/engine/scope.ts` |
+| Graph references, editing, compilation and builders | `pkg/ragjs/src/graph/graph.js` |
+| Export projection | `pkg/ragjs/src/export/html.js` |
+| Public composition and dynamic registration | `pkg/ragjs/src/api/index.js`, `api/define.js` |
+| Built-in definitions and record consumers | `pkg/ragjs/src/components/` |
+
+Strict implementations currently cover `core/errors.ts`, `core/identity.ts`, `core/text.ts` and `engine/scope.ts`. The remaining source is extracted JavaScript, not a complete typed API. `pnpm check` combines TypeScript, Biome, exact generation checking and bundle tests. The import graph check rejects cycles and runtime imports of external host packages.
+
+The user explicitly confirmed that compatibility can break in pursuit of simplicity, readability and robustness. Preserve meaningful semantics, not source spelling or JSON object insertion order. 010's parity assertions now canonicalize object keys while retaining array ordering. This principle also applies to 009: migrate callers directly, delete replaced interfaces and adjust tests to assert the new contracts. No semantic review finding is closed merely because its implementation was moved into a module.

@@ -1,0 +1,19 @@
+{
+  "name": "rag-workbench-runtime",
+  "private": true,
+  "packageManager": "pnpm@10.15.1",
+  "scripts": {
+    "build": "node scripts/build-runtime.mjs",
+    "check:generated": "node scripts/build-runtime.mjs --check",
+    "typecheck": "tsc --noEmit",
+    "lint": "biome check .",
+    "format": "biome format --write .",
+    "test": "node --test scripts/runtime.test.mjs",
+    "check": "pnpm typecheck && pnpm lint && pnpm check:generated && pnpm test"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.6.6",
+    "esbuild": "0.28.2",
+    "typescript": "6.0.3"
+  }
+}

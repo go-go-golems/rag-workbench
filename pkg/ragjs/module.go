@@ -1,9 +1,9 @@
 // Package ragjs exposes the RAG workbench grammar (rag.js, gui.js, kit.js) to
 // go-go-goja runtimes as the native modules "ragwb", "ragwb/gui" and "ragwb/kit".
 //
-// The JavaScript sources are vendored from the claude.ai prototype (see
-// assets/PROVENANCE.md) and evaluated unmodified apart from the documented
-// local changes. They are compiled once per process and run once per runtime;
+// rag.js is generated from the modular sources in src/ (pnpm build).
+// gui.js and kit.js remain maintained assets; see assets/PROVENANCE.md.
+// Scripts are compiled once per process and run once per runtime;
 // require() caches the module objects inside each runtime.
 package ragjs
 
@@ -32,7 +32,7 @@ const (
 	ModuleKit = "ragwb/kit"
 )
 
-// Source returns one of the vendored JavaScript files (rag.js, gui.js, kit.js),
+// Source returns one of the embedded JavaScript files (rag.js, gui.js, kit.js),
 // e.g. for serving the same code to the browser workbench.
 func Source(name string) ([]byte, error) {
 	return assets.ReadFile("assets/" + name)

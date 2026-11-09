@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/go-go-golems/rag-workbench/pkg/llm"
+	"github.com/go-go-golems/rag-workbench/pkg/ragjs"
 )
 
 func newTestServer(t *testing.T, backend llm.Backend) *httptest.Server {
@@ -166,8 +167,13 @@ func TestPageAssets(t *testing.T) {
 	if !strings.Contains(get("/"), `id="save-btn"`) || !strings.Contains(get("/app.js"), "fetch('/api/apps'") || !strings.Contains(get("/agent.js"), "wb.apps") {
 		t.Error("the workbench page is missing the app store wiring (save button, /api/apps, agent docs)")
 	}
-	if !strings.Contains(get("/rag.js"), "const LN = ") {
-		t.Fatal("rag.js must be the patched engine (D6)")
+	// Verify the serving boundary, not a particular declaration spelling.
+	library, err := ragjs.Source("rag.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if get("/rag.js") != string(library) {
+		t.Fatal("rag.js must serve the embedded runtime bundle")
 	}
 	var corpus struct{ Files []struct{ Name string } }
 	_ = json.Unmarshal([]byte(get("/corpus.json")), &corpus)

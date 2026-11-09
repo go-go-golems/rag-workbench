@@ -50,9 +50,11 @@ func buildArtifacts(t *testing.T, jsMarkdown bool, root string, include []string
 			const ms = Date.now() - t0;
 			const art = rag.engine().artifacts(ir);
 			const noRange = (k, v) => (k === "range" ? undefined : v);
+			// Compare values, not object insertion order. Keep array order significant.
+			const clean = x => JSON.parse(JSON.stringify(x, noRange));
 			const dump = xs => o.hashed
-				? xs.map(x => x.id + " " + rag.util.hash(JSON.stringify(x, noRange))).join("\n")
-				: JSON.stringify(xs, noRange);
+				? xs.map(x => x.id + " " + rag.util.hash(clean(x))).join("\n")
+				: rag.util.stable(clean(xs));
 			return JSON.stringify({ ms, docs: dump([...art.docs.values()]), chunks: dump([...art.chunks.values()]) });
 		})(%s)`, opts))
 	})
@@ -99,7 +101,7 @@ func checkParity(t *testing.T, root string, include []string) {
 			if jsChunks != goChunks {
 				t.Fatalf("chunks differ %s", firstDiff(jsChunks, goChunks))
 			}
-			t.Logf("sections%v: %d bytes of chunks identical; build js=%.0fms go=%.0fms", sec, len(goChunks), jsMS, goMS)
+			t.Logf("sections%v: %d bytes of canonical chunks identical; build js=%.0fms go=%.0fms", sec, len(goChunks), jsMS, goMS)
 		})
 	}
 }
