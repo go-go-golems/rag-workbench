@@ -13,4 +13,4 @@
 - [ ] Delete replaced mechanisms, migrate examples and verify behavior and performance <!-- t:lj62 -->
 - [x] Test candidate intern-guide skill with three independent Sol-medium drafts and compare clarity and technical fidelity <!-- t:detn -->
 - [x] Evaluate generic two-pass guidance with three Codex and two Opus-medium research-and-writing runs; compare whole-document clarity and correctness <!-- t:4sol -->
-- [ ] Evaluate third-round clarity guidance with three Codex and two Opus writers; compare whole-document understandability and report <!-- t:99ka -->
+- [x] Evaluate third-round clarity guidance with three Codex and two Opus writers; compare whole-document understandability and report <!-- t:99ka -->

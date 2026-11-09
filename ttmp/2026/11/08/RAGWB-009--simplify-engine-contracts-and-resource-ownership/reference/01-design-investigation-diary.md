@@ -500,3 +500,66 @@ Read `guidance-changes.md`, candidate `references/writing-style.md`, and the fro
 ### Technical details
 
 Task: `99ka`. Output files per writer: research.md, first-draft.md, review-notes.md, final.md. Fresh agents avoid earlier answers; Claude uses safe mode with Read/Glob/Grep/Write. No additional delegation by writers. Baseline runtime remains `c267f91`.
+
+## Step 11: Complete the five-writer comparison and promote the selected guidance
+
+All five third-round writers completed. I read their final documents end to end and compared explanation quality throughout the introductions, mechanisms, implementation plans and endings. B offers the best balance of concrete explanation and navigation; D is particularly strong at teaching existing-system concepts. The improvement is useful but incremental, with repetition and a few implicit terms remaining.
+
+The user then requested selection, delivery and baseline installation. I selected B without rewriting its experiment artifact, uploaded it to reMarkable, installed the tested generic writing references and updated both discoverable textbook-authoring skills to use them. The design remains a proposal, and the implementation tasks remain open.
+
+### Prompt Context
+**Earlier experiment request:** See Step 10.
+**User prompt (verbatim):** "ok, perfect, chose the best and upload to remarkable tablet."
+**User prompt (verbatim):** "update the relevant skills with the new guidance now as well. so that it now becomes part of the baseline"
+**Assistant interpretation:** Finish preserving the comparison, select the strongest guide, upload it, and make the tested instructions available to future writing tasks.
+**Inferred user intent:** Turn the experiment into a useful reading artifact and durable improvements in writing quality.
+**Preparation commit:** `6cc526d` — refine clarity guidance and prepare third five-writer experiment.
+
+### What I did
+- Preserved research, first draft, review notes and final for three Sol-medium and two Opus-medium writers; copied final bodies unchanged into design documents 10–14.
+- Completed the whole-document comparison and parent reading notes. Verified Opus E's completed final was unchanged from the version reviewed.
+- Recorded completion metadata and hashes; moved raw CLI transcripts to `/tmp/ragwb009-round-three-cli-receipts/` rather than committing them.
+- Selected guide B and uploaded it with `remarquee upload bundle`, name `RAGWB-009 Selected Intern Guide Round Three B`, destination `/ai/2026/11/08/RAGWB-009`, ToC depth 2, non-interactive.
+- Installed the exact candidate writing-style and deliverable-checklist references into the ticket-research skill. Added focused two-pass guidance and a shared-reference link to both installed textbook-authoring copies. Backed up previous skill files under `/tmp/ragwb009-skill-baseline-backup/` and recorded before/after hashes in the ticket.
+
+### Why
+- The comparison emphasizes understandability, as requested, rather than treating every minor technical correction as a writing failure.
+- B has a coherent ordinary-query example, concrete dataset and snapshot relationships, and an actionable implementation sequence without the longest candidates' repetition.
+- Sharing the full guidance avoids maintaining competing long versions across writing skills. The installed updates are generic and contain no RAG-specific answer key.
+
+### What worked
+- Both Opus CLI runs ended with exit 0, success and no permission denials. All three Codex writers reported completion and saved their four artifacts.
+- All 21 frozen inputs matched their setup hashes before preservation.
+- Upload returned `OK: uploaded RAGWB-009 Selected Intern Guide Round Three B.pdf -> /ai/2026/11/08/RAGWB-009`.
+- The final deliverable and frozen experiment outputs remain separate from the installation receipt.
+
+### What didn't work
+- The first upload command failed under restricted networking: `dial tcp: lookup webapp-prod.cloud.remarkable.engineering: no such host`. Repeating the same upload with approved network escalation succeeded; no overwrite or auth reset was needed.
+- The initial status command ran from the workspace parent and returned `fatal: not a git repository (or any of the parent directories): .git`. Subsequent repository commands used `rag-workbench-resume`.
+- Some combined reading output was truncated; smaller reads supplied the missing passages. No runtime tests were run for this documentation-only change.
+
+### What I learned
+- Concrete instances followed by an explanation of what to notice improve the middle of a document as much as its introduction.
+- Two-pass writing helps repair missing explanations but does not guarantee concision or eliminate contradictory identity rules. The comparison distinguishes those limitations from minor precision issues.
+
+### What was tricky to build
+- Preserving experimental evidence while promoting the result required retaining immutable candidate inputs and writer artifacts, then recording installation separately. The comparison's original uninstalled-state claims are explicitly scoped to the experiment checkpoint by a subsequent promotion note.
+- Two discoverable textbook-authoring paths contained the same original skill. Both now point to the same generic reference using correct relative paths.
+
+### What warrants a second pair of eyes
+- The selected guide still has terminology and density improvements available; selection is not certification that all proposed APIs are final.
+- The evidence is one task without a human-newcomer study or control arm. Future use on another design is the meaningful generalization check.
+
+### What should be done in the future
+- Use the new baseline on ordinary design work, adjusting it only for demonstrated comprehension problems.
+- Resolve the remaining implementation decisions when beginning RAGWB-009; do not equate writing completion with completed architecture work.
+
+### Code review instructions
+- Start with reference/07 for the comparison and design-doc/11 for the selected guide.
+- Inspect scripts/03-clarity-guidance-experiment/results-receipt.json and baseline-installation-receipt.json for preserved artifacts and installed paths.
+- Review the focused textbook skill additions and shared writing reference; runtime code is unchanged.
+
+### Technical details
+- Models: three `gpt-6.1-sol` medium writers and two `claude-opus-5-5` medium writers; source baseline `c267f91`.
+- Installation changed two ticket-research reference files and two textbook skill entrypoints. Installed skill files live outside this repository; their exact hashes are recorded here.
+- Upload success proves cloud delivery, not physical tablet synchronization.

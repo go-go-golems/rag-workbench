@@ -49,7 +49,17 @@ The design is based on commit `0854c6a` and maps twelve PR review findings to sy
 - [Opus D](design-doc/08-round-two-intern-guide-opus-d.md), [Opus E](design-doc/09-round-two-intern-guide-opus-e.md)
 - [Preserved draft hashes and completion evidence](scripts/02-general-guidance-experiment/results-receipt.json)
 
-The experiment is complete. Candidates are preserved for comparison, including known defects; the original guide remains authoritative. Installed skills and runtime code are unchanged.
+The experiment is complete. Candidates are preserved for comparison, including known defects; the original guide remains authoritative. Installed skills and runtime code were unchanged at the round-two checkpoint.
+
+## Round-three results and selected guide
+
+- [Selected intern guide: Codex B](design-doc/11-round-three-intern-guide-codex-b.md)
+- [Whole-document comparison](reference/07-round-three-clarity-guidance-five-writer-comparison.md)
+- [Codex A](design-doc/10-round-three-intern-guide-codex-a.md), [Codex C](design-doc/12-round-three-intern-guide-codex-c.md), [Opus D](design-doc/13-round-three-intern-guide-opus-d.md), [Opus E](design-doc/14-round-three-intern-guide-opus-e.md)
+- [Experiment completion evidence](scripts/03-clarity-guidance-experiment/results-receipt.json)
+- [Installed baseline receipt](scripts/03-clarity-guidance-experiment/baseline-installation-receipt.json)
+
+Codex B was selected for the best balance of explanation, examples and navigation. Uploaded as **RAGWB-009 Selected Intern Guide Round Three B** to `/ai/2026/11/08/RAGWB-009`. The tested writing guidance is now the installed ticket-research baseline and is referenced by both discoverable textbook-authoring skills. The original design and experiment drafts remain preserved; selection does not resolve every design question or implement the refactor.
 
 ## Scope
 
